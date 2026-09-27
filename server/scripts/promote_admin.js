@@ -1,42 +1,27 @@
-const mysql = require('mysql2');
-const dotenv = require('dotenv');
+// Promote an existing user to admin (and approve them).
+// Usage: node scripts/promote_admin.js user@example.com
+// Alternative without shell access: set BOOTSTRAP_ADMIN_EMAIL before that user registers.
 const path = require('path');
-
-// Load env vars from server directory
-dotenv.config({ path: path.join(__dirname, '../.env') });
-// Also try default .env if not found above or just rely on defaults
-if (!process.env.DB_USER) dotenv.config();
-
-const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'learning',
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
-});
-
-const promisePool = pool.promise();
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
+const db = require('../db');
 
 async function promoteToAdmin(email) {
-  try {
-    const [users] = await promisePool.query('SELECT * FROM users WHERE email = ?', [email]);
-    if (users.length === 0) {
-      console.log(`User with email ${email} not found.`);
-      process.exit(1);
-    }
-
-    await promisePool.query('UPDATE users SET role = ?, is_approved = ? WHERE email = ?', ['admin', true, email]);
-    console.log(`User ${email} has been promoted to ADMIN and approved.`);
-    process.exit(0);
-  } catch (error) {
-    console.error('Error promoting user:', error);
+  const [users] = await db.query('SELECT id FROM users WHERE email = ?', [email]);
+  if (users.length === 0) {
+    console.error(`User with email ${email} not found.`);
     process.exit(1);
   }
+  await db.query('UPDATE users SET role = ?, is_approved = ? WHERE email = ?', ['admin', true, email]);
+  console.log(`User ${email} has been promoted to ADMIN and approved.`);
+  await db.pool.end();
 }
 
-// Change this email to the one you want to promote
-const targetEmail = 'eugenboico54@gmail.com'; 
-promoteToAdmin(targetEmail);
-
+const targetEmail = (process.argv[2] || '').trim().toLowerCase();
+if (!targetEmail) {
+  console.error('Usage: node scripts/promote_admin.js user@example.com');
+  process.exit(1);
+}
+promoteToAdmin(targetEmail).catch((err) => {
+  console.error('Error promoting user:', err.message || err);
+  process.exit(1);
+});

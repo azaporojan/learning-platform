@@ -1,0 +1,84 @@
+# =============================================================================
+# Claude Code review of every pull request to main
+# =============================================================================
+# Kept in its own workflow file on purpose (same layout as BudgetCopilot): it
+# runs in parallel with the CI/CD Pipeline, not after it.
+#
+# Auth: CLAUDE_CODE_OAUTH_TOKEN repo secret (from `claude setup-token` on a
+# Claude Pro/Max account) + the Claude GitHub App (https://github.com/apps/claude)
+# installed on this repository. Advisory only — it cannot red a PR.
+# =============================================================================
+
+name: Claude Code Review
+
+on:
+  pull_request:
+    branches: [main]
+
+# A new push to the PR supersedes a review still running on the old head.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  claude-review:
+    name: Claude Code Review
+    runs-on: ubuntu-latest
+    # Skipped for bot-authored PRs (Dependabot etc.): claude-code-action rejects
+    # bot actors, and Dependabot runs don't get the OAuth secret anyway.
+    if: ${{ !endsWith(github.actor, '[bot]') }}
+    # A review-bot outage (expired token, usage limit, action-side error) must
+    # not red a PR — the CI/CD Pipeline is the gate, this is a reviewer.
+    continue-on-error: true
+
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write # required by claude-code-action's GitHub OIDC token exchange
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request. Read the PR diff with `gh pr diff` and the
+            description with `gh pr view`, then check the changed code against
+            the project docs (README.md, SECURITY.md, docs/ — read them with the
+            Read tool) and for:
+            - Correctness bugs and edge cases (Express async error handling,
+              PostgreSQL queries through the `?` → `$n` compat layer in
+              server/db.js, Socket.IO room targeting, React state and effects
+              in client/)
+            - Security (every admin route behind authenticateToken + requireAdmin,
+              ownership checks on submissions/chats, file upload filters and
+              how uploads are served, secrets or personal data in logs, SQL
+              injection via string-built queries, HTML injection in emails)
+            - Project guardrails: forward-only SQL migrations in
+              server/db/migrations (never edit an applied one), REST
+              response shapes kept stable for the client, no MySQL-only SQL
+            - Test coverage of the changed behaviour (server/test)
+
+            The repository is checked out in the working directory, so read
+            surrounding context with the Read, Grep and Glob tools rather than
+            shell commands — the shell only allows the three `gh pr` commands.
+
+            Budget your turns: explore for at most 20 tool calls, then post.
+            Running out of turns before posting means the review is lost.
+
+            Post your review as a single PR comment using `gh pr comment`. Be
+            concise: lead with a short verdict, then list concrete findings with
+            file:line references. Do not comment on style nits, and do not push
+            any commits.
+          claude_args: >-
+            --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Read,Grep,Glob"
+            --max-turns 40

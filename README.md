@@ -7,7 +7,7 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 - [Funcționalități](#-funcționalități)
 - [Stack Tehnologic](#-stack-tehnologic)
 - [Setup Local Development](#-setup-local-development)
-- [Deployment pe Contabo](#-deployment-pe-contabo)
+- [Deployment pe Dokploy](#-deployment-pe-dokploy)
 - [Variabile de Mediu](#-variabile-de-mediu)
 - [Structura Proiectului](#-structura-proiectului)
 - [Comenzi Utile](#-comenzi-utile)
@@ -45,7 +45,7 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 
 ### Backend
 - 🚀 **Node.js** + **Express**
-- 🗄️ **MySQL** - Database
+- 🗄️ **PostgreSQL** - Database (forward-only SQL migrations in `server/db/migrations/`)
 - 🔌 **Socket.IO** - WebSocket server
 - 🔒 **JWT** + **HTTP-only cookies** - Authentication
 - 📧 **Nodemailer** - Email notifications
@@ -57,7 +57,7 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 ### Prerequisite
 
 - **Node.js** v18+ ([Download](https://nodejs.org/))
-- **MySQL** 8.0+ sau **Laragon**
+- **PostgreSQL** 16+ (sau `docker compose up -d` pentru o instanță locală)
 - **Git**
 
 ### Pași de Instalare
@@ -65,8 +65,8 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 #### 1. Clonează Repository-ul
 
 ```bash
-git clone https://github.com/yourusername/learning_antigravity.git
-cd learning_antigravity
+git clone https://github.com/azaporojan/learning-platform.git
+cd learning-platform
 ```
 
 #### 2. Setup Backend
@@ -86,11 +86,13 @@ Editează `server/.env` cu credențialele tale:
 
 ```env
 DB_HOST=localhost
-DB_USER=root
-DB_PASSWORD=your_password
-DB_NAME=learning_platform
-JWT_SECRET=your_generated_secret_key
-EMAIL_USER=your_email@gmail.com
+DB_PORT=5432
+DB_NAME=learning
+DB_USER=learning
+DB_PASSWORD=learning
+JWT_SECRET=generate_with_openssl_rand_base64_48   # minim 32 caractere
+BOOTSTRAP_ADMIN_EMAIL=you@example.com             # primul cont înregistrat cu acest email devine admin
+EMAIL_USER=your_email@gmail.com                   # opțional local: fără email, codurile de login apar în consolă
 EMAIL_PASS=your_app_password
 PORT=3001
 NODE_ENV=development
@@ -99,17 +101,15 @@ FRONTEND_URL=http://localhost:5173
 
 #### 3. Setup Database
 
-Creează baza de date:
-
-```sql
-CREATE DATABASE learning_platform;
-```
-
-Rulează script-ul de setup:
+Pornește un PostgreSQL local (user/parolă/db `learning`):
 
 ```bash
-npm run setup:db
+docker compose up -d
 ```
+
+Nu există script de setup: serverul aplică singur migrațiile SQL din
+`server/db/migrations/` la pornire (forward-only — pentru o schimbare de schemă adaugă un fișier
+nou `NNN_nume.sql`, nu edita unul deja aplicat).
 
 #### 4. Setup Frontend
 
@@ -121,9 +121,11 @@ npm install
 Creează `client/.env` (opțional pentru local):
 
 ```env
-VITE_API_URL=http://localhost:3001
+VITE_API_URL=http://localhost:3001/api
 VITE_SOCKET_URL=http://localhost:3001
 ```
+
+În producție ambele rămân nesetate: clientul este servit de același server (`/api`, `/socket.io`).
 
 #### 5. Pornește Aplicația
 
@@ -143,203 +145,31 @@ Aplicația va fi disponibilă la: `http://localhost:5173`
 
 #### 6. Creează Primul Admin
 
-1. Înregistrează-te cu un cont nou
-2. Editează `server/scripts/promote_admin.js` (linia unde se setează email-ul)
-3. Rulează:
-   ```bash
-   node server/scripts/promote_admin.js
-   ```
-
-## 🚀 Deployment pe Contabo
-
-### Pregătirea pentru Deployment
-
-#### 1. Build Local
-
-**Windows:**
-```bash
-deploy.bat
-```
-
-**Linux/Mac:**
-```bash
-chmod +x deploy.sh
-./deploy.sh
-```
-
-Acest script va crea directorul `deploy/` cu tot ce trebuie încărcat pe server.
-
-#### 2. Upload pe Server
-
-Folosind SCP, WinSCP, FileZilla sau rsync:
+Setează `BOOTSTRAP_ADMIN_EMAIL` în `server/.env` și înregistrează-te cu acel email — contul este
+creat direct ca admin aprobat. Alternativ, pentru un cont existent:
 
 ```bash
-# Exemplu cu scp
-scp -r deploy/* user@your-server-ip:/var/www/learning-platform/
+cd server && node scripts/promote_admin.js user@example.com
 ```
 
-### Setup pe Server Contabo
+## 🚀 Deployment pe Dokploy
 
-#### 1. Conectează-te la Server
+Aplicația rulează într-un **singur container** (Express servește API-ul sub `/api`, Socket.IO sub
+`/socket.io` și build-ul React la `/`) pe Dokploy, cu o bază de date dedicată pe PostgreSQL-ul
+partajat și un volum pentru upload-uri.
+
+- Orice push pe `main` → CI (`.github/workflows/ci-cd.yml`) → imagine Docker în GHCR
+  (`ghcr.io/azaporojan/learning-platform:latest` + `:<sha>`) → webhook Dokploy → redeploy.
+- Rollback: redeploy al unui tag `:<sha>` anterior din Dokploy.
+- Runbook complet (ID-uri Dokploy, secrete GitHub, checklist de prima instalare, troubleshooting):
+  **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+- Crearea bazei de date și a rolului aplicației: `scripts/sql/create-database.sql`.
+
+Build local al imaginii:
 
 ```bash
-ssh user@your-server-ip
-```
-
-#### 2. Instalează Dependințele (dacă nu sunt deja instalate)
-
-```bash
-# Update system
-sudo apt update && sudo apt upgrade -y
-
-# Install Node.js 18.x
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
-
-# Install MySQL
-sudo apt install -y mysql-server
-
-# Install PM2 (pentru a rula Node.js în background)
-sudo npm install -g pm2
-
-# Install Nginx
-sudo apt install -y nginx
-```
-
-#### 3. Configurează MySQL
-
-```bash
-sudo mysql_secure_installation
-sudo mysql
-```
-
-```sql
-CREATE DATABASE learning_platform;
-CREATE USER 'learning_user'@'localhost' IDENTIFIED BY 'your_secure_password';
-GRANT ALL PRIVILEGES ON learning_platform.* TO 'learning_user'@'localhost';
-FLUSH PRIVILEGES;
-EXIT;
-```
-
-#### 4. Configurează Backend
-
-```bash
-cd /var/www/learning-platform/server
-cp .env.example .env
-nano .env  # Editează cu credențialele corecte
-```
-
-Setează în `.env`:
-```env
-NODE_ENV=production
-FRONTEND_URL=http://your-domain.com
-DB_HOST=localhost
-DB_USER=learning_user
-DB_PASSWORD=your_secure_password
-DB_NAME=learning_platform
-JWT_SECRET=generate_new_secret_here
-EMAIL_USER=your_email@gmail.com
-EMAIL_PASS=your_app_password
-PORT=3001
-```
-
-Instalează dependințe și setup DB:
-
-```bash
-npm install --production
-npm run setup:db
-```
-
-Pornește cu PM2:
-
-```bash
-pm2 start index.js --name learning-api
-pm2 save
-pm2 startup  # Urmează instrucțiunile
-```
-
-#### 5. Configurează Nginx
-
-Creează fișier de configurare:
-
-```bash
-sudo nano /etc/nginx/sites-available/learning-platform
-```
-
-Adaugă configurația:
-
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
-
-    # Frontend
-    root /var/www/learning-platform/client;
-    index index.html;
-
-    # Serve static files
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # API Proxy
-    location /api {
-        rewrite ^/api(.*)$ $1 break;
-        proxy_pass http://localhost:3001;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-
-    # Socket.IO
-    location /socket.io {
-        proxy_pass http://localhost:3001;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-    }
-
-    # Uploads
-    location /uploads {
-        alias /var/www/learning-platform/server/uploads;
-    }
-}
-```
-
-Activează site-ul:
-
-```bash
-sudo ln -s /etc/nginx/sites-available/learning-platform /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl restart nginx
-```
-
-#### 6. Configurează SSL (Opțional dar Recomandat)
-
-```bash
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d your-domain.com
-```
-
-#### 7. Actualizează Client `.env` pentru Producție
-
-Pe server, creează `/var/www/learning-platform/client/.env`:
-
-```env
-VITE_API_URL=http://your-domain.com/api
-VITE_SOCKET_URL=http://your-domain.com
-```
-
-Rebuild client (dacă este necesar):
-
-```bash
-cd /var/www/learning-platform
-# Download surse, rebuild cu npm run build
+docker build -t learning-platform .
+docker run --rm -p 3001:3001 --env-file server/.env -e DB_HOST=host.docker.internal learning-platform
 ```
 
 ## 🔐 Variabile de Mediu
@@ -348,28 +178,33 @@ cd /var/www/learning-platform
 
 | Variabilă | Descriere | Exemplu |
 |-----------|-----------|---------|
-| `DB_HOST` | MySQL host | `localhost` |
-| `DB_USER` | MySQL username | `root` |
-| `DB_PASSWORD` | MySQL password | `password123` |
-| `DB_NAME` | Database name | `learning_platform` |
-| `JWT_SECRET` | Secret pentru JWT | Generate cu `openssl rand -base64 32` |
-| `EMAIL_USER` | Gmail pentru notificări | `your@gmail.com` |
+| `DB_HOST` | PostgreSQL host | `localhost` (Dokploy: `common-stuff-postgres-vmlpfq`) |
+| `DB_PORT` | PostgreSQL port | `5432` |
+| `DB_NAME` | Database name | `learning` |
+| `DB_USER` | PostgreSQL role | `learning` |
+| `DB_PASSWORD` | PostgreSQL password | — |
+| `DB_SSL` | `true` dacă serverul cere TLS | nesetat |
+| `JWT_SECRET` | Secret pentru cookie-ul de sesiune (**minim 32 caractere**, altfel serverul nu pornește în producție) | `openssl rand -base64 48` |
+| `BOOTSTRAP_ADMIN_EMAIL` | Primul cont înregistrat cu acest email devine admin aprobat | `you@example.com` |
+| `EMAIL_USER` | Gmail pentru coduri de login + notificări | `your@gmail.com` |
 | `EMAIL_PASS` | App password Gmail | `xxxx xxxx xxxx xxxx` |
 | `PORT` | Port server | `3001` |
 | `NODE_ENV` | Environment | `development` / `production` |
-| `FRONTEND_URL` | URL frontend pentru CORS | `http://localhost:5173` |
+| `FRONTEND_URL` | URL public (emailuri; origin CORS în dev) | `http://localhost:5173` |
+| `UPLOADS_DIR` | Director pentru fișierele încărcate | `server/uploads` (Docker: `/app/server/uploads`) |
+| `MAX_UPLOAD_MB` / `MAX_IMAGE_UPLOAD_MB` | Limită dimensiune fișiere (submisii / imagini) | `25` / `10` |
 
 ### Client (`client/.env`)
 
 | Variabilă | Descriere | Exemplu |
 |-----------|-----------|---------|
-| `VITE_API_URL` | Backend API URL | `http://localhost:3001` |
-| `VITE_SOCKET_URL` | WebSocket URL | `http://localhost:3001` |
+| `VITE_API_URL` | Backend API URL (implicit `/api`, same-origin) | `http://localhost:3001/api` |
+| `VITE_SOCKET_URL` | WebSocket URL (implicit: originul paginii) | `http://localhost:3001` |
 
 ## 📁 Structura Proiectului
 
 ```
-learning_antigravity/
+learning-platform/
 ├── client/                 # Frontend React
 │   ├── components/        # React components
 │   ├── contexts/          # React contexts (Socket)
@@ -379,7 +214,8 @@ learning_antigravity/
 │   ├── .env.example       # Environment template
 │   └── package.json
 ├── server/                # Backend Node.js
-│   ├── scripts/           # Database setup scripts
+│   ├── db/                # PostgreSQL pool + migrații SQL (forward-only)
+│   ├── scripts/           # promote_admin.js
 │   ├── uploads/           # User uploaded files
 │   ├── index.js           # Main server file
 │   ├── db.js              # Database connection
@@ -422,43 +258,34 @@ cd client && npm run preview
 ### Database
 
 ```bash
-# Setup database complet
-cd server && npm run setup:db
-
-# Setup paths (după setup:db)
-cd server && npm run setup:paths
+# PostgreSQL local
+docker compose up -d
 
 # Promovare admin
-cd server && node scripts/promote_admin.js
+cd server && node scripts/promote_admin.js user@example.com
 
-# Backup database
-mysqldump -u root -p learning_platform > backup_$(date +%Y%m%d).sql
+# Teste (unit + smoke test end-to-end pe o bază de date de test — schema `public` este recreată!)
+cd server && DB_NAME=learning_test npm test
 
-# Restore database
-mysql -u root -p learning_platform < backup_20260112.sql
+# Backup / restore
+pg_dump -h localhost -U learning learning > backup_$(date +%Y%m%d).sql
+psql -h localhost -U learning learning < backup_20260112.sql
 ```
 
-### PM2 (Production)
+### Docker / Producție
 
 ```bash
-# Start cu PM2
-pm2 start server/index.js --name learning-api
+# Build local al imaginii de producție (client + server într-un container)
+docker build -t learning-platform .
 
-# Restart
-pm2 restart learning-api
+# Rulează imaginea (PostgreSQL-ul trebuie să fie accesibil la DB_HOST)
+docker run --rm -p 3001:3001 --env-file server/.env -e DB_HOST=host.docker.internal learning-platform
 
-# Stop
-pm2 stop learning-api
-
-# Logs
-pm2 logs learning-api
-
-# Monitor
-pm2 monit
-
-# Lista procese
-pm2 list
+# Health check
+curl http://localhost:3001/api/health
 ```
+
+Deploy-ul real este automat (push pe `main` → GHCR → Dokploy) — vezi [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## ⚠️ Troubleshooting
 
@@ -467,9 +294,9 @@ pm2 list
 **Eroare:** `Error: connect ECONNREFUSED`
 
 **Soluție:**
-- Verifică că MySQL rulează: `sudo systemctl status mysql`
-- Verifică credențialele în `.env`
-- Verifică că baza de date există: `mysql -u root -p -e "SHOW DATABASES;"`
+- Verifică că PostgreSQL rulează: `docker compose ps` / `pg_isready -h localhost`
+- Verifică credențialele în `.env` (`DB_*`) și că `JWT_SECRET` are minim 32 de caractere
+- Verifică că baza de date există: `psql -h localhost -U learning -l`
 
 ### Port 3001 deja folosit
 
@@ -556,7 +383,7 @@ sudo chmod -R 755 /var/www/learning-platform/server/uploads
 
 ## 📝 Note
 
-- **Students vs Admins:** La crearea contului, toți sunt studenți. Pentru admin: `node scripts/promote_admin.js`
+- **Students vs Admins:** La crearea contului, toți sunt studenți. Pentru admin: `BOOTSTRAP_ADMIN_EMAIL` sau `node scripts/promote_admin.js user@example.com`
 - **Task Approvals:** Doar adminii pot aproba/respinge task-uri
 - **Real-time:** Socket.IO asigură update-uri instant pentru notificări, chat, și leaderboard
 - **File Uploads:** Limită 10MB per fișier (configurabil în `server/index.js` - multer config)

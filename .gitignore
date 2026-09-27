@@ -52,3 +52,6 @@ Thumbs.db
 # Database dumps (optional)
 # *.sql
 # server/tasks_dump.json
+
+# Production client build copied into the server image (never committed)
+server/public
