@@ -88,7 +88,7 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({ isOpen, onClose, o
             {message}
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form id="register-form" onSubmit={handleSubmit} className="space-y-4">
             {status === 'error' && (
               <div className="text-red-500 text-sm text-center bg-red-50 p-2 rounded-lg">
                 {message}
@@ -96,10 +96,12 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({ isOpen, onClose, o
             )}
             
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+              <label htmlFor="register-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
               <input
+                id="register-name"
                 type="text"
                 name="name"
+                autoComplete="name"
                 value={formData.name}
                 onChange={handleChange}
                 required
@@ -109,10 +111,13 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({ isOpen, onClose, o
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
+              <label htmlFor="register-email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
               <input
+                id="register-email"
                 type="email"
                 name="email"
+                autoComplete="username"
+                inputMode="email"
                 value={formData.email}
                 onChange={handleChange}
                 required
@@ -122,11 +127,14 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({ isOpen, onClose, o
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
+              <label htmlFor="register-password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
               <div className="relative">
                 <input
+                  id="register-password"
                   type={showPassword ? "text" : "password"}
                   name="password"
+                  autoComplete="new-password"
+                  minLength={8}
                   value={formData.password}
                   onChange={handleChange}
                   required
@@ -146,11 +154,14 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({ isOpen, onClose, o
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Confirm Password</label>
+              <label htmlFor="register-confirm-password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Confirm Password</label>
               <div className="relative">
                 <input
+                  id="register-confirm-password"
                   type={showConfirmPassword ? "text" : "password"}
                   name="confirmPassword"
+                  autoComplete="new-password"
+                  minLength={8}
                   value={formData.confirmPassword}
                   onChange={handleChange}
                   required

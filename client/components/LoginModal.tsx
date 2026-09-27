@@ -112,7 +112,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
             {message}
           </div>
         ) : (
-          <form onSubmit={step === 'credentials' ? handleCredentialsSubmit : handleCodeSubmit} className="space-y-4">
+          <form id="login-form" onSubmit={step === 'credentials' ? handleCredentialsSubmit : handleCodeSubmit} className="space-y-4">
             {message && status !== 'idle' && (
               <div className={`text-sm text-center p-2 rounded-lg ${status === 'error' ? 'text-red-500 bg-red-50' : 'text-blue-500 bg-blue-50'}`}>
                 {message}
@@ -122,10 +122,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
             {step === 'credentials' ? (
               <>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
+                  <label htmlFor="login-email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
                   <input
+                    id="login-email"
                     type="email"
                     name="email"
+                    autoComplete="username"
+                    inputMode="email"
                     value={formData.email}
                     onChange={handleChange}
                     required
@@ -134,11 +137,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
+                  <label htmlFor="login-password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
                   <div className="relative">
                     <input
+                      id="login-password"
                       type={showPassword ? "text" : "password"}
                       name="password"
+                      autoComplete="current-password"
                       value={formData.password}
                       onChange={handleChange}
                       required
@@ -159,10 +164,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
               </>
             ) : (
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Code received on Email</label>
+                <label htmlFor="login-code" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Code received on Email</label>
                 <input
+                  id="login-code"
                   type="text"
                   name="code"
+                  autoComplete="one-time-code"
+                  inputMode="numeric"
+                  pattern="[0-9]{6}"
                   value={formData.code}
                   onChange={handleChange}
                   required
