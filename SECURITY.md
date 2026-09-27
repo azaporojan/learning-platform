@@ -21,7 +21,8 @@ The pre-deployment review found and fixed the following (all in `server/index.js
 | 13 | No security headers, no `trust proxy` behind Traefik | Low | `helmet`, `trust proxy`, JSON body limit. |
 | 14 | Vulnerable dependencies (`bcrypt` 5 → node-tar, `ws`, `socket.io-parser`, `nodemailer` 7, `react-router` 7.11) | High | Upgraded; `npm audit --omit=dev` is clean for both packages. |
 | 15 | A default admin (`admin@learning.dev` / `admin123`) was seeded by a dev SQL script | Medium | Removed with the MySQL scripts; the admin is bootstrapped via `BOOTSTRAP_ADMIN_EMAIL`. |
-| 16 | Client TypeScript build was broken (`class=` instead of `className=`, stale types) so CI could not type-check | Low | Fixed; `tsc && vite build` passes and gates CI. |
+| 16 | SonarCloud: bcrypt hash of a default admin committed in `setup_dev_extras.sql` (blocker), `Math.random` for login codes and upload names, 100 MB upload limit, filesystem-oracle route `/submissions/:filename` | Medium | All removed/replaced (CSPRNG, 25 MB default, route deleted). |
+| 17 | Client TypeScript build was broken (`class=` instead of `className=`, stale types) so CI could not type-check | Low | Fixed; `tsc && vite build` passes and gates CI. |
 
 ## Operating rules
 
@@ -33,8 +34,8 @@ The pre-deployment review found and fixed the following (all in `server/index.js
 - The database role `learning_platform` is not a superuser and owns only its own database
   (`scripts/sql/create-database.sql`).
 - The container runs as the unprivileged `node` user; only port 3001 is exposed (behind Traefik/TLS).
-- Uploads: max 100 MB per file (10 MB for images), extension allow-list, never rendered inline
-  unless JPEG/PNG/GIF.
+- Uploads: max 25 MB per file (10 MB for images; `MAX_UPLOAD_MB` / `MAX_IMAGE_UPLOAD_MB`),
+  extension allow-list, random file names, never rendered inline unless JPEG/PNG/GIF.
 - Dependencies: `npm audit --omit=dev` in `server/` and `client/` before releasing; Trivy runs in CI.
 
 ## Known follow-ups (not blocking deployment)

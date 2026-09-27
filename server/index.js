@@ -157,10 +157,14 @@ const storage = multer.diskStorage({
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const uniqueSuffix = Date.now() + '-' + crypto.randomBytes(6).toString('hex');
     cb(null, uniqueSuffix + '-' + safeFilename(file.originalname));
   }
 });
+
+// Upload size limits (MB). Submissions default to 25 MB, images to 10 MB; raise via env if needed.
+const MAX_UPLOAD_BYTES = Math.max(1, parseInt(process.env.MAX_UPLOAD_MB || '25', 10)) * 1024 * 1024;
+const MAX_IMAGE_UPLOAD_BYTES = Math.max(1, parseInt(process.env.MAX_IMAGE_UPLOAD_MB || '10', 10)) * 1024 * 1024;
 
 const ALLOWED_UPLOAD_EXT = new Set([
   '.jpeg', '.jpg', '.png', '.gif', '.pdf', '.doc', '.docx', '.txt', '.zip', '.rar',
@@ -169,7 +173,7 @@ const ALLOWED_UPLOAD_EXT = new Set([
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 100 * 1024 * 1024, files: 10 }, // 100MB limit
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: 10 },
   fileFilter: (req, file, cb) => {
     // Allow documents, images, PDFs, archives and web files (HTML, CSS, JS) for submissions.
     const ext = path.extname(file.originalname || '').toLowerCase();
@@ -183,7 +187,7 @@ const upload = multer({
 // Images only (avatars, rich-text images): these are rendered inline, so no HTML/JS here.
 const uploadImage = multer({
   storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024, files: 10 },
+  limits: { fileSize: MAX_IMAGE_UPLOAD_BYTES, files: 10 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname || '').toLowerCase();
     if (INLINE_IMAGE_EXT.has(ext) && /^image\/(jpeg|png|gif)$/.test(file.mimetype)) {
@@ -2563,7 +2567,7 @@ if (fs.existsSync(path.join(publicDir, 'index.html'))) {
     process.exit(1);
   }
   server.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT} (${NODE_ENV})`);
+    console.log(`Server listening on port ${PORT} (${NODE_ENV})`);
   });
 
   const shutdown = (signal) => {

@@ -192,6 +192,7 @@ docker run --rm -p 3001:3001 --env-file server/.env -e DB_HOST=host.docker.inter
 | `NODE_ENV` | Environment | `development` / `production` |
 | `FRONTEND_URL` | URL public (emailuri; origin CORS în dev) | `http://localhost:5173` |
 | `UPLOADS_DIR` | Director pentru fișierele încărcate | `server/uploads` (Docker: `/app/server/uploads`) |
+| `MAX_UPLOAD_MB` / `MAX_IMAGE_UPLOAD_MB` | Limită dimensiune fișiere (submisii / imagini) | `25` / `10` |
 
 ### Client (`client/.env`)
 
