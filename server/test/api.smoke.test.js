@@ -274,6 +274,12 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   };
   const invalid = await fetch(`${BASE}/admin/paths/import`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify({ lessons: [{ title: '' }] }) });
   assert.equal(invalid.status, 400);
+  const badTypes = await fetch(`${BASE}/admin/paths/import`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'x', description: { foo: 'bar' }, lessons: [{ title: 'L', description: 123, tasks: [{ title: 'T', description: ['no'] }] }] }) });
+  const badTypesBody = await badTypes.json();
+  assert.equal(badTypes.status, 400);
+  assert.equal(badTypesBody.details.length, 3);
+  const missingPath = await fetch(`${BASE}/admin/paths/import`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify({ pathId: 999999, lessons: [{ title: 'L' }] }) });
+  assert.equal(missingPath.status, 404);
   const imp = await fetch(`${BASE}/admin/paths/import`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify(importDoc) });
   const impBody = await imp.json();
   assert.equal(imp.status, 201, JSON.stringify(impBody));

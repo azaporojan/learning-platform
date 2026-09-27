@@ -2119,7 +2119,13 @@ api.delete('/admin/api-keys/:id', authenticateToken, requireAdmin, async (req, r
 //   pathId,                                        // append lessons to an existing path
 //   lessons: [{ title, description?, tasks?: [{ title, description?, type?, xp?, deadline? }] }]
 // }
-const LAYOUT = { firstX: 80, centerY: 250, lessonSpacingX: 250, taskSpacingY: 120, taskSpacingX: 150 };
+const LAYOUT = {
+  firstX: 80,            // x of the first lesson
+  centerY: 250,          // y of the lesson row
+  lessonSpacingX: 250,   // x gap between consecutive lessons
+  firstTaskOffset: 120,  // first task sits diagonally (+x, ±y) from its lesson by this much
+  taskSpacingX: 150      // x gap between consecutive tasks of a lesson
+};
 const TASK_TYPES = new Set(['mandatory', 'optional']);
 
 function parseDeadline(value) {
@@ -2134,8 +2140,10 @@ function validateImportBody(body) {
   const errors = [];
   const b = body || {};
   const creatingPath = b.pathId === undefined || b.pathId === null;
+  const isOptionalString = (v) => v === undefined || v === null || typeof v === 'string';
   if (creatingPath) {
     if (typeof b.name !== 'string' || !b.name.trim() || b.name.length > 255) errors.push('name is required (max 255 chars)');
+    if (!isOptionalString(b.description)) errors.push('description must be a string');
     if (b.stars_required !== undefined && (!Number.isInteger(b.stars_required) || b.stars_required < 0)) errors.push('stars_required must be a non-negative integer');
   } else if (!Number.isInteger(Number(b.pathId))) {
     errors.push('pathId must be an integer');
@@ -2144,11 +2152,13 @@ function validateImportBody(body) {
   else if (b.lessons.length > 200) errors.push('at most 200 lessons per request');
   else b.lessons.forEach((l, i) => {
     if (!l || typeof l.title !== 'string' || !l.title.trim() || l.title.length > 255) errors.push(`lessons[${i}].title is required (max 255 chars)`);
+    if (l && !isOptionalString(l.description)) errors.push(`lessons[${i}].description must be a string`);
     if (l && l.tasks !== undefined) {
       if (!Array.isArray(l.tasks)) errors.push(`lessons[${i}].tasks must be an array`);
       else if (l.tasks.length > 50) errors.push(`lessons[${i}]: at most 50 tasks`);
       else l.tasks.forEach((t, j) => {
         if (!t || typeof t.title !== 'string' || !t.title.trim() || t.title.length > 255) errors.push(`lessons[${i}].tasks[${j}].title is required (max 255 chars)`);
+        if (t && !isOptionalString(t.description)) errors.push(`lessons[${i}].tasks[${j}].description must be a string`);
         if (t && t.type !== undefined && !TASK_TYPES.has(t.type)) errors.push(`lessons[${i}].tasks[${j}].type must be "mandatory" or "optional"`);
         if (t && t.xp !== undefined && (!Number.isInteger(t.xp) || t.xp < 0)) errors.push(`lessons[${i}].tasks[${j}].xp must be a non-negative integer`);
         try { if (t) parseDeadline(t.deadline); } catch (e) { errors.push(`lessons[${i}].tasks[${j}]: ${e.message}`); }
@@ -2212,8 +2222,8 @@ api.post('/admin/paths/import', authenticateToken, requireAdmin, async (req, res
 
         // Task chain: first task diagonal (up for odd lessons, down for even), then to the right
         const direction = order % 2 !== 0 ? -1 : 1;
-        let taskX = x + LAYOUT.taskSpacingY;
-        const taskY = y + LAYOUT.taskSpacingY * direction;
+        let taskX = x + LAYOUT.firstTaskOffset;
+        const taskY = y + LAYOUT.firstTaskOffset * direction;
         const tasks = [];
         (lesson.tasks || []).forEach((task, index) => {
           tasks.push({ ...task, _x: taskX, _y: taskY, _order: index + 1 });
