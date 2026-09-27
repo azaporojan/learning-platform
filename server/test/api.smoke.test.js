@@ -241,6 +241,61 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const list = await admin('/chats');
   assert.equal(list.body[0].message_count, 1);
 
+  // API keys: created by an admin, usable as a bearer token, revocable
+  const noKey = await stud('/admin/api-keys', { method: 'POST', json: { name: 'nope' } });
+  assert.equal(noKey.status, 403);
+  const created = await admin('/admin/api-keys', { method: 'POST', json: { name: 'claude agent' } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.match(created.body.key, /^lp_[0-9a-f]{40}$/);
+  const keyList = await admin('/admin/api-keys');
+  assert.equal(keyList.body.length, 1);
+  assert.equal(keyList.body[0].key, undefined); // never echoed back
+  const bearer = { Authorization: `Bearer ${created.body.key}` };
+
+  const bad = await fetch(`${BASE}/admin/api-keys`, { headers: { Authorization: 'Bearer lp_deadbeef' } });
+  assert.equal(bad.status, 401);
+
+  // Import a whole path with the key (no cookie)
+  const importDoc = {
+    name: 'Agent Path',
+    description: 'Created by an agent',
+    stars_required: 0,
+    lessons: [
+      { title: 'L1', description: 'first', tasks: [{ title: 'T1', xp: 5 }, { title: 'T2', type: 'optional', deadline: '2031-05-01' }] },
+      { title: 'L2', tasks: [{ title: 'T3' }] },
+      { title: 'L3' },
+    ],
+  };
+  const invalid = await fetch(`${BASE}/admin/paths/import`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify({ lessons: [{ title: '' }] }) });
+  assert.equal(invalid.status, 400);
+  const imp = await fetch(`${BASE}/admin/paths/import`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify(importDoc) });
+  const impBody = await imp.json();
+  assert.equal(imp.status, 201, JSON.stringify(impBody));
+  assert.equal(impBody.counts.lessons, 3);
+  assert.equal(impBody.counts.tasks, 3);
+  const importedDetails = await admin(`/paths/${impBody.path.id}/details`);
+  assert.equal(importedDetails.body.length, 3);
+  assert.equal(importedDetails.body[0].parent_id, null);
+  assert.equal(importedDetails.body[1].parent_id, importedDetails.body[0].id);
+  assert.equal(importedDetails.body[1].position_x, importedDetails.body[0].position_x + 250);
+  assert.equal(importedDetails.body[0].tasks[0].position_y, 250 - 120); // odd lesson → tasks go up
+  assert.equal(importedDetails.body[1].tasks[0].position_y, 250 + 120); // even lesson → tasks go down
+  assert.equal(importedDetails.body[0].tasks[1].type, 'optional');
+
+  // Append to the existing path continues the chain
+  const append = await fetch(`${BASE}/admin/paths/import`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify({ pathId: impBody.path.id, lessons: [{ title: 'L4' }] }) });
+  assert.equal(append.status, 201);
+  const appended = await admin(`/paths/${impBody.path.id}/details`);
+  assert.equal(appended.body.length, 4);
+  assert.equal(appended.body[3].parent_id, importedDetails.body[2].id);
+  assert.equal(appended.body[3].order_index, 4);
+
+  // Revoked keys stop working immediately
+  const revoke = await admin(`/admin/api-keys/${created.body.id}`, { method: 'DELETE' });
+  assert.equal(revoke.status, 200);
+  const afterRevoke = await fetch(`${BASE}/admin/api-keys`, { headers: bearer });
+  assert.equal(afterRevoke.status, 401);
+
   // Logout clears the session
   await stud('/logout', { method: 'POST' });
   const afterLogout = await stud('/me');

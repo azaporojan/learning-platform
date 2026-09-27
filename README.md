@@ -164,6 +164,7 @@ partajat și un volum pentru upload-uri.
 - Runbook complet (ID-uri Dokploy, secrete GitHub, checklist de prima instalare, troubleshooting):
   **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 - Crearea bazei de date și a rolului aplicației: `scripts/sql/create-database.sql`.
+- Creare de conținut prin API (agent AI / scripturi, cu API key): **[docs/AGENT_API.md](docs/AGENT_API.md)**.
 
 Build local al imaginii:
 

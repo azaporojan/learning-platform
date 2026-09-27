@@ -232,8 +232,52 @@ function verifySessionToken(token) {
   return jwt.verify(token, jwtSecret); // { id, role }
 }
 
-// Authentication middleware
-const authenticateToken = (req, res, next) => {
+// ---------------------------------------------------------------------------
+// API keys (automation / AI agents). Format: lp_<40 hex>. Only the SHA-256 hash is
+// stored; the key acts as the admin who created it and must not be revoked.
+// ---------------------------------------------------------------------------
+const API_KEY_PREFIX = 'lp_';
+const hashApiKey = (key) => crypto.createHash('sha256').update(key).digest('hex');
+
+function generateApiKey() {
+  const key = API_KEY_PREFIX + crypto.randomBytes(20).toString('hex');
+  return { key, hash: hashApiKey(key), prefix: key.slice(0, 11) };
+}
+
+// Resolve a bearer API key to its owning admin, or null when invalid/revoked.
+async function authenticateApiKey(key) {
+  if (typeof key !== 'string' || !key.startsWith(API_KEY_PREFIX) || key.length > 80) return null;
+  const [rows] = await db.query(
+    `SELECT k.id AS key_id, k.last_used_at, u.id AS user_id, u.role
+       FROM api_keys k
+       JOIN users u ON u.id = k.created_by
+      WHERE k.key_hash = ? AND k.revoked_at IS NULL`,
+    [hashApiKey(key)]
+  );
+  if (rows.length === 0 || rows[0].role !== 'admin') return null;
+  const row = rows[0];
+  // Track usage (at most once a minute per key; fire-and-forget)
+  if (!row.last_used_at || Date.now() - new Date(row.last_used_at).getTime() > 60000) {
+    db.query('UPDATE api_keys SET last_used_at = NOW() WHERE id = ?', [row.key_id]).catch(() => {});
+  }
+  return { id: row.user_id, role: 'admin', apiKeyId: row.key_id };
+}
+
+// Authentication middleware: session cookie, or `Authorization: Bearer <api key>`.
+const authenticateToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization || '';
+  if (authHeader.startsWith('Bearer ')) {
+    try {
+      const user = await authenticateApiKey(authHeader.slice(7).trim());
+      if (!user) return res.status(401).json({ error: 'Invalid API key' });
+      req.user = user;
+      return next();
+    } catch (err) {
+      console.error('[Auth] API key lookup failed:', err);
+      return res.status(500).json({ error: 'Server error.' });
+    }
+  }
+
   const token = req.cookies.token;
   if (!token) {
     return res.status(401).json({ error: 'Not authenticated' });
@@ -2001,6 +2045,217 @@ api.post('/upload-image', authenticateToken, uploadImage.single('image'), (req, 
   // Return the relative path to access the uploaded image
   const imageUrl = `/uploads/${req.file.filename}`;
   res.json({ url: imageUrl });
+});
+
+// ==================== API KEYS (Admin only) ====================
+
+// List API keys (never returns the key itself)
+api.get('/admin/api-keys', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await db.query(`
+      SELECT k.id, k.name, k.key_prefix, k.created_at, k.last_used_at, k.revoked_at,
+             u.name AS created_by_name, u.email AS created_by_email
+        FROM api_keys k
+        JOIN users u ON u.id = k.created_by
+       ORDER BY k.created_at DESC
+    `);
+    res.json(rows);
+  } catch (error) {
+    console.error('[API Keys] Error listing keys:', error);
+    res.status(500).json({ error: 'Failed to fetch API keys' });
+  }
+});
+
+// Create an API key. The plaintext key is returned exactly once.
+api.post('/admin/api-keys', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    if (name.length < 2 || name.length > 100) {
+      return res.status(400).json({ error: 'Key name must be between 2 and 100 characters' });
+    }
+    const { key, hash, prefix } = generateApiKey();
+    const [result] = await db.query(
+      'INSERT INTO api_keys (name, key_prefix, key_hash, created_by) VALUES (?, ?, ?, ?)',
+      [name, prefix, hash, req.user.id]
+    );
+    res.status(201).json({
+      id: result.insertId,
+      name,
+      key_prefix: prefix,
+      key,
+      message: 'Store this key now — it cannot be shown again.'
+    });
+  } catch (error) {
+    console.error('[API Keys] Error creating key:', error);
+    res.status(500).json({ error: 'Failed to create API key' });
+  }
+});
+
+// Revoke an API key
+api.delete('/admin/api-keys/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      'UPDATE api_keys SET revoked_at = NOW() WHERE id = ? AND revoked_at IS NULL RETURNING id',
+      [req.params.id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'API key not found or already revoked' });
+    }
+    res.json({ message: 'API key revoked' });
+  } catch (error) {
+    console.error('[API Keys] Error revoking key:', error);
+    res.status(500).json({ error: 'Failed to revoke API key' });
+  }
+});
+
+// ==================== PATH IMPORT (Admin only) ====================
+//
+// Create a whole learning path (or append to an existing one) from one JSON
+// document — the endpoint an AI agent uses. Positions are laid out exactly like
+// the admin UI does it (lessons left→right, task chains alternating up/down).
+//
+// Body: {
+//   name, description?, stars_required?,          // new path  (or)
+//   pathId,                                        // append lessons to an existing path
+//   lessons: [{ title, description?, tasks?: [{ title, description?, type?, xp?, deadline? }] }]
+// }
+const LAYOUT = { firstX: 80, centerY: 250, lessonSpacingX: 250, taskSpacingY: 120, taskSpacingX: 150 };
+const TASK_TYPES = new Set(['mandatory', 'optional']);
+
+function parseDeadline(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new Error('deadline must be a string');
+  const date = value.length === 10 ? new Date(value + 'T23:59:59') : new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error(`invalid deadline "${value}"`);
+  return date.toISOString();
+}
+
+function validateImportBody(body) {
+  const errors = [];
+  const b = body || {};
+  const creatingPath = b.pathId === undefined || b.pathId === null;
+  if (creatingPath) {
+    if (typeof b.name !== 'string' || !b.name.trim() || b.name.length > 255) errors.push('name is required (max 255 chars)');
+    if (b.stars_required !== undefined && (!Number.isInteger(b.stars_required) || b.stars_required < 0)) errors.push('stars_required must be a non-negative integer');
+  } else if (!Number.isInteger(Number(b.pathId))) {
+    errors.push('pathId must be an integer');
+  }
+  if (!Array.isArray(b.lessons)) errors.push('lessons must be an array');
+  else if (b.lessons.length > 200) errors.push('at most 200 lessons per request');
+  else b.lessons.forEach((l, i) => {
+    if (!l || typeof l.title !== 'string' || !l.title.trim() || l.title.length > 255) errors.push(`lessons[${i}].title is required (max 255 chars)`);
+    if (l && l.tasks !== undefined) {
+      if (!Array.isArray(l.tasks)) errors.push(`lessons[${i}].tasks must be an array`);
+      else if (l.tasks.length > 50) errors.push(`lessons[${i}]: at most 50 tasks`);
+      else l.tasks.forEach((t, j) => {
+        if (!t || typeof t.title !== 'string' || !t.title.trim() || t.title.length > 255) errors.push(`lessons[${i}].tasks[${j}].title is required (max 255 chars)`);
+        if (t && t.type !== undefined && !TASK_TYPES.has(t.type)) errors.push(`lessons[${i}].tasks[${j}].type must be "mandatory" or "optional"`);
+        if (t && t.xp !== undefined && (!Number.isInteger(t.xp) || t.xp < 0)) errors.push(`lessons[${i}].tasks[${j}].xp must be a non-negative integer`);
+        try { if (t) parseDeadline(t.deadline); } catch (e) { errors.push(`lessons[${i}].tasks[${j}]: ${e.message}`); }
+      });
+    }
+  });
+  return errors;
+}
+
+api.post('/admin/paths/import', authenticateToken, requireAdmin, async (req, res) => {
+  const errors = validateImportBody(req.body);
+  if (errors.length > 0) {
+    return res.status(400).json({ error: 'Invalid import document', details: errors });
+  }
+  const body = req.body;
+
+  try {
+    const created = await db.transaction(async (tx) => {
+      let pathId;
+      let pathName;
+      let parentId = null;
+      let x = LAYOUT.firstX;
+      let order = 1;
+
+      if (body.pathId === undefined || body.pathId === null) {
+        const [result] = await tx.query(
+          'INSERT INTO paths (name, description, stars_required) VALUES (?, ?, ?)',
+          [body.name.trim(), body.description || '', body.stars_required || 0]
+        );
+        pathId = result.insertId;
+        pathName = body.name.trim();
+      } else {
+        pathId = Number(body.pathId);
+        const [paths] = await tx.query('SELECT id, name FROM paths WHERE id = ?', [pathId]);
+        if (paths.length === 0) {
+          const err = new Error('Path not found'); err.status = 404; throw err;
+        }
+        pathName = paths[0].name;
+        // Append after the last lesson of the existing path
+        const [last] = await tx.query(
+          'SELECT id, position_x, order_index FROM lessons WHERE path_id = ? ORDER BY order_index DESC, id DESC LIMIT 1',
+          [pathId]
+        );
+        if (last.length > 0) {
+          parentId = last[0].id;
+          x = last[0].position_x + LAYOUT.lessonSpacingX;
+          order = last[0].order_index + 1;
+        }
+      }
+
+      const lessons = [];
+      for (const lesson of body.lessons) {
+        const y = LAYOUT.centerY;
+        const [lr] = await tx.query(
+          'INSERT INTO lessons (path_id, title, description, position_x, position_y, order_index, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [pathId, lesson.title.trim(), lesson.description || '', x, y, order, parentId]
+        );
+        const lessonId = lr.insertId;
+
+        // Task chain: first task diagonal (up for odd lessons, down for even), then to the right
+        const direction = order % 2 !== 0 ? -1 : 1;
+        let taskX = x + LAYOUT.taskSpacingY;
+        const taskY = y + LAYOUT.taskSpacingY * direction;
+        const tasks = [];
+        (lesson.tasks || []).forEach((task, index) => {
+          tasks.push({ ...task, _x: taskX, _y: taskY, _order: index + 1 });
+          taskX += LAYOUT.taskSpacingX;
+        });
+        const createdTasks = [];
+        for (const task of tasks) {
+          const [tr] = await tx.query(
+            'INSERT INTO tasks (lesson_id, title, type, xp_reward, deadline, position_x, position_y, order_index, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [lessonId, task.title.trim(), task.type || 'mandatory', task.xp ?? 10, parseDeadline(task.deadline), task._x, task._y, task._order, task.description || '']
+          );
+          createdTasks.push({ id: tr.insertId, title: task.title.trim(), type: task.type || 'mandatory', order_index: task._order });
+        }
+
+        lessons.push({ id: lessonId, title: lesson.title.trim(), order_index: order, tasks: createdTasks });
+        parentId = lessonId;
+        x += LAYOUT.lessonSpacingX;
+        order += 1;
+      }
+
+      return { pathId, pathName, lessons };
+    });
+
+    // Let open admin/student views refresh
+    for (const lesson of created.lessons) {
+      io.emit('lesson:created', { lessonId: lesson.id, pathId: created.pathId, title: lesson.title });
+      for (const task of lesson.tasks) {
+        io.emit('task:created', { taskId: task.id, lessonId: lesson.id, title: task.title, type: task.type });
+      }
+    }
+
+    res.status(201).json({
+      path: { id: created.pathId, name: created.pathName },
+      lessons: created.lessons,
+      counts: {
+        lessons: created.lessons.length,
+        tasks: created.lessons.reduce((n, l) => n + l.tasks.length, 0)
+      }
+    });
+  } catch (err) {
+    if (err.status === 404) return res.status(404).json({ error: err.message });
+    console.error('[Path Import] Error:', err);
+    res.status(500).json({ error: 'Failed to import path' });
+  }
 });
 
 // ==================== CHAT ENDPOINTS ====================

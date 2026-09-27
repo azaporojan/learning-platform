@@ -37,6 +37,9 @@ The pre-deployment review found and fixed the following (all in `server/index.js
 - Uploads: max 25 MB per file (10 MB for images; `MAX_UPLOAD_MB` / `MAX_IMAGE_UPLOAD_MB`),
   extension allow-list, random file names, never rendered inline unless JPEG/PNG/GIF.
 - Dependencies: `npm audit --omit=dev` in `server/` and `client/` before releasing; Trivy runs in CI.
+- API keys (`docs/AGENT_API.md`): created/revoked by admins only, stored as SHA-256 hashes,
+  shown once, act as their creator and stop working when revoked or when the creator loses the
+  admin role. Sent as `Authorization: Bearer`, so the session cookie/CSRF surface is untouched.
 
 ## Known follow-ups (not blocking deployment)
 
