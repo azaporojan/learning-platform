@@ -6,6 +6,7 @@ import { AlertDialog } from './AlertDialog';
 import { apiUrl, getFileUrl } from '../config';
 import { NotificationDropdown } from './NotificationDropdown';
 import UsersManagementModal from './UsersManagementModal';
+import ApiKeysModal from './ApiKeysModal';
 
 interface NavbarProps {
   onOpenRegister?: () => void;
@@ -37,6 +38,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showUsersModal, setShowUsersModal] = useState(false);
+  const [showApiKeysModal, setShowApiKeysModal] = useState(false);
   const [profileName, setProfileName] = useState('');
   const [selectedAvatarFile, setSelectedAvatarFile] = useState<File | null>(null);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
@@ -304,6 +306,19 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
                       </button>
                     )}
 
+                    {currentUser?.role === 'admin' && (
+                      <button
+                        className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                        onClick={() => {
+                          setShowUserMenu(false);
+                          setShowApiKeysModal(true);
+                        }}
+                      >
+                        <span className="material-icons text-gray-600 dark:text-gray-400">key</span>
+                        <span className="text-sm text-gray-700 dark:text-gray-300">API Keys</span>
+                      </button>
+                    )}
+
                     <button
                       className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-red-600"
                       onClick={() => {
@@ -422,6 +437,14 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
           isOpen={showUsersModal}
           onClose={() => setShowUsersModal(false)}
           currentUserId={currentUser.id}
+        />
+      )}
+
+      {/* API Keys Modal */}
+      {currentUser && currentUser.role === 'admin' && (
+        <ApiKeysModal
+          isOpen={showApiKeysModal}
+          onClose={() => setShowApiKeysModal(false)}
         />
       )}
     </>

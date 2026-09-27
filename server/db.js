@@ -82,10 +82,10 @@ function isInsert(text) {
   return /^\s*insert\b/i.test(text) && !/\breturning\b/i.test(text);
 }
 
-async function query(sql, params = []) {
+async function runQuery(executor, sql, params = []) {
   const { text, values } = toPgQuery(sql, params);
   const finalText = isInsert(text) ? `${text} RETURNING id` : text;
-  const result = await pool.query(finalText, values);
+  const result = await executor.query(finalText, values);
   const rows = result.rows || [];
   rows.affectedRows = result.rowCount;
   if (isInsert(text)) {
@@ -94,4 +94,26 @@ async function query(sql, params = []) {
   return [rows, result];
 }
 
-module.exports = { query, pool, toPgQuery };
+const query = (sql, params) => runQuery(pool, sql, params);
+
+/**
+ * Run `fn(tx)` inside a transaction. `tx.query` has the same signature/behaviour
+ * as the pool-level `query`. Commits when fn resolves, rolls back when it throws.
+ */
+async function transaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const tx = { query: (sql, params) => runQuery(client, sql, params) };
+    const result = await fn(tx);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { query, transaction, pool, toPgQuery };
