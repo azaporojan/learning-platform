@@ -40,6 +40,9 @@ The pre-deployment review found and fixed the following (all in `server/index.js
 - API keys (`docs/AGENT_API.md`): created/revoked by admins only, stored as SHA-256 hashes,
   shown once, act as their creator and stop working when revoked or when the creator loses the
   admin role. Sent as `Authorization: Bearer`, so the session cookie/CSRF surface is untouched.
+  Content imported through the API is published immediately and its descriptions are rendered as
+  HTML, exactly like admin-typed content, so agent-authored paths should be reviewed by a human
+  before students can unlock them (see `docs/AGENT_API.md` §5).
 
 ## Known follow-ups (not blocking deployment)
 

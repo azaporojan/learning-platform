@@ -135,6 +135,14 @@ task `+150` on x. The import endpoint does this for you.
 
 ## 5. Using it from a Claude agent
 
+**Review before students see it.** Imported content goes live immediately, and lesson/task
+descriptions are rendered as HTML in the app (the same as content typed into the rich-text editor).
+An agent working from untrusted input (web pages, uploaded documents, user messages) can be
+prompt-injected into publishing wrong or malicious content. Keep a human in the loop: create the
+path with `stars_required` high enough that no student can open it yet (or review it as an admin
+right after the import), check it in the admin UI, then lower `stars_required` via
+`PUT /api/paths/:id`. Revoke the agent's key when the job is done.
+
 Give the agent the base URL and the key as environment variables and a short instruction such as:
 
 > You can publish learning content to the Learning Platform. Build the path as the JSON document

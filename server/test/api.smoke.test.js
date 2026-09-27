@@ -255,6 +255,12 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const bad = await fetch(`${BASE}/admin/api-keys`, { headers: { Authorization: 'Bearer lp_deadbeef' } });
   assert.equal(bad.status, 401);
 
+  // The import endpoint is admin-only: anonymous → 401, student session → 403
+  const anonImport = await anon('/admin/paths/import', { method: 'POST', json: { name: 'x', lessons: [] } });
+  assert.equal(anonImport.status, 401);
+  const studentImport = await stud('/admin/paths/import', { method: 'POST', json: { name: 'x', lessons: [] } });
+  assert.equal(studentImport.status, 403);
+
   // Import a whole path with the key (no cookie)
   const importDoc = {
     name: 'Agent Path',

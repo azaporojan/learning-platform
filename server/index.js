@@ -2182,7 +2182,9 @@ api.post('/admin/paths/import', authenticateToken, requireAdmin, async (req, res
         pathName = body.name.trim();
       } else {
         pathId = Number(body.pathId);
-        const [paths] = await tx.query('SELECT id, name FROM paths WHERE id = ?', [pathId]);
+        // Lock the path row for the rest of the transaction so two concurrent appends
+        // (or an append racing a UI edit) cannot both read the same "last lesson".
+        const [paths] = await tx.query('SELECT id, name FROM paths WHERE id = ? FOR UPDATE', [pathId]);
         if (paths.length === 0) {
           const err = new Error('Path not found'); err.status = 404; throw err;
         }
