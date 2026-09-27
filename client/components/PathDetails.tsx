@@ -389,14 +389,14 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
   }, []);
 
   return (
-    <div class="h-full flex flex-col bg-white dark:bg-gray-900 rounded-3xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden relative">
+    <div className="h-full flex flex-col bg-white dark:bg-gray-900 rounded-3xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden relative">
       {/* Header */}
-      <div class="p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between bg-white dark:bg-gray-900 z-10 shadow-sm">
-        <div class="flex items-center">
-          <button onClick={onBack} class="mr-4 p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-            <span class="material-icons">arrow_back</span>
+      <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between bg-white dark:bg-gray-900 z-10 shadow-sm">
+        <div className="flex items-center">
+          <button onClick={onBack} className="mr-4 p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+            <span className="material-icons">arrow_back</span>
           </button>
-          <h2 class="text-2xl font-extrabold italic text-gray-800 dark:text-white">{path.title} Path</h2>
+          <h2 className="text-2xl font-extrabold italic text-gray-800 dark:text-white">{path.title} Path</h2>
         </div>
       </div>
 
@@ -408,7 +408,7 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
           <div className="h-[500px] relative px-20 flex-shrink-0 -mt-24">
 
             {/* SVG Layer */}
-            <svg class="absolute top-0 left-0 w-full h-full pointer-events-none z-0">
+            <svg className="absolute top-0 left-0 w-full h-full pointer-events-none z-0">
 
               {/* 1. Lesson Connections (Main Line) */}
               {lessons.map(lesson => {
@@ -519,7 +519,7 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
                 return (
                   <div
                     key={`ghost-node-${parent.id}-${idx}`}
-                    class="absolute group cursor-pointer z-10"
+                    className="absolute group cursor-pointer z-10"
                     style={{ left: `${p.x + (isTask ? 8 : 0)}px`, top: `${p.y + (isTask ? 8 : 0)}px` }}
                     onClick={() => {
                       if (p.type === 'lesson') {
@@ -530,10 +530,10 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
                       }
                     }}
                   >
-                    <div class={`${sizeClass} rounded-full bg-gradient-to-br from-green-50 to-green-100 border-2 border-green-400 flex items-center justify-center hover:from-green-100 hover:to-green-200 hover:border-green-500 hover:scale-110 transition-all shadow-md hover:shadow-lg`}>
-                      <span class={`material-icons text-green-600 font-bold ${iconSize}`}>add</span>
+                    <div className={`${sizeClass} rounded-full bg-gradient-to-br from-green-50 to-green-100 border-2 border-green-400 flex items-center justify-center hover:from-green-100 hover:to-green-200 hover:border-green-500 hover:scale-110 transition-all shadow-md hover:shadow-lg`}>
+                      <span className={`material-icons text-green-600 font-bold ${iconSize}`}>add</span>
                     </div>
-                    <div class={`absolute ${labelTopClass} left-1/2 transform -translate-x-1/2 whitespace-nowrap text-xs font-bold text-green-600 bg-white px-2 py-1 rounded shadow-sm border border-green-200 opacity-0 group-hover:opacity-100 transition-opacity`}>
+                    <div className={`absolute ${labelTopClass} left-1/2 transform -translate-x-1/2 whitespace-nowrap text-xs font-bold text-green-600 bg-white px-2 py-1 rounded shadow-sm border border-green-200 opacity-0 group-hover:opacity-100 transition-opacity`}>
                       {p.type === 'lesson' ? 'Next Lesson' : 'Next Task'}
                     </div>
                   </div>
@@ -544,14 +544,14 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
             {/* 5. Start Node Button (If empty) */}
             {lessons.length === 0 && isAdmin && (
               <div
-                class="absolute left-20 group cursor-pointer z-20"
+                className="absolute left-20 group cursor-pointer z-20"
                 style={{ top: `${getCenterY()}px` }}
                 onClick={() => setAddLessonModal({ open: true, parentId: null, x: 80, y: getCenterY() })}
               >
-                <div class="w-20 h-20 rounded-full bg-gradient-to-br from-green-400 to-green-500 border-4 border-green-600 flex items-center justify-center shadow-xl hover:scale-110 hover:shadow-2xl transition-all">
-                  <span class="material-icons text-white font-bold text-4xl">add</span>
+                <div className="w-20 h-20 rounded-full bg-gradient-to-br from-green-400 to-green-500 border-4 border-green-600 flex items-center justify-center shadow-xl hover:scale-110 hover:shadow-2xl transition-all">
+                  <span className="material-icons text-white font-bold text-4xl">add</span>
                 </div>
-                <div class="absolute top-24 left-1/2 transform -translate-x-1/2 font-bold text-green-600 bg-white px-3 py-1 rounded-lg shadow-md border border-green-200 whitespace-nowrap">Start Path</div>
+                <div className="absolute top-24 left-1/2 transform -translate-x-1/2 font-bold text-green-600 bg-white px-3 py-1 rounded-lg shadow-md border border-green-200 whitespace-nowrap">Start Path</div>
               </div>
             )}
 
@@ -592,7 +592,7 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
               return (
                 <div
                   key={`lesson-${lesson.id}`}
-                  class="absolute group z-30"
+                  className="absolute group z-30"
                   style={{ left: `${lesson.position_x}px`, top: `${lesson.position_y}px` }}
                   onClick={() => {
                     // Students cannot open locked lessons
@@ -603,18 +603,18 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
                   }}
                 >
                   <div
-                    class={`w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition-all relative
+                    className={`w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition-all relative
                       ${bgClass} ${borderClass}
                       ${isLocked && !isAdmin ? 'cursor-not-allowed opacity-75' : 'hover:scale-110 hover:shadow-xl cursor-pointer'}
                     `}
                   >
                     {isLocked && !isAdmin ? (
-                      <span class="material-icons text-gray-400 text-2xl">lock</span>
+                      <span className="material-icons text-gray-400 text-2xl">lock</span>
                     ) : (
-                      <span class={`font-extrabold text-xl ${textClass}`}>{lesson.order_index}</span>
+                      <span className={`font-extrabold text-xl ${textClass}`}>{lesson.order_index}</span>
                     )}
                   </div>
-                  <div class="absolute top-20 left-1/2 transform -translate-x-1/2 whitespace-nowrap font-bold text-gray-800 dark:text-gray-200 text-base bg-white dark:bg-gray-800 px-3 py-1 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+                  <div className="absolute top-20 left-1/2 transform -translate-x-1/2 whitespace-nowrap font-bold text-gray-800 dark:text-gray-200 text-base bg-white dark:bg-gray-800 px-3 py-1 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
                     {lesson.title}
                   </div>
                 </div>
@@ -646,7 +646,7 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
                 return (
                   <div
                     key={`task-${task.id}`}
-                    class="absolute group z-20"
+                    className="absolute group z-20"
                     style={{ left: `${task.position_x + 8}px`, top: `${task.position_y + 8}px` }}
                     onClick={() => {
                       if (!isLocked || isAdmin) {
@@ -655,7 +655,7 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
                     }}
                   >
                     <div
-                      class={`w-12 h-12 rounded-full flex items-center justify-center shadow-md border-2 transition-transform ${isLocked && !isAdmin ? 'cursor-not-allowed opacity-60' : 'hover:scale-105 cursor-pointer'
+                      className={`w-12 h-12 rounded-full flex items-center justify-center shadow-md border-2 transition-transform ${isLocked && !isAdmin ? 'cursor-not-allowed opacity-60' : 'hover:scale-105 cursor-pointer'
                         } relative ${task.completed
                           ? 'bg-green-50 border-green-400'
                           : isLocked && !isAdmin
@@ -667,36 +667,36 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
                     >
                       {/* Admin Badge: Red bouncing badge with submission count */}
                       {isAdmin && (task.unviewed_count || 0) > 0 && (
-                        <div class="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center border-2 border-white shadow-md z-50 animate-bounce">
+                        <div className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center border-2 border-white shadow-md z-50 animate-bounce">
                           {task.unviewed_count}
                         </div>
                       )}
 
                       {/* Student Badge: Blue "NEW" badge for unviewed tasks */}
                       {!isAdmin && task.is_new && !task.completed && (
-                        <div class="absolute -top-2 -right-2 w-6 h-6 bg-gradient-to-br from-blue-500 to-blue-600 text-white text-[8px] font-bold rounded-full flex items-center justify-center border-2 border-white shadow-lg z-50 animate-pulse">
+                        <div className="absolute -top-2 -right-2 w-6 h-6 bg-gradient-to-br from-blue-500 to-blue-600 text-white text-[8px] font-bold rounded-full flex items-center justify-center border-2 border-white shadow-lg z-50 animate-pulse">
                           NEW
                         </div>
                       )}
 
                       {isLocked && !isAdmin && !task.completed && (
-                        <span class="material-icons text-gray-400 text-lg">lock</span>
+                        <span className="material-icons text-gray-400 text-lg">lock</span>
                       )}
                       {(!isLocked || isAdmin) && !task.completed && task.type === 'mandatory' && (
-                        <span class="material-icons text-blue-500 text-lg">assignment</span>
+                        <span className="material-icons text-blue-500 text-lg">assignment</span>
                       )}
                       {(!isLocked || isAdmin) && !task.completed && task.type === 'optional' && (
-                        <span class="material-icons text-yellow-400 text-xl">stars</span>
+                        <span className="material-icons text-yellow-400 text-xl">stars</span>
                       )}
                       {task.completed && (
-                        <span class="material-icons text-green-500 text-2xl">check_circle</span>
+                        <span className="material-icons text-green-500 text-2xl">check_circle</span>
                       )}
                     </div>
 
-                    <div class="absolute top-14 left-1/2 transform -translate-x-1/2 whitespace-nowrap bg-white border border-gray-200 px-2 py-1 rounded text-xs text-gray-600 shadow-sm flex items-center">
+                    <div className="absolute top-14 left-1/2 transform -translate-x-1/2 whitespace-nowrap bg-white border border-gray-200 px-2 py-1 rounded text-xs text-gray-600 shadow-sm flex items-center">
                       {task.title}
                       {isLocked && !isAdmin && !task.completed && (
-                        <span class="material-icons text-xs ml-1 text-gray-400">lock</span>
+                        <span className="material-icons text-xs ml-1 text-gray-400">lock</span>
                       )}
                     </div>
                   </div>
@@ -712,25 +712,25 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
 
       {/* Add Lesson Modal */}
       {addLessonModal.open && (
-        <div class="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-xl w-96">
-            <h3 class="text-xl font-bold mb-4">New Lesson</h3>
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-xl w-96">
+            <h3 className="text-xl font-bold mb-4">New Lesson</h3>
             <form onSubmit={(e) => {
               e.preventDefault();
               const form = e.target as any;
               handleAddLesson(form.title.value, form.description.value);
             }}>
-              <div class="mb-4">
-                <label class="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Lesson Title</label>
-                <input name="title" placeholder="e.g., Introduction to HTML" class="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 focus:ring-2 focus:ring-primary outline-none" required autoFocus />
+              <div className="mb-4">
+                <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Lesson Title</label>
+                <input name="title" placeholder="e.g., Introduction to HTML" className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 focus:ring-2 focus:ring-primary outline-none" required autoFocus />
               </div>
-              <div class="mb-6">
-                <label class="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Lesson Summary</label>
-                <textarea name="description" placeholder="What will students learn in this lesson?" rows={4} class="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 focus:ring-2 focus:ring-primary outline-none resize-none"></textarea>
+              <div className="mb-6">
+                <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Lesson Summary</label>
+                <textarea name="description" placeholder="What will students learn in this lesson?" rows={4} className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 focus:ring-2 focus:ring-primary outline-none resize-none"></textarea>
               </div>
-              <div class="flex justify-end space-x-3">
-                <button type="button" onClick={() => setAddLessonModal({ ...addLessonModal, open: false })} class="px-5 py-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-                <button type="submit" class="px-5 py-2 bg-primary text-white font-bold rounded-lg shadow-md hover:shadow-lg transition-all">Create</button>
+              <div className="flex justify-end space-x-3">
+                <button type="button" onClick={() => setAddLessonModal({ ...addLessonModal, open: false })} className="px-5 py-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
+                <button type="submit" className="px-5 py-2 bg-primary text-white font-bold rounded-lg shadow-md hover:shadow-lg transition-all">Create</button>
               </div>
             </form>
           </div>
@@ -739,9 +739,9 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
 
       {/* Add Task Modal */}
       {addTaskModal.open && (
-        <div class="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-xl w-96">
-            <h3 class="text-xl font-bold mb-4">Add Task</h3>
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-xl w-96">
+            <h3 className="text-xl font-bold mb-4">Add Task</h3>
             <form onSubmit={(e) => {
               e.preventDefault();
               const form = e.target as any;
@@ -753,13 +753,13 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
                 deadlineValue
               );
             }}>
-              <input name="title" placeholder="Task Title" class="w-full mb-4 p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 outline-none focus:ring-2 focus:ring-primary" required autoFocus />
+              <input name="title" placeholder="Task Title" className="w-full mb-4 p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 outline-none focus:ring-2 focus:ring-primary" required autoFocus />
 
-              <div class="mb-4">
-                <label class="block text-xs font-bold text-gray-500 mb-1">Type</label>
+              <div className="mb-4">
+                <label className="block text-xs font-bold text-gray-500 mb-1">Type</label>
                 <select
                   name="type"
-                  class="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 outline-none"
+                  className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 outline-none"
                   onChange={(e) => setTaskType(e.target.value as 'mandatory' | 'optional')}
                   value={taskType}
                 >
@@ -768,27 +768,27 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
                 </select>
               </div>
 
-              <div class="flex space-x-4 mb-6">
-                <div class="w-1/2">
-                  <label class="block text-xs font-bold text-gray-500 mb-1">XP Reward</label>
-                  <input type="number" name="xp" defaultValue="10" class="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 outline-none" />
+              <div className="flex space-x-4 mb-6">
+                <div className="w-1/2">
+                  <label className="block text-xs font-bold text-gray-500 mb-1">XP Reward</label>
+                  <input type="number" name="xp" defaultValue="10" className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 outline-none" />
                 </div>
-                <div class="w-1/2">
-                  <label class="block text-xs font-bold text-gray-500 mb-1">
-                    Deadline {taskType === 'optional' && <span class="text-gray-400 font-normal">(Optional)</span>}
+                <div className="w-1/2">
+                  <label className="block text-xs font-bold text-gray-500 mb-1">
+                    Deadline {taskType === 'optional' && <span className="text-gray-400 font-normal">(Optional)</span>}
                   </label>
                   <input
                     type="date"
                     name="deadline"
-                    class="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 outline-none"
+                    className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 outline-none"
                     required={taskType === 'mandatory'}
                   />
                 </div>
               </div>
 
-              <div class="flex justify-end space-x-3">
-                <button type="button" onClick={() => { setAddTaskModal({ ...addTaskModal, open: false }); setTaskType('mandatory'); }} class="px-5 py-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors" disabled={addTaskModal.isSubmitting}>Cancel</button>
-                <button type="submit" class="px-5 py-2 bg-primary text-white font-bold rounded-lg shadow-md hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed" disabled={addTaskModal.isSubmitting}>
+              <div className="flex justify-end space-x-3">
+                <button type="button" onClick={() => { setAddTaskModal({ ...addTaskModal, open: false }); setTaskType('mandatory'); }} className="px-5 py-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors" disabled={addTaskModal.isSubmitting}>Cancel</button>
+                <button type="submit" className="px-5 py-2 bg-primary text-white font-bold rounded-lg shadow-md hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed" disabled={addTaskModal.isSubmitting}>
                   {addTaskModal.isSubmitting ? 'Adding...' : 'Add Task'}
                 </button>
               </div>
@@ -799,47 +799,47 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
 
       {/* View Lesson Modal */}
       {viewLessonModal.open && viewLessonModal.lesson && (
-        <div class="fixed inset-0 z-[150] flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setViewLessonModal({ open: false, lesson: null })}>
-          <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-[1100px] max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setViewLessonModal({ open: false, lesson: null })}>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-[1100px] max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
             {/* Header */}
-            <div class="p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-              <h3 class="text-2xl font-bold text-gray-800 dark:text-white">{viewLessonModal.lesson.title}</h3>
-              <button onClick={() => setViewLessonModal({ open: false, lesson: null })} class="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
-                <span class="material-icons">close</span>
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+              <h3 className="text-2xl font-bold text-gray-800 dark:text-white">{viewLessonModal.lesson.title}</h3>
+              <button onClick={() => setViewLessonModal({ open: false, lesson: null })} className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
+                <span className="material-icons">close</span>
               </button>
             </div>
 
             {/* Body */}
-            <div class="flex-grow overflow-y-auto p-8 custom-scrollbar">
+            <div className="flex-grow overflow-y-auto p-8 custom-scrollbar">
               {viewLessonModal.lesson.description && (
-                <div class="mb-8">
-                  <h4 class="text-sm font-bold text-gray-500 mb-3">LESSON SUMMARY</h4>
+                <div className="mb-8">
+                  <h4 className="text-sm font-bold text-gray-500 mb-3">LESSON SUMMARY</h4>
                   {isProbablyHtml(viewLessonModal.lesson.description) ? (
                     <div
-                      class="prose dark:prose-invert max-w-none bg-gray-50 dark:bg-gray-900 p-4 rounded-lg"
+                      className="prose dark:prose-invert max-w-none bg-gray-50 dark:bg-gray-900 p-4 rounded-lg"
                       dangerouslySetInnerHTML={{ __html: viewLessonModal.lesson.description }}
                     />
                   ) : (
-                    <p class="text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap text-lg">
+                    <p className="text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap text-lg">
                       {viewLessonModal.lesson.description}
                     </p>
                   )}
                 </div>
               )}
 
-              <div class="border-t border-gray-200 dark:border-gray-700 pt-6">
-                <h4 class="text-sm font-bold text-gray-500 mb-4">TASKS ({viewLessonModal.lesson.tasks.length})</h4>
-                <div class="space-y-3">
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+                <h4 className="text-sm font-bold text-gray-500 mb-4">TASKS ({viewLessonModal.lesson.tasks.length})</h4>
+                <div className="space-y-3">
                   {viewLessonModal.lesson.tasks.length === 0 && (
-                    <p class="text-sm text-gray-400 italic">No tasks assigned yet.</p>
+                    <p className="text-sm text-gray-400 italic">No tasks assigned yet.</p>
                   )}
                   {viewLessonModal.lesson.tasks.map(task => (
-                    <div key={task.id} class="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-xl">
-                      <div class="flex items-center">
-                        {task.type === 'mandatory' && <span class="material-icons text-red-500 mr-2 text-sm">priority_high</span>}
-                        <span class="font-bold text-gray-800 dark:text-gray-200">{task.title}</span>
+                    <div key={task.id} className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-xl">
+                      <div className="flex items-center">
+                        {task.type === 'mandatory' && <span className="material-icons text-red-500 mr-2 text-sm">priority_high</span>}
+                        <span className="font-bold text-gray-800 dark:text-gray-200">{task.title}</span>
                       </div>
-                      {task.completed && <span class="material-icons text-green-500">check_circle</span>}
+                      {task.completed && <span className="material-icons text-green-500">check_circle</span>}
                     </div>
                   ))}
                 </div>
@@ -847,33 +847,33 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
             </div>
 
             {/* Footer */}
-            <div class="p-6 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between bg-white dark:bg-gray-800">
+            <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between bg-white dark:bg-gray-800">
               {isAdmin ? (
-                <div class="flex space-x-2">
+                <div className="flex space-x-2">
                   <button
                     onClick={() => {
                       setEditLessonModal({ open: true, lesson: viewLessonModal.lesson });
                       setViewLessonModal({ open: false, lesson: null });
                     }}
-                    class="px-5 py-2.5 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-lg transition-colors flex items-center"
+                    className="px-5 py-2.5 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-lg transition-colors flex items-center"
                   >
-                    <span class="material-icons text-sm mr-1">edit</span>
+                    <span className="material-icons text-sm mr-1">edit</span>
                     Edit
                   </button>
                   <button
                     onClick={() => {
                       setDeleteConfirmModal({ open: true, lessonId: viewLessonModal.lesson?.id || null });
                     }}
-                    class="px-5 py-2.5 bg-red-500 hover:bg-red-600 text-white font-bold rounded-lg transition-colors flex items-center"
+                    className="px-5 py-2.5 bg-red-500 hover:bg-red-600 text-white font-bold rounded-lg transition-colors flex items-center"
                   >
-                    <span class="material-icons text-sm mr-1">delete</span>
+                    <span className="material-icons text-sm mr-1">delete</span>
                     Delete
                   </button>
                 </div>
               ) : (
                 <div></div>
               )}
-              <button onClick={() => setViewLessonModal({ open: false, lesson: null })} class="px-6 py-2.5 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold rounded-lg transition-colors">
+              <button onClick={() => setViewLessonModal({ open: false, lesson: null })} className="px-6 py-2.5 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold rounded-lg transition-colors">
                 Close
               </button>
             </div>
@@ -883,76 +883,76 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
 
       {/* Edit Lesson Modal */}
       {editLessonModal.open && editLessonModal.lesson && (
-        <div class="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-[1100px] max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-[1100px] max-h-[90vh] overflow-hidden flex flex-col">
             {/* Header */}
-            <div class="p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-              <h3 class="text-2xl font-bold text-gray-800 dark:text-white">Edit Lesson</h3>
-              <button onClick={() => setEditLessonModal({ open: false, lesson: null })} class="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
-                <span class="material-icons">close</span>
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+              <h3 className="text-2xl font-bold text-gray-800 dark:text-white">Edit Lesson</h3>
+              <button onClick={() => setEditLessonModal({ open: false, lesson: null })} className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
+                <span className="material-icons">close</span>
               </button>
             </div>
 
             {/* Body */}
-            <div class="flex-grow overflow-y-auto p-8 custom-scrollbar">
-              <div class="mb-6">
-                <label class="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Lesson Title</label>
+            <div className="flex-grow overflow-y-auto p-8 custom-scrollbar">
+              <div className="mb-6">
+                <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Lesson Title</label>
                 <input
                   value={editLessonData.title}
                   onChange={(e) => setEditLessonData((prev) => ({ ...prev, title: e.target.value }))}
-                  class="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 focus:ring-2 focus:ring-primary outline-none"
+                  className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 focus:ring-2 focus:ring-primary outline-none"
                   required
                   autoFocus
                 />
               </div>
 
               <div>
-                <label class="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Lesson Summary</label>
+                <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Lesson Summary</label>
                 {lessonEditor && (
-                  <div class="rounded-xl overflow-hidden border border-gray-200 dark:border-gray-600">
+                  <div className="rounded-xl overflow-hidden border border-gray-200 dark:border-gray-600">
                     {/* Toolbar */}
-                    <div class="bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-2 flex flex-wrap gap-1">
+                    <div className="bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-2 flex flex-wrap gap-1">
                       <button
                         onClick={() => lessonEditor.chain().focus().toggleBold().run()}
-                        class={`px-3 py-1 rounded ${lessonEditor.isActive('bold') ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
+                        className={`px-3 py-1 rounded ${lessonEditor.isActive('bold') ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
                         type="button"
                       >
                         <strong>B</strong>
                       </button>
                       <button
                         onClick={() => lessonEditor.chain().focus().toggleItalic().run()}
-                        class={`px-3 py-1 rounded ${lessonEditor.isActive('italic') ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
+                        className={`px-3 py-1 rounded ${lessonEditor.isActive('italic') ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
                         type="button"
                       >
                         <em>I</em>
                       </button>
                       <button
                         onClick={() => lessonEditor.chain().focus().toggleHeading({ level: 2 }).run()}
-                        class={`px-3 py-1 rounded ${lessonEditor.isActive('heading', { level: 2 }) ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
+                        className={`px-3 py-1 rounded ${lessonEditor.isActive('heading', { level: 2 }) ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
                         type="button"
                       >
                         H2
                       </button>
                       <button
                         onClick={() => lessonEditor.chain().focus().toggleBulletList().run()}
-                        class={`px-3 py-1 rounded ${lessonEditor.isActive('bulletList') ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
+                        className={`px-3 py-1 rounded ${lessonEditor.isActive('bulletList') ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
                         type="button"
                       >
                         • List
                       </button>
                       <button
                         onClick={() => lessonEditor.chain().focus().toggleOrderedList().run()}
-                        class={`px-3 py-1 rounded ${lessonEditor.isActive('orderedList') ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
+                        className={`px-3 py-1 rounded ${lessonEditor.isActive('orderedList') ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
                         type="button"
                       >
                         1. List
                       </button>
                       <button
                         onClick={addLessonImage}
-                        class="px-3 py-1 rounded bg-green-500 hover:bg-green-600 text-white flex items-center gap-1"
+                        className="px-3 py-1 rounded bg-green-500 hover:bg-green-600 text-white flex items-center gap-1"
                         type="button"
                       >
-                        <span class="material-icons text-sm">image</span>
+                        <span className="material-icons text-sm">image</span>
                         Image
                       </button>
                     </div>
@@ -968,14 +968,14 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
             </div>
 
             {/* Footer */}
-            <div class="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end space-x-3 bg-white dark:bg-gray-800">
-              <button type="button" onClick={() => setEditLessonModal({ open: false, lesson: null })} class="px-6 py-2.5 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
+            <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end space-x-3 bg-white dark:bg-gray-800">
+              <button type="button" onClick={() => setEditLessonModal({ open: false, lesson: null })} className="px-6 py-2.5 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={() => handleEditLesson(editLessonData.title, editLessonData.description)}
-                class="px-6 py-2.5 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-lg shadow-md hover:shadow-lg transition-all"
+                className="px-6 py-2.5 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-lg shadow-md hover:shadow-lg transition-all"
               >
                 Save Changes
               </button>
@@ -986,20 +986,20 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
 
       {/* Delete Confirmation Modal */}
       {deleteConfirmModal.open && (
-        <div class="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-xl w-96">
-            <div class="flex items-center mb-4">
-              <span class="material-icons text-red-500 text-3xl mr-3">warning</span>
-              <h3 class="text-xl font-bold text-gray-800 dark:text-white">Delete Lesson?</h3>
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-xl w-96">
+            <div className="flex items-center mb-4">
+              <span className="material-icons text-red-500 text-3xl mr-3">warning</span>
+              <h3 className="text-xl font-bold text-gray-800 dark:text-white">Delete Lesson?</h3>
             </div>
-            <p class="text-gray-600 dark:text-gray-300 mb-6">
+            <p className="text-gray-600 dark:text-gray-300 mb-6">
               Are you sure you want to delete this lesson? All associated tasks will also be deleted. This action cannot be undone.
             </p>
-            <div class="flex justify-end space-x-3">
-              <button onClick={() => setDeleteConfirmModal({ open: false, lessonId: null })} class="px-5 py-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
+            <div className="flex justify-end space-x-3">
+              <button onClick={() => setDeleteConfirmModal({ open: false, lessonId: null })} className="px-5 py-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
                 Cancel
               </button>
-              <button onClick={handleDeleteLesson} class="px-5 py-2 bg-red-500 hover:bg-red-600 text-white font-bold rounded-lg shadow-md hover:shadow-lg transition-all">
+              <button onClick={handleDeleteLesson} className="px-5 py-2 bg-red-500 hover:bg-red-600 text-white font-bold rounded-lg shadow-md hover:shadow-lg transition-all">
                 Delete
               </button>
             </div>

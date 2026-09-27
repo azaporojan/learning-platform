@@ -180,54 +180,54 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
         onConfirm={hideAlert}
       />
 
-      <nav class="bg-card-light dark:bg-card-dark border-b border-gray-200 dark:border-gray-700 px-6 py-3 flex justify-between items-center sticky top-0 z-50">
-        <div class="flex items-center">
-          <a href="#" class="text-3xl font-extrabold italic text-primary hover:text-primary-dark transition-colors">
+      <nav className="bg-card-light dark:bg-card-dark border-b border-gray-200 dark:border-gray-700 px-6 py-3 flex justify-between items-center sticky top-0 z-50">
+        <div className="flex items-center">
+          <a href="#" className="text-3xl font-extrabold italic text-primary hover:text-primary-dark transition-colors">
             Learning
           </a>
         </div>
 
-        <div class="flex items-center space-x-6">
+        <div className="flex items-center space-x-6">
           {!currentUser ? (
             <button
               onClick={onOpenLogin}
-              class="bg-primary hover:bg-primary-dark text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md transition-colors"
+              className="bg-primary hover:bg-primary-dark text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md transition-colors"
             >
               Authentication
             </button>
           ) : (
-            <div class="flex items-center space-x-6">
+            <div className="flex items-center space-x-6">
               {/* Online Users - exclude current user */}
               {onlineUsers.filter(u => u.id !== currentUser.id).length > 0 && (
-                <div class="flex items-center space-x-3">
-                  <span class="text-sm font-semibold text-gray-600 dark:text-gray-400">Online:</span>
-                  <div class="flex items-center -space-x-2">
+                <div className="flex items-center space-x-3">
+                  <span className="text-sm font-semibold text-gray-600 dark:text-gray-400">Online:</span>
+                  <div className="flex items-center -space-x-2">
                     {onlineUsers.filter(u => u.id !== currentUser.id).slice(0, 8).map((user) => {
                       const initial = user.name.charAt(0).toUpperCase();
                       return (
                         <div
                           key={user.id}
-                          class="relative group z-0 hover:z-20"
+                          className="relative group z-0 hover:z-20"
                           title={user.name}
                         >
-                          <div class="w-7 h-7 rounded-full overflow-hidden border-2 border-green-500 shadow-sm transition-transform hover:scale-125 cursor-pointer bg-white">
+                          <div className="w-7 h-7 rounded-full overflow-hidden border-2 border-green-500 shadow-sm transition-transform hover:scale-125 cursor-pointer bg-white">
                             {getFileUrl(user.avatar_url) ? (
-                              <img src={getFileUrl(user.avatar_url)!} alt={user.name} class="w-full h-full object-cover" />
+                              <img src={getFileUrl(user.avatar_url)!} alt={user.name} className="w-full h-full object-cover" />
                             ) : (
-                              <div class={`w-full h-full bg-gradient-to-br ${getGradientForName(user.name)} flex items-center justify-center font-bold text-white text-[0.65rem]`}>
+                              <div className={`w-full h-full bg-gradient-to-br ${getGradientForName(user.name)} flex items-center justify-center font-bold text-white text-[0.65rem]`}>
                                 {initial}
                               </div>
                             )}
                           </div>
                           {/* Tooltip */}
-                          <div class="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                          <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
                             {user.name}
                           </div>
                         </div>
                       );
                     })}
                     {onlineUsers.filter(u => u.id !== currentUser.id).length > 8 && (
-                      <div class="w-7 h-7 rounded-full bg-gray-200 dark:bg-gray-700 border-2 border-gray-300 dark:border-gray-600 flex items-center justify-center font-bold text-gray-600 dark:text-gray-300 text-[0.55rem] shadow-sm">
+                      <div className="w-7 h-7 rounded-full bg-gray-200 dark:bg-gray-700 border-2 border-gray-300 dark:border-gray-600 flex items-center justify-center font-bold text-gray-600 dark:text-gray-300 text-[0.55rem] shadow-sm">
                         +{onlineUsers.filter(u => u.id !== currentUser.id).length - 8}
                       </div>
                     )}
@@ -239,80 +239,80 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
               <NotificationDropdown currentUser={currentUser} />
 
               {/* User Info with Dropdown */}
-              <div class="relative" ref={menuRef}>
+              <div className="relative" ref={menuRef}>
                 <div
-                  class="flex items-center space-x-3 border-l border-gray-300 dark:border-gray-600 pl-6 pr-3 py-1 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-all"
+                  className="flex items-center space-x-3 border-l border-gray-300 dark:border-gray-600 pl-6 pr-3 py-1 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-all"
                   onClick={() => setShowUserMenu(!showUserMenu)}
                 >
                   {/* Avatar */}
-                  <div class="w-10 h-10 rounded-full bg-gradient-to-br from-orange-300 to-orange-400 flex items-center justify-center font-bold text-white text-base shadow-md overflow-hidden">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-orange-300 to-orange-400 flex items-center justify-center font-bold text-white text-base shadow-md overflow-hidden">
                     {getFileUrl(currentUser.avatar_url) ? (
-                      <img src={getFileUrl(currentUser.avatar_url)!} alt="avatar" class="w-full h-full object-cover" />
+                      <img src={getFileUrl(currentUser.avatar_url)!} alt="avatar" className="w-full h-full object-cover" />
                     ) : (
                       currentUser.name.charAt(0)
                     )}
                   </div>
 
                   {/* Name and Role/Stars */}
-                  <div class="flex flex-col items-start leading-tight">
-                    <span class="font-bold text-gray-900 dark:text-white text-base">{currentUser.name}</span>
+                  <div className="flex flex-col items-start leading-tight">
+                    <span className="font-bold text-gray-900 dark:text-white text-base">{currentUser.name}</span>
                     {currentUser.role === 'admin' ? (
-                      <span class="text-gray-500 dark:text-gray-400 text-xs">Administrator</span>
+                      <span className="text-gray-500 dark:text-gray-400 text-xs">Administrator</span>
                     ) : (
-                      <div class="flex items-center text-yellow-400 font-bold text-xs">
+                      <div className="flex items-center text-yellow-400 font-bold text-xs">
                         <span>{currentUser.stars || 0}</span>
-                        <span class="material-icons text-sm ml-0.5">stars</span>
+                        <span className="material-icons text-sm ml-0.5">stars</span>
                       </div>
                     )}
                   </div>
 
                   {/* Dropdown Arrow */}
-                  <span class={`material-icons text-gray-500 transition-transform ${showUserMenu ? 'rotate-180' : ''}`}>
+                  <span className={`material-icons text-gray-500 transition-transform ${showUserMenu ? 'rotate-180' : ''}`}>
                     expand_more
                   </span>
                 </div>
 
                 {/* Dropdown Menu */}
                 {showUserMenu && (
-                  <div class="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 py-2 z-50">
-                    <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-                      <p class="text-sm font-bold text-gray-900 dark:text-white">{currentUser.name}</p>
-                      <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">{currentUser.email}</p>
+                  <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 py-2 z-50">
+                    <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                      <p className="text-sm font-bold text-gray-900 dark:text-white">{currentUser.name}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{currentUser.email}</p>
                     </div>
 
                     <button
-                      class="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                      className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                       onClick={() => {
                         setShowUserMenu(false);
                         setShowProfileModal(true);
                       }}
                     >
-                      <span class="material-icons text-gray-600 dark:text-gray-400">person</span>
-                      <span class="text-sm text-gray-700 dark:text-gray-300">Edit Profile</span>
+                      <span className="material-icons text-gray-600 dark:text-gray-400">person</span>
+                      <span className="text-sm text-gray-700 dark:text-gray-300">Edit Profile</span>
                     </button>
 
                     {currentUser?.role === 'admin' && (
                       <button
-                        class="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                        className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                         onClick={() => {
                           setShowUserMenu(false);
                           setShowUsersModal(true);
                         }}
                       >
-                        <span class="material-icons text-gray-600 dark:text-gray-400">group</span>
-                        <span class="text-sm text-gray-700 dark:text-gray-300">Users</span>
+                        <span className="material-icons text-gray-600 dark:text-gray-400">group</span>
+                        <span className="text-sm text-gray-700 dark:text-gray-300">Users</span>
                       </button>
                     )}
 
                     <button
-                      class="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-red-600"
+                      className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-red-600"
                       onClick={() => {
                         setShowUserMenu(false);
                         if (onLogout) onLogout();
                       }}
                     >
-                      <span class="material-icons">logout</span>
-                      <span class="text-sm font-medium">Logout</span>
+                      <span className="material-icons">logout</span>
+                      <span className="text-sm font-medium">Logout</span>
                     </button>
                   </div>
                 )}
@@ -324,87 +324,87 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
 
       {/* Edit Profile Modal */}
       {currentUser && showProfileModal && (
-        <div class="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => !savingProfile && setShowProfileModal(false)}>
-          <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-[560px] p-8 border border-gray-200 dark:border-gray-700" onClick={(e) => e.stopPropagation()}>
-            <div class="flex items-center justify-between mb-6">
-              <h3 class="text-2xl font-bold text-gray-900 dark:text-white">Edit Profile</h3>
-              <button class="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300" onClick={() => !savingProfile && setShowProfileModal(false)}>
-                <span class="material-icons">close</span>
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => !savingProfile && setShowProfileModal(false)}>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-[560px] p-8 border border-gray-200 dark:border-gray-700" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Edit Profile</h3>
+              <button className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300" onClick={() => !savingProfile && setShowProfileModal(false)}>
+                <span className="material-icons">close</span>
               </button>
             </div>
 
-            <div class="flex items-center space-x-5 mb-6">
-              <div class="relative">
+            <div className="flex items-center space-x-5 mb-6">
+              <div className="relative">
                 <div
-                  class="w-20 h-20 rounded-full bg-gradient-to-br from-orange-300 to-orange-400 shadow-lg overflow-hidden flex items-center justify-center cursor-pointer border-2 border-white"
+                  className="w-20 h-20 rounded-full bg-gradient-to-br from-orange-300 to-orange-400 shadow-lg overflow-hidden flex items-center justify-center cursor-pointer border-2 border-white"
                   onClick={() => avatarInputRef.current?.click()}
                   title="Change photo"
                 >
                   {(avatarPreviewUrl || getFileUrl(currentUser.avatar_url)) ? (
-                    <img src={avatarPreviewUrl || getFileUrl(currentUser.avatar_url)!} alt="avatar" class="w-full h-full object-cover" />
+                    <img src={avatarPreviewUrl || getFileUrl(currentUser.avatar_url)!} alt="avatar" className="w-full h-full object-cover" />
                   ) : (
-                    <span class="text-white font-extrabold text-2xl">{currentUser.name?.charAt(0)}</span>
+                    <span className="text-white font-extrabold text-2xl">{currentUser.name?.charAt(0)}</span>
                   )}
                 </div>
                 <button
-                  class="absolute -bottom-2 -right-2 w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center shadow-md hover:bg-primary-dark transition-colors"
+                  className="absolute -bottom-2 -right-2 w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center shadow-md hover:bg-primary-dark transition-colors"
                   onClick={() => avatarInputRef.current?.click()}
                   type="button"
                 >
-                  <span class="material-icons text-base">photo_camera</span>
+                  <span className="material-icons text-base">photo_camera</span>
                 </button>
                 <input
                   ref={avatarInputRef}
                   type="file"
                   accept="image/*"
-                  class="hidden"
+                  className="hidden"
                   onChange={(e) => setSelectedAvatarFile(e.target.files?.[0] || null)}
                 />
               </div>
 
-              <div class="flex-1">
-                <div class="text-sm text-gray-500 dark:text-gray-400 mb-1">Email</div>
-                <div class="font-bold text-gray-800 dark:text-gray-200">{currentUser.email}</div>
+              <div className="flex-1">
+                <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Email</div>
+                <div className="font-bold text-gray-800 dark:text-gray-200">{currentUser.email}</div>
 
                 {currentUser.role !== 'admin' && (
-                  <div class="mt-3 flex items-center text-yellow-400 font-bold">
-                    <span class="mr-2">Stars:</span>
-                    <span class="mr-1">{currentUser.stars || 0}</span>
-                    <span class="material-icons text-base">stars</span>
+                  <div className="mt-3 flex items-center text-yellow-400 font-bold">
+                    <span className="mr-2">Stars:</span>
+                    <span className="mr-1">{currentUser.stars || 0}</span>
+                    <span className="material-icons text-base">stars</span>
                   </div>
                 )}
               </div>
             </div>
 
             {avatarError && (
-              <div class="mb-6 text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl p-3">
+              <div className="mb-6 text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl p-3">
                 {avatarError}
               </div>
             )}
 
-            <div class="mb-6">
-              <label class="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Name</label>
+            <div className="mb-6">
+              <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Name</label>
               <input
                 value={profileName}
                 onChange={(e) => setProfileName(e.target.value)}
-                class="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 outline-none focus:ring-2 focus:ring-primary"
+                className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 outline-none focus:ring-2 focus:ring-primary"
                 placeholder="Your name"
               />
               {profileName.trim().length > 0 && profileName.trim().length < 2 && (
-                <div class="text-xs text-red-500 mt-2">Name must be at least 2 characters.</div>
+                <div className="text-xs text-red-500 mt-2">Name must be at least 2 characters.</div>
               )}
             </div>
 
-            <div class="flex justify-end space-x-3">
+            <div className="flex justify-end space-x-3">
               <button
-                class="px-5 py-2 rounded-lg text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700 transition-colors"
+                className="px-5 py-2 rounded-lg text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700 transition-colors"
                 onClick={() => !savingProfile && setShowProfileModal(false)}
                 type="button"
               >
                 Cancel
               </button>
               <button
-                class={`px-5 py-2 rounded-lg font-bold text-white transition-colors ${savingProfile || profileName.trim().length < 2 || !!avatarError ? 'bg-gray-400 cursor-not-allowed' : 'bg-primary hover:bg-primary-dark'}`}
+                className={`px-5 py-2 rounded-lg font-bold text-white transition-colors ${savingProfile || profileName.trim().length < 2 || !!avatarError ? 'bg-gray-400 cursor-not-allowed' : 'bg-primary hover:bg-primary-dark'}`}
                 onClick={handleSaveProfile}
                 disabled={savingProfile || profileName.trim().length < 2 || !!avatarError}
                 type="button"

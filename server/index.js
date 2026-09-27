@@ -1,29 +1,56 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
+const cookie = require('cookie');
+const crypto = require('crypto');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { Server } = require('socket.io');
 const db = require('./db');
+const { runMigrations } = require('./db/migrate');
 
 const app = express();
 const server = http.createServer(app);
 
-// Environment variables with fallbacks
-const PORT = process.env.PORT || 3001;
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+const PORT = parseInt(process.env.PORT || '3001', 10);
 const NODE_ENV = process.env.NODE_ENV || 'development';
+const isProduction = NODE_ENV === 'production';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+// Optional: the first user who registers with this email is auto-promoted to admin.
+const BOOTSTRAP_ADMIN_EMAIL = (process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
 
-// CORS origins - in production, only allow specific domain
-const allowedOrigins = NODE_ENV === 'production' 
+// The JWT secret signs every session cookie. A missing/short secret in production would let
+// anyone forge an admin session, so refuse to start rather than fall back to a known value.
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  if (isProduction) {
+    console.error('[FATAL] JWT_SECRET must be set and at least 32 characters long in production.');
+    process.exit(1);
+  }
+  console.warn('[WARN] JWT_SECRET is missing or short — using an insecure development fallback.');
+}
+const jwtSecret = JWT_SECRET && JWT_SECRET.length >= 32 ? JWT_SECRET : 'insecure-development-only-secret-do-not-use';
+
+// CORS origins - only needed when the client is served from a different origin (local dev).
+// In production the client build is served by this server, so the browser never sends CORS.
+const allowedOrigins = isProduction
   ? [FRONTEND_URL]
   : ['http://localhost:5173', 'http://localhost:3000', 'http://localhost:4173', FRONTEND_URL];
+
+// Running behind Dokploy's Traefik proxy: trust X-Forwarded-* for req.ip / secure cookies.
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
 const io = new Server(server, {
   cors: {
@@ -35,130 +62,94 @@ const io = new Server(server, {
 // Track online users: Map<userId, {socketId, name, avatar_url}>
 const onlineUsers = new Map();
 
-async function ensureUsersAvatarUrlColumn() {
-  try {
-    const [cols] = await db.query(
-      "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'avatar_url'"
-    );
-    if (cols.length === 0) {
-      await db.query("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(512) NULL");
-    }
-  } catch (err) {
-    console.error('[DB] Failed to ensure users.avatar_url column:', err.message || err);
-  }
-}
+// ---------------------------------------------------------------------------
+// Socket.IO helpers — rooms keep chat traffic and notifications private.
+//   user:<id>  → every socket of that user
+//   chat:<id>  → every socket of every member of that chat
+// ---------------------------------------------------------------------------
+const userRoom = (userId) => `user:${userId}`;
+const chatRoom = (chatId) => `chat:${chatId}`;
+const emitToUser = (userId, event, payload) => io.to(userRoom(userId)).emit(event, payload);
+const emitToChat = (chatId, event, payload) => io.to(chatRoom(chatId)).emit(event, payload);
+const joinChatRoom = (userId, chatId) => io.in(userRoom(userId)).socketsJoin(chatRoom(chatId));
+const leaveChatRoom = (userId, chatId) => io.in(userRoom(userId)).socketsLeave(chatRoom(chatId));
 
-async function ensureMessagesImagesColumn() {
-  try {
-    const [cols] = await db.query(
-      "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'messages' AND COLUMN_NAME = 'images'"
-    );
-    if (cols.length === 0) {
-      await db.query("ALTER TABLE messages ADD COLUMN images TEXT NULL");
-    }
-  } catch (err) {
-    console.error('[DB] Failed to ensure messages.images column:', err.message || err);
-  }
-}
-
-async function ensureChatTables() {
-  try {
-    // Create chats table
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS chats (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        created_by INT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
-      )
-    `    );
-
-    // Create chat_members table
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS chat_members (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        chat_id INT NOT NULL,
-        user_id INT NOT NULL,
-        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-        UNIQUE KEY unique_chat_member (chat_id, user_id)
-      )
-    `    );
-
-    // Create messages table
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS messages (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        chat_id INT NOT NULL,
-        user_id INT NOT NULL,
-        content TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-        INDEX idx_chat_created (chat_id, created_at)
-      )
-    `    );
-  } catch (err) {
-    console.error('[DB] Failed to ensure chat tables:', err.message || err);
-  }
-}
-
-async function ensureSubmissionStatusColumn() {
-  try {
-    const [cols] = await db.query(
-      "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'task_submissions' AND COLUMN_NAME = 'status'"
-    );
-    if (cols.length === 0) {
-      await db.query("ALTER TABLE task_submissions ADD COLUMN status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending'");
-    }
-  } catch (err) {
-    console.error('[DB] Failed to ensure task_submissions.status column:', err.message || err);
-  }
-}
-
-async function ensureSubmissionViewedColumn() {
-  try {
-    const [cols] = await db.query(
-      "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'task_submissions' AND COLUMN_NAME = 'is_viewed'"
-    );
-    if (cols.length === 0) {
-      await db.query("ALTER TABLE task_submissions ADD COLUMN is_viewed BOOLEAN DEFAULT FALSE");
-    }
-  } catch (err) {
-    console.error('[DB] Failed to ensure task_submissions.is_viewed column:', err.message || err);
-  }
-}
-
-// CORS configuration (using allowedOrigins defined at top)
+// ---------------------------------------------------------------------------
+// Global middleware
+// ---------------------------------------------------------------------------
+app.use(helmet({
+  // The client bundle loads Tailwind/fonts from CDNs; a strict CSP is a follow-up.
+  contentSecurityPolicy: false,
+  // Uploaded images are embedded cross-origin during local dev (5173 → 3001).
+  crossOriginResourcePolicy: { policy: isProduction ? 'same-origin' : 'cross-origin' },
+}));
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, Postman, etc.) in development
-    if (!origin && NODE_ENV !== 'production') {
+    // Same-origin / non-browser requests carry no Origin header.
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       return callback(null, true);
     }
-    
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
+    callback(new Error('Not allowed by CORS'));
   },
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
+// Rate limits: a general per-IP ceiling for the API and a much tighter one for the
+// credential endpoints (password login, 2FA code, registration).
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 600,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please try again later.' },
+});
+
+// All routes live under /api so the built client can be served from the same origin.
+const api = express.Router();
+api.use(apiLimiter);
+app.use('/api', api);
+
+// ---------------------------------------------------------------------------
+// Uploads
+// ---------------------------------------------------------------------------
+const uploadsDir = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Serve static files from uploads directory
-app.use('/uploads', express.static(uploadsDir));
+const INLINE_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.gif']);
+
+// Serve uploads. Only raster images are rendered inline; everything else (HTML, JS, CSS,
+// PDFs, archives, ...) is forced to download so a student submission can never execute
+// as a page on this origin (stored XSS).
+api.use('/uploads', express.static(uploadsDir, {
+  index: false,
+  dotfiles: 'deny',
+  setHeaders: (res, filePath) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (!INLINE_IMAGE_EXT.has(path.extname(filePath).toLowerCase())) {
+      res.setHeader('Content-Disposition', 'attachment');
+      res.setHeader('Content-Type', 'application/octet-stream');
+    }
+  }
+}));
+
+// Keep only a safe basename: strip directories and anything outside [A-Za-z0-9._-].
+function safeFilename(originalName) {
+  const base = path.basename(originalName || 'file');
+  const cleaned = base.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '');
+  return (cleaned || 'file').slice(0, 150);
+}
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -167,35 +158,75 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + '-' + file.originalname);
+    cb(null, uniqueSuffix + '-' + safeFilename(file.originalname));
   }
 });
+
+const ALLOWED_UPLOAD_EXT = new Set([
+  '.jpeg', '.jpg', '.png', '.gif', '.pdf', '.doc', '.docx', '.txt', '.zip', '.rar',
+  '.html', '.htm', '.css', '.js'
+]);
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB limit
+  limits: { fileSize: 100 * 1024 * 1024, files: 10 }, // 100MB limit
   fileFilter: (req, file, cb) => {
-    // Allow documents, images, PDFs, and web files (HTML, CSS, JS)
-    const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx|txt|zip|rar|html|htm|css|js/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-
-    if (mimetype && extname) {
+    // Allow documents, images, PDFs, archives and web files (HTML, CSS, JS) for submissions.
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    if (ALLOWED_UPLOAD_EXT.has(ext)) {
       return cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Allowed: documents, images, PDFs, HTML, CSS, JS.'));
     }
+    cb(new Error('Invalid file type. Allowed: documents, images, PDFs, HTML, CSS, JS.'));
   }
 });
 
-// Configurare Nodemailer (Email)
+// Images only (avatars, rich-text images): these are rendered inline, so no HTML/JS here.
+const uploadImage = multer({
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024, files: 10 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    if (INLINE_IMAGE_EXT.has(ext) && /^image\/(jpeg|png|gif)$/.test(file.mimetype)) {
+      return cb(null, true);
+    }
+    cb(new Error('Invalid image type. Allowed: JPEG, PNG, GIF.'));
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Email (Nodemailer)
+// ---------------------------------------------------------------------------
+const emailEnabled = Boolean(process.env.EMAIL_USER && process.env.EMAIL_PASS);
+if (!emailEnabled) {
+  console.warn('[Email] EMAIL_USER/EMAIL_PASS not set — outgoing emails (login codes, notifications) are disabled and logged instead.');
+}
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
-  }
+  },
+  // Never let a slow SMTP server hang a login request indefinitely.
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 20000,
 });
+
+// Send an email, or log it when SMTP is not configured (dev / CI).
+async function deliverMail(message) {
+  if (!emailEnabled) {
+    console.log(`[Email] (disabled) to=${message.to} subject="${message.subject}"`);
+    return;
+  }
+  await transporter.sendMail(message);
+}
+
+// ---------------------------------------------------------------------------
+// Auth helpers
+// ---------------------------------------------------------------------------
+function verifySessionToken(token) {
+  return jwt.verify(token, jwtSecret); // { id, role }
+}
 
 // Authentication middleware
 const authenticateToken = (req, res, next) => {
@@ -205,18 +236,54 @@ const authenticateToken = (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret_fallback_dev');
-    req.user = decoded; // { id, email }
+    req.user = verifySessionToken(token); // { id, role }
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Invalid token' });
   }
 };
 
+// Admin-only middleware. The role is re-read from the database on every request so a
+// demoted/deleted admin loses access immediately, not when their token expires.
+const requireAdmin = async (req, res, next) => {
+  try {
+    const [rows] = await db.query('SELECT role FROM users WHERE id = ?', [req.user.id]);
+    if (rows.length === 0 || rows[0].role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    req.user.role = 'admin';
+    next();
+  } catch (err) {
+    console.error('[Auth] requireAdmin error:', err);
+    res.status(500).json({ error: 'Server error.' });
+  }
+};
+
+// Read the session from the cookie without rejecting anonymous requests.
+function optionalUserId(req) {
+  const token = req.cookies.token;
+  if (!token) return null;
+  try {
+    return verifySessionToken(token).id;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Escape user-provided text before interpolating it into HTML emails.
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // Helper function to send email
 const sendLoginCode = async (email, code) => {
   try {
-    await transporter.sendMail({
+    await deliverMail({
       from: `"Learning App" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: 'Your Authentication Code',
@@ -241,7 +308,7 @@ const sendLoginCode = async (email, code) => {
 const sendEmail = async (email, subject, htmlContent) => {
 
   try {
-    await transporter.sendMail({
+    await deliverMail({
       from: `"Learning Platform" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: subject,
@@ -256,7 +323,7 @@ const sendEmail = async (email, subject, htmlContent) => {
 const sendNotificationEmail = async (email, subject, message) => {
 
   try {
-    await transporter.sendMail({
+    await deliverMail({
       from: `"Learning Platform" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: subject,
@@ -278,9 +345,21 @@ const sendNotificationEmail = async (email, subject, message) => {
   }
 };
 
-// 1. Endpoint: Login Inițial (Verifică parola -> Trimite cod)
-app.post('/login', async (req, res) => {
-  const { email, password } = req.body;
+// Health check (Docker HEALTHCHECK / Dokploy)
+api.get('/health', async (req, res) => {
+  try {
+    await db.query('SELECT 1');
+    res.json({ status: 'ok' });
+  } catch (err) {
+    res.status(503).json({ status: 'db_unavailable' });
+  }
+});
+
+api.post('/login', authLimiter, async (req, res) => {
+  const { email, password } = req.body || {};
+  if (typeof email !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Email and password are required.' });
+  }
 
   try {
     const [users] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
@@ -302,12 +381,12 @@ app.post('/login', async (req, res) => {
       return res.status(403).json({ error: 'Your account has not been approved by an administrator yet.' });
     }
 
-    // Generează cod 6 cifre
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generează cod 6 cifre (CSPRNG)
+    const code = crypto.randomInt(100000, 1000000).toString();
 
     // Salvează codul în DB (expiră în 10 min)
     await db.query(
-      'UPDATE users SET login_code = ?, login_code_expires = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE id = ?',
+      "UPDATE users SET login_code = ?, login_code_expires = NOW() + INTERVAL '10 minutes', login_code_attempts = 0 WHERE id = ?",
       [code, user.id]
     );
 
@@ -318,13 +397,16 @@ app.post('/login', async (req, res) => {
 
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Server error: ' + err.message });
+    res.status(500).json({ error: 'Server error.' });
   }
 });
 
 // 2. Endpoint: Verificare Cod (Finalizează Login)
-app.post('/verify-code', async (req, res) => {
-  const { userId, code } = req.body;
+api.post('/verify-code', authLimiter, async (req, res) => {
+  const { userId, code } = req.body || {};
+  if (!Number.isInteger(Number(userId)) || typeof code !== 'string') {
+    return res.status(400).json({ error: 'User ID and code are required.' });
+  }
 
   try {
     const [users] = await db.query('SELECT * FROM users WHERE id = ?', [userId]);
@@ -332,24 +414,33 @@ app.post('/verify-code', async (req, res) => {
 
     const user = users[0];
 
-    // Verifică codul
-    if (user.login_code !== code) {
-      return res.status(400).json({ error: 'Incorrect code.' });
-    }
-
-    // Verifică expirarea
+    // Verifică expirarea (și că există un cod activ)
     const now = new Date();
-    if (new Date(user.login_code_expires) < now) {
+    if (!user.login_code || !user.login_code_expires || new Date(user.login_code_expires) < now) {
       return res.status(400).json({ error: 'Code expired. Please try again.' });
     }
 
+    // Verifică codul — max 5 încercări per cod, apoi codul este invalidat (anti brute-force)
+    const expected = Buffer.from(String(user.login_code));
+    const provided = Buffer.from(code);
+    const codeMatches = expected.length === provided.length && crypto.timingSafeEqual(expected, provided);
+    if (!codeMatches) {
+      const attempts = (user.login_code_attempts || 0) + 1;
+      if (attempts >= 5) {
+        await db.query('UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ?', [userId]);
+        return res.status(400).json({ error: 'Too many incorrect attempts. Please log in again.' });
+      }
+      await db.query('UPDATE users SET login_code_attempts = ? WHERE id = ?', [attempts, userId]);
+      return res.status(400).json({ error: 'Incorrect code.' });
+    }
+
     // Login cu succes -> Șterge codul folosit
-    await db.query('UPDATE users SET login_code = NULL, login_code_expires = NULL WHERE id = ?', [userId]);
+    await db.query('UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ?', [userId]);
 
     // Generare Token JWT
     const token = jwt.sign(
       { id: user.id, role: user.role },
-      process.env.JWT_SECRET || 'secret_fallback_dev',
+      jwtSecret,
       { expiresIn: '24h' }
     );
 
@@ -381,12 +472,12 @@ app.post('/verify-code', async (req, res) => {
 });
 
 // 3. Endpoint: Check Session (Verifică dacă userul e logat prin cookie)
-app.get('/me', async (req, res) => {
+api.get('/me', async (req, res) => {
   const token = req.cookies.token;
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret_fallback_dev');
+    const decoded = verifySessionToken(token);
 
     const [users] = await db.query('SELECT id, name, email, role, stars, avatar_url FROM users WHERE id = ?', [decoded.id]);
     if (users.length === 0) return res.status(404).json({ error: 'User not found' });
@@ -398,16 +489,20 @@ app.get('/me', async (req, res) => {
 });
 
 // Update own profile (name + avatar) - must be authenticated
-app.put('/me', async (req, res) => {
+api.put('/me', async (req, res) => {
   const token = req.cookies.token;
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret_fallback_dev');
+    const decoded = verifySessionToken(token);
     const { name, avatar_url } = req.body || {};
 
-    if (typeof name !== 'string' || name.trim().length < 2) {
+    if (typeof name !== 'string' || name.trim().length < 2 || name.trim().length > 255) {
       return res.status(400).json({ error: 'Name must be at least 2 characters.' });
+    }
+    // Avatars are always files uploaded through /upload-image on this server.
+    if (avatar_url && (typeof avatar_url !== 'string' || !/^\/uploads\/[A-Za-z0-9._-]+$/.test(avatar_url))) {
+      return res.status(400).json({ error: 'Invalid avatar URL.' });
     }
 
     await db.query(
@@ -426,7 +521,7 @@ app.put('/me', async (req, res) => {
 });
 
 // 4. Endpoint: Logout (Șterge cookie-ul)
-app.post('/logout', (req, res) => {
+api.post('/logout', (req, res) => {
   res.clearCookie('token');
   res.json({ message: 'Logged out successfully' });
 });
@@ -454,8 +549,8 @@ async function createNotification(userId, type, title, message, link = null, met
         }
       }
 
-      // Emit to user via Socket.IO
-      io.emit('new_notification', { userId, notification });
+      // Emit to that user's sockets only
+      emitToUser(userId, 'new_notification', { userId, notification });
     }
   } catch (error) {
     console.error('[Notification] Error creating notification:', error);
@@ -475,12 +570,24 @@ async function notifyAdmins(type, title, message, link = null, metadata = null) 
 }
 
 // Register Endpoint
-app.post('/register', async (req, res) => {
-  const { name, email, password } = req.body;
+api.post('/register', authLimiter, async (req, res) => {
+  let { name, email, password } = req.body || {};
 
-  if (!name || !email || !password) {
+  if (typeof name !== 'string' || typeof email !== 'string' || typeof password !== 'string') {
     return res.status(400).json({ error: 'All fields are required.' });
   }
+  name = name.trim();
+  email = email.trim().toLowerCase();
+  if (name.length < 2 || name.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 255) {
+    return res.status(400).json({ error: 'A valid name and email are required.' });
+  }
+  if (password.length < 8 || password.length > 128) {
+    return res.status(400).json({ error: 'Password must be between 8 and 128 characters.' });
+  }
+
+  // The configured bootstrap admin is created approved + admin so the first login works
+  // without shell access to the server.
+  const isBootstrapAdmin = BOOTSTRAP_ADMIN_EMAIL && email === BOOTSTRAP_ADMIN_EMAIL;
 
   try {
     const [existingUsers] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
@@ -493,8 +600,13 @@ app.post('/register', async (req, res) => {
 
     const [result] = await db.query(
       'INSERT INTO users (name, email, password, role, stars, is_approved) VALUES (?, ?, ?, ?, ?, ?)',
-      [name, email, hashedPassword, 'student', 0, false]
+      [name, email, hashedPassword, isBootstrapAdmin ? 'admin' : 'student', 0, isBootstrapAdmin]
     );
+
+    if (isBootstrapAdmin) {
+      console.log(`[Auth] Bootstrap admin account created for ${email}`);
+      return res.status(201).json({ message: 'Admin account created successfully! You can log in now.', userId: result.insertId });
+    }
 
     // Notify all admins about new user registration
     await notifyAdmins(
@@ -511,7 +623,7 @@ app.post('/register', async (req, res) => {
       await sendNotificationEmail(
         admin.email,
         'New User Registered',
-        `A new user <strong>${name}</strong> (${email}) is waiting for approval on the Learning Platform.`
+        `A new user <strong>${escapeHtml(name)}</strong> (${escapeHtml(email)}) is waiting for approval on the Learning Platform.`
       );
     }
 
@@ -522,12 +634,12 @@ app.post('/register', async (req, res) => {
 
   } catch (err) {
     console.error('Registration Error:', err);
-    res.status(500).json({ error: 'Server error: ' + err.message });
+    res.status(500).json({ error: 'Server error.' });
   }
 });
 
 // 5. Endpoint: Get All Users (Leaderboard) - Exclude admins and unapproved users
-app.get('/users', async (req, res) => {
+api.get('/users', async (req, res) => {
   try {
     const [users] = await db.query("SELECT id, name, stars, avatar_url FROM users WHERE role != 'admin' AND is_approved = TRUE ORDER BY stars DESC");
     res.json(users);
@@ -538,7 +650,7 @@ app.get('/users', async (req, res) => {
 });
 
 // Approve user (admin only)
-app.post('/users/:id/approve', authenticateToken, async (req, res) => {
+api.post('/users/:id/approve', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -559,7 +671,7 @@ app.post('/users/:id/approve', authenticateToken, async (req, res) => {
 
     // Update all pending notifications for this user to approved
     await db.query(
-      "UPDATE notifications SET status = 'approved', is_read = TRUE WHERE type = 'new_user_pending' AND JSON_EXTRACT(metadata, '$.userId') = ?",
+      "UPDATE notifications SET status = 'approved', is_read = TRUE WHERE type = 'new_user_pending' AND (metadata->>'userId')::int = ?",
       [id]
     );
 
@@ -577,7 +689,7 @@ app.post('/users/:id/approve', authenticateToken, async (req, res) => {
     await sendNotificationEmail(
       targetUser[0].email,
       'Account Approved! 🎉',
-      `Hello <strong>${targetUser[0].name}</strong>!<br><br>Your account on the Learning Platform has been approved by an administrator. You can now log in and start learning!`
+      `Hello <strong>${escapeHtml(targetUser[0].name)}</strong>!<br><br>Your account on the Learning Platform has been approved by an administrator. You can now log in and start learning!`
     );
 
     res.json({ message: 'User approved successfully' });
@@ -588,7 +700,7 @@ app.post('/users/:id/approve', authenticateToken, async (req, res) => {
 });
 
 // Reject user (admin only)
-app.post('/users/:id/reject', authenticateToken, async (req, res) => {
+api.post('/users/:id/reject', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -606,7 +718,7 @@ app.post('/users/:id/reject', authenticateToken, async (req, res) => {
 
     // Update all pending notifications for this user to rejected
     await db.query(
-      "UPDATE notifications SET status = 'rejected', is_read = TRUE WHERE type = 'new_user_pending' AND JSON_EXTRACT(metadata, '$.userId') = ?",
+      "UPDATE notifications SET status = 'rejected', is_read = TRUE WHERE type = 'new_user_pending' AND (metadata->>'userId')::int = ?",
       [id]
     );
 
@@ -624,7 +736,7 @@ app.post('/users/:id/reject', authenticateToken, async (req, res) => {
     await sendNotificationEmail(
       targetUser[0].email,
       'Registration Request Rejected',
-      `Hello <strong>${targetUser[0].name}</strong>.<br><br>Unfortunately, your registration request on the Learning Platform has been rejected by an administrator.`
+      `Hello <strong>${escapeHtml(targetUser[0].name)}</strong>.<br><br>Unfortunately, your registration request on the Learning Platform has been rejected by an administrator.`
     );
 
     // Delete user
@@ -642,7 +754,7 @@ app.post('/users/:id/reject', authenticateToken, async (req, res) => {
 // ================================================
 
 // Get all users (Admin only, including all fields)
-app.get('/admin/users', authenticateToken, async (req, res) => {
+api.get('/admin/users', authenticateToken, async (req, res) => {
   try {
     // Check if user is admin
     const [currentUser] = await db.query('SELECT role FROM users WHERE id = ?', [req.user.id]);
@@ -662,7 +774,7 @@ app.get('/admin/users', authenticateToken, async (req, res) => {
 });
 
 // Update user (Admin only)
-app.put('/admin/users/:id', authenticateToken, upload.single('avatar'), async (req, res) => {
+api.put('/admin/users/:id', authenticateToken, requireAdmin, uploadImage.single('avatar'), async (req, res) => {
   try {
     const { id } = req.params;
     const { name, email, role, is_approved } = req.body;
@@ -694,13 +806,16 @@ app.put('/admin/users/:id', authenticateToken, upload.single('avatar'), async (r
     }
 
     if (role !== undefined) {
+      if (role !== 'admin' && role !== 'student') {
+        return res.status(400).json({ error: 'Invalid role' });
+      }
       updates.push('role = ?');
       values.push(role);
     }
 
     if (is_approved !== undefined) {
       updates.push('is_approved = ?');
-      values.push(is_approved === 'true' || is_approved === true ? 1 : 0);
+      values.push(is_approved === 'true' || is_approved === true);
     }
 
     // Handle avatar upload
@@ -735,7 +850,7 @@ app.put('/admin/users/:id', authenticateToken, upload.single('avatar'), async (r
 });
 
 // Delete user (Admin only)
-app.delete('/admin/users/:id', authenticateToken, async (req, res) => {
+api.delete('/admin/users/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -767,7 +882,7 @@ app.delete('/admin/users/:id', authenticateToken, async (req, res) => {
 });
 
 // Add stars to user (Admin only)
-app.post('/admin/users/:id/add-stars', authenticateToken, async (req, res) => {
+api.post('/admin/users/:id/add-stars', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { stars } = req.body;
@@ -804,7 +919,7 @@ app.post('/admin/users/:id/add-stars', authenticateToken, async (req, res) => {
       `⭐ +${starsToAdd} Stars Received!`,
       `You've received ${starsToAdd} star${starsToAdd > 1 ? 's' : ''} from the administrator! Keep up the great work!`,
       null,
-      JSON.stringify({ starsAdded: starsToAdd, newTotal: updatedUser[0].stars })
+      { starsAdded: starsToAdd, newTotal: updatedUser[0].stars }
     );
 
     // Emit Socket.IO events to update UI
@@ -823,7 +938,7 @@ app.post('/admin/users/:id/add-stars', authenticateToken, async (req, res) => {
 });
 
 // Get notifications for current user
-app.get('/notifications', authenticateToken, async (req, res) => {
+api.get('/notifications', authenticateToken, async (req, res) => {
   try {
     const [notifications] = await db.query(
       'SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50',
@@ -855,7 +970,7 @@ app.get('/notifications', authenticateToken, async (req, res) => {
 });
 
 // Mark notification as read
-app.put('/notifications/:id/read', authenticateToken, async (req, res) => {
+api.put('/notifications/:id/read', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -872,7 +987,7 @@ app.put('/notifications/:id/read', authenticateToken, async (req, res) => {
 });
 
 // Mark all notifications as read
-app.put('/notifications/mark-all-read', authenticateToken, async (req, res) => {
+api.put('/notifications/mark-all-read', authenticateToken, async (req, res) => {
   try {
     await db.query(
       'UPDATE notifications SET is_read = TRUE WHERE user_id = ?',
@@ -887,7 +1002,7 @@ app.put('/notifications/mark-all-read', authenticateToken, async (req, res) => {
 });
 
 // Delete notification
-app.delete('/notifications/:id', authenticateToken, async (req, res) => {
+api.delete('/notifications/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -904,7 +1019,7 @@ app.delete('/notifications/:id', authenticateToken, async (req, res) => {
 });
 
 // Delete all notifications
-app.delete('/notifications', authenticateToken, async (req, res) => {
+api.delete('/notifications', authenticateToken, async (req, res) => {
   try {
     await db.query(
       'DELETE FROM notifications WHERE user_id = ?',
@@ -919,7 +1034,7 @@ app.delete('/notifications', authenticateToken, async (req, res) => {
 });
 
 // Mark task as viewed by student (remove NEW badge)
-app.post('/tasks/:taskId/mark-viewed', authenticateToken, async (req, res) => {
+api.post('/tasks/:taskId/mark-viewed', authenticateToken, async (req, res) => {
   const { taskId } = req.params;
   const userId = req.user.id;
 
@@ -928,7 +1043,7 @@ app.post('/tasks/:taskId/mark-viewed', authenticateToken, async (req, res) => {
     await db.query(`
       INSERT INTO user_task_views (user_id, task_id, viewed_at)
       VALUES (?, ?, NOW())
-      ON DUPLICATE KEY UPDATE viewed_at = NOW()
+      ON CONFLICT (user_id, task_id) DO UPDATE SET viewed_at = NOW()
     `, [userId, taskId]);
 
     // Emit Socket.IO event for live badge update
@@ -944,17 +1059,9 @@ app.post('/tasks/:taskId/mark-viewed', authenticateToken, async (req, res) => {
 // --- PATHS API ---
 
 // Get all paths with unlock status for current user
-app.get('/paths', async (req, res) => {
-  const token = req.cookies.token;
-  let userId = null;
+api.get('/paths', async (req, res) => {
+  const userId = optionalUserId(req);
   let userRole = 'student';
-
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret_fallback_dev');
-      userId = decoded.id;
-    } catch (e) { }
-  }
 
   try {
     const [paths] = await db.query('SELECT * FROM paths ORDER BY stars_required ASC, id ASC');
@@ -1004,7 +1111,7 @@ app.get('/paths', async (req, res) => {
 });
 
 // Create new path (admin only)
-app.post('/paths', authenticateToken, async (req, res) => {
+api.post('/paths', authenticateToken, async (req, res) => {
   try {
     const { name, description, stars_required } = req.body;
 
@@ -1032,7 +1139,7 @@ app.post('/paths', authenticateToken, async (req, res) => {
 });
 
 // Update path (admin only)
-app.put('/paths/:id', authenticateToken, async (req, res) => {
+api.put('/paths/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, description, stars_required } = req.body;
@@ -1056,7 +1163,7 @@ app.put('/paths/:id', authenticateToken, async (req, res) => {
 });
 
 // Delete path (admin only)
-app.delete('/paths/:id', authenticateToken, async (req, res) => {
+api.delete('/paths/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -1075,7 +1182,7 @@ app.delete('/paths/:id', authenticateToken, async (req, res) => {
 });
 
 // Unlock path for current user
-app.post('/paths/:id/unlock', authenticateToken, async (req, res) => {
+api.post('/paths/:id/unlock', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
@@ -1118,17 +1225,9 @@ app.post('/paths/:id/unlock', authenticateToken, async (req, res) => {
 // --- PATH & LESSONS API ---
 
 // Get Lessons for a Path (including tasks and status for current user)
-app.get('/paths/:pathId/details', async (req, res) => {
+api.get('/paths/:pathId/details', async (req, res) => {
   const { pathId } = req.params;
-  const token = req.cookies.token;
-  let userId = null;
-
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret_fallback_dev');
-      userId = decoded.id;
-    } catch (e) { }
-  }
+  const userId = optionalUserId(req);
 
   try {
     // 1. Get Lessons
@@ -1158,7 +1257,7 @@ app.get('/paths/:pathId/details', async (req, res) => {
             const t = tasks.find(task => task.id === c.task_id);
             if (t) t.unviewed_count = c.count;
           });
-        } else if (userRows[0].role === 'student') {
+        } else if (userRows.length > 0 && userRows[0].role === 'student') {
           // For students, check which tasks are NEW (not viewed yet)
           const [taskViews] = await db.query(`
             SELECT task_id, viewed_at
@@ -1214,7 +1313,7 @@ app.get('/paths/:pathId/details', async (req, res) => {
 });
 
 // Create New Lesson (Admin only)
-app.post('/lessons', async (req, res) => {
+api.post('/lessons', authenticateToken, requireAdmin, async (req, res) => {
   const { pathId, title, description, x, y, order, parentId } = req.body;
 
   try {
@@ -1234,7 +1333,7 @@ app.post('/lessons', async (req, res) => {
 });
 
 // Update Lesson (Admin only)
-app.put('/lessons/:id', async (req, res) => {
+api.put('/lessons/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
   const { title, description } = req.body;
 
@@ -1251,7 +1350,7 @@ app.put('/lessons/:id', async (req, res) => {
 });
 
 // Delete Lesson (Admin only)
-app.delete('/lessons/:id', async (req, res) => {
+api.delete('/lessons/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -1275,26 +1374,24 @@ app.delete('/lessons/:id', async (req, res) => {
 });
 
 // Create New Task (Admin only)
-app.post('/tasks', async (req, res) => {
+api.post('/tasks', authenticateToken, requireAdmin, async (req, res) => {
   const { lessonId, title, type, xp, deadline, x, y, order, description } = req.body;
 
   try {
-    // Convert deadline to MySQL format or set to null if not provided
-    let mysqlDeadline = null;
+    // Normalise the deadline to an ISO timestamp (or null if not provided)
+    let deadlineTs = null;
     if (deadline) {
-      // If deadline is just a date (YYYY-MM-DD), add default time
-      if (deadline.length === 10) {
-        mysqlDeadline = deadline + ' 23:59:59';
-      } else {
-        // If it's a full datetime, convert from ISO to MySQL format
-        const date = new Date(deadline);
-        mysqlDeadline = date.toISOString().slice(0, 19).replace('T', ' ');
+      // If deadline is just a date (YYYY-MM-DD), use the end of that day
+      const date = deadline.length === 10 ? new Date(deadline + 'T23:59:59') : new Date(deadline);
+      if (Number.isNaN(date.getTime())) {
+        return res.status(400).json({ error: 'Invalid deadline' });
       }
+      deadlineTs = date.toISOString();
     }
 
     const [result] = await db.query(
       'INSERT INTO tasks (lesson_id, title, type, xp_reward, deadline, position_x, position_y, order_index, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [lessonId, title, type, xp, mysqlDeadline, x || 0, y || 0, order || 1, description || '']
+      [lessonId, title, type, xp, deadlineTs, x || 0, y || 0, order || 1, description || '']
     );
 
     // Get lesson and path info for notification
@@ -1325,19 +1422,19 @@ app.post('/tasks', async (req, res) => {
           'New Task Available! 📝',
           `Task: "${title}" (${taskType})\nPath: ${lesson.path_name}\nLesson: ${lesson.lesson_title}`,
           null,
-          { taskId: result.insertId, lessonId, pathId: lesson.path_id, type, deadline: mysqlDeadline }
+          { taskId: result.insertId, lessonId, pathId: lesson.path_id, type, deadline: deadlineTs }
         );
 
         // Send email notification
         await sendNotificationEmail(
           student.email,
           'New Task Available! 📝',
-          `Hello <strong>${student.name}</strong>!<br><br>
+          `Hello <strong>${escapeHtml(student.name)}</strong>!<br><br>
           A new task has been added to your learning path:<br><br>
-          <strong>Task:</strong> ${title}<br>
+          <strong>Task:</strong> ${escapeHtml(title)}<br>
           <strong>Type:</strong> <span style="color: ${type === 'mandatory' ? '#dc2626' : '#16a34a'};">${taskType}</span><br>
-          <strong>Path:</strong> ${lesson.path_name}<br>
-          <strong>Lesson:</strong> ${lesson.lesson_title}<br>
+          <strong>Path:</strong> ${escapeHtml(lesson.path_name)}<br>
+          <strong>Lesson:</strong> ${escapeHtml(lesson.lesson_title)}<br>
           ${deadline ? `<strong>Deadline:</strong> ${new Date(deadline).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}<br>` : ''}
           <br>
           Log in to the platform to view the task details and start working on it!`
@@ -1370,22 +1467,25 @@ app.post('/tasks', async (req, res) => {
 });
 
 // Update Task (Admin only)
-app.put('/tasks/:id', async (req, res) => {
+api.put('/tasks/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
   const { title, type, xp, deadline, description } = req.body;
 
 
   try {
-    // Convert ISO datetime to MySQL format
-    let mysqlDeadline = null;
+    // Normalise the deadline to an ISO timestamp (or null)
+    let deadlineTs = null;
     if (deadline) {
       const date = new Date(deadline);
-      mysqlDeadline = date.toISOString().slice(0, 19).replace('T', ' ');
+      if (Number.isNaN(date.getTime())) {
+        return res.status(400).json({ error: 'Invalid deadline' });
+      }
+      deadlineTs = date.toISOString();
     }
 
     const result = await db.query(
       'UPDATE tasks SET title = ?, type = ?, xp_reward = ?, deadline = ?, description = ? WHERE id = ?',
-      [title, type, xp || 0, mysqlDeadline, description || '', id]
+      [title, type, xp || 0, deadlineTs, description || '', id]
     );
 
     // Emit Socket.IO event for live task update
@@ -1400,12 +1500,12 @@ app.put('/tasks/:id', async (req, res) => {
     res.json({ message: 'Task updated' });
   } catch (err) {
     console.error('Error updating task:', err);
-    res.status(500).json({ error: 'Failed to update task', details: err.message });
+    res.status(500).json({ error: 'Failed to update task' });
   }
 });
 
 // Delete Task (Admin only)
-app.delete('/tasks/:id', async (req, res) => {
+api.delete('/tasks/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -1422,7 +1522,7 @@ app.delete('/tasks/:id', async (req, res) => {
 });
 
 // Get Task Details
-app.get('/tasks/:id', async (req, res) => {
+api.get('/tasks/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -1441,9 +1541,9 @@ app.get('/tasks/:id', async (req, res) => {
 });
 
 // Upload Task Submission
-app.post('/tasks/:id/submit', upload.single('file'), async (req, res) => {
+api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (req, res) => {
   const { id } = req.params;
-  const userId = req.body.userId; // Should come from authenticated session in production
+  const userId = req.user.id; // always the authenticated user — never trust the body
 
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
@@ -1507,12 +1607,12 @@ app.post('/tasks/:id/submit', upload.single('file'), async (req, res) => {
             <h2 style="color: #333;">New Task Submission! 📤</h2>
             <p>Hello,</p>
             <p>A student has submitted a task:</p>
-            <p><strong>Student:</strong> ${users[0].name}</p>
-            <p><strong>Task:</strong> ${task.title}</p>
+            <p><strong>Student:</strong> ${escapeHtml(users[0].name)}</p>
+            <p><strong>Task:</strong> ${escapeHtml(task.title)}</p>
             <p><strong>Type:</strong> ${task.type.charAt(0).toUpperCase() + task.type.slice(1)}</p>
-            <p><strong>Lesson:</strong> ${lessonTitle}</p>
-            <p><strong>Path:</strong> ${pathName}</p>
-            <p><strong>File:</strong> ${req.file.originalname}</p>
+            <p><strong>Lesson:</strong> ${escapeHtml(lessonTitle)}</p>
+            <p><strong>Path:</strong> ${escapeHtml(pathName)}</p>
+            <p><strong>File:</strong> ${escapeHtml(req.file.originalname)}</p>
             <p style="color: #999; font-size: 12px; margin-top: 20px;">Please review the submission in the platform.</p>
           </div>
         `;
@@ -1532,22 +1632,26 @@ app.post('/tasks/:id/submit', upload.single('file'), async (req, res) => {
 });
 
 // Get Task Submissions (Admin)
-app.get('/tasks/:id/submissions', authenticateToken, async (req, res) => {
+api.get('/tasks/:id/submissions', authenticateToken, async (req, res) => {
   const { id } = req.params;
 
   try {
+    const [roleRows] = await db.query('SELECT role FROM users WHERE id = ?', [req.user.id]);
+    const isAdmin = roleRows.length > 0 && roleRows[0].role === 'admin';
+
     // If admin, mark as viewed
-    if (req.user && req.user.role === 'admin') {
+    if (isAdmin) {
       await db.query('UPDATE task_submissions SET is_viewed = TRUE WHERE task_id = ?', [id]);
     }
 
+    // Admins see every submission; students only their own.
     const [rows] = await db.query(
       `SELECT s.*, u.name as user_name, u.email as user_email 
        FROM task_submissions s
        JOIN users u ON s.user_id = u.id
-       WHERE s.task_id = ?
+       WHERE s.task_id = ? ${isAdmin ? '' : 'AND s.user_id = ?'}
        ORDER BY s.submitted_at DESC`,
-      [id]
+      isAdmin ? [id] : [id, req.user.id]
     );
     res.json(rows);
   } catch (err) {
@@ -1557,12 +1661,12 @@ app.get('/tasks/:id/submissions', authenticateToken, async (req, res) => {
 });
 
 // Download Submission File by ID (with student name in filename)
-app.get('/submissions/download/:id', async (req, res) => {
+api.get('/submissions/download/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
 
   try {
     const [rows] = await db.query(
-      `SELECT s.file_name, s.file_path, u.name as user_name 
+      `SELECT s.file_name, s.file_path, s.user_id, u.name as user_name 
        FROM task_submissions s 
        JOIN users u ON s.user_id = u.id 
        WHERE s.id = ?`,
@@ -1574,7 +1678,16 @@ app.get('/submissions/download/:id', async (req, res) => {
     }
 
     const submission = rows[0];
-    const filePath = path.join(uploadsDir, submission.file_path);
+
+    // Only the submitting student or an admin may download the file.
+    if (submission.user_id !== req.user.id) {
+      const [roleRows] = await db.query('SELECT role FROM users WHERE id = ?', [req.user.id]);
+      if (roleRows.length === 0 || roleRows[0].role !== 'admin') {
+        return res.status(403).json({ error: 'Not authorized to download this submission' });
+      }
+    }
+
+    const filePath = path.join(uploadsDir, path.basename(submission.file_path));
 
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: 'File not found on disk' });
@@ -1590,20 +1703,8 @@ app.get('/submissions/download/:id', async (req, res) => {
   }
 });
 
-// Download Submission File by filename (legacy/fallback)
-app.get('/submissions/:filename', (req, res) => {
-  const { filename } = req.params;
-  const filePath = path.join(uploadsDir, filename);
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'File not found' });
-  }
-
-  res.download(filePath);
-});
-
 // Delete Submission
-app.delete('/submissions/:id', authenticateToken, async (req, res) => {
+api.delete('/submissions/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -1640,7 +1741,7 @@ app.delete('/submissions/:id', authenticateToken, async (req, res) => {
 
     // Delete file from filesystem
     if (submission.file_path) {
-      const filePath = path.join(uploadsDir, submission.file_path);
+      const filePath = path.join(uploadsDir, path.basename(submission.file_path));
       if (fs.existsSync(filePath)) {
         try {
           fs.unlinkSync(filePath);
@@ -1662,7 +1763,7 @@ app.delete('/submissions/:id', authenticateToken, async (req, res) => {
 });
 
 // Approve Submission
-app.post('/submissions/:id/approve', authenticateToken, async (req, res) => {
+api.post('/submissions/:id/approve', authenticateToken, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -1715,8 +1816,8 @@ app.post('/submissions/:id/approve', authenticateToken, async (req, res) => {
       await sendNotificationEmail(
         student[0].email,
         'Submission Approved! ✅',
-        `Hello <strong>${student[0].name}</strong>!<br><br>
-            Great news! Your submission for task <strong>"${taskTitle}"</strong> has been approved by an administrator.<br>
+        `Hello <strong>${escapeHtml(student[0].name)}</strong>!<br><br>
+            Great news! Your submission for task <strong>"${escapeHtml(taskTitle)}"</strong> has been approved by an administrator.<br>
             You can now proceed to the next task in your learning path.`
       );
     }
@@ -1739,7 +1840,7 @@ app.post('/submissions/:id/approve', authenticateToken, async (req, res) => {
 });
 
 // Approve All Submissions for a user and task
-app.post('/tasks/:taskId/approve-all', authenticateToken, async (req, res) => {
+api.post('/tasks/:taskId/approve-all', authenticateToken, async (req, res) => {
   const { taskId } = req.params;
   const { studentId } = req.body;
 
@@ -1801,8 +1902,8 @@ app.post('/tasks/:taskId/approve-all', authenticateToken, async (req, res) => {
       await sendNotificationEmail(
         student[0].email,
         'Task Approved! ✅',
-        `Hello <strong>${student[0].name}</strong>!<br><br>
-            Great news! Your submissions for task <strong>"${taskTitle}"</strong> have been approved by an administrator.<br>
+        `Hello <strong>${escapeHtml(student[0].name)}</strong>!<br><br>
+            Great news! Your submissions for task <strong>"${escapeHtml(taskTitle)}"</strong> have been approved by an administrator.<br>
             You can now proceed to the next task in your learning path.`
       );
     }
@@ -1822,7 +1923,7 @@ app.post('/tasks/:taskId/approve-all', authenticateToken, async (req, res) => {
 });
 
 // Reject all submissions for a task (Admin only)
-app.post('/tasks/:taskId/reject-all', authenticateToken, async (req, res) => {
+api.post('/tasks/:taskId/reject-all', authenticateToken, async (req, res) => {
   const { taskId } = req.params;
   const { studentId, comment } = req.body;
 
@@ -1864,11 +1965,11 @@ app.post('/tasks/:taskId/reject-all', authenticateToken, async (req, res) => {
       await sendNotificationEmail(
         student[0].email,
         'Task Rejected ❌',
-        `Hello <strong>${student[0].name}</strong>!<br><br>
-            Your submissions for task <strong>"${taskTitle}"</strong> have been reviewed and rejected by an administrator.<br><br>
+        `Hello <strong>${escapeHtml(student[0].name)}</strong>!<br><br>
+            Your submissions for task <strong>"${escapeHtml(taskTitle)}"</strong> have been reviewed and rejected by an administrator.<br><br>
             <strong>Reason:</strong><br>
             <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin-top: 10px; border-left: 4px solid #ef4444;">
-              ${comment.trim().replace(/\n/g, '<br>')}
+              ${escapeHtml(comment.trim()).replace(/\n/g, '<br>')}
             </div><br>
             Please review the feedback and resubmit your work when ready.`
       );
@@ -1888,7 +1989,7 @@ app.post('/tasks/:taskId/reject-all', authenticateToken, async (req, res) => {
 });
 
 // Upload Image for Task Description
-app.post('/upload-image', upload.single('image'), (req, res) => {
+api.post('/upload-image', authenticateToken, uploadImage.single('image'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No image uploaded' });
   }
@@ -1901,7 +2002,7 @@ app.post('/upload-image', upload.single('image'), (req, res) => {
 // ==================== CHAT ENDPOINTS ====================
 
 // Get all chats for current user
-app.get('/chats', authenticateToken, async (req, res) => {
+api.get('/chats', authenticateToken, async (req, res) => {
   try {
     const [chats] = await db.query(`
       SELECT DISTINCT c.id, c.name, c.created_by, c.created_at, c.updated_at,
@@ -1911,7 +2012,7 @@ app.get('/chats', authenticateToken, async (req, res) => {
       FROM chats c
       INNER JOIN chat_members cm ON c.id = cm.chat_id
       WHERE cm.user_id = ?
-      ORDER BY last_message_at DESC, c.updated_at DESC
+      ORDER BY last_message_at DESC NULLS LAST, c.updated_at DESC
     `, [req.user.id]);
 
     res.json(chats);
@@ -1922,7 +2023,7 @@ app.get('/chats', authenticateToken, async (req, res) => {
 });
 
 // Create new chat
-app.post('/chats', authenticateToken, async (req, res) => {
+api.post('/chats', authenticateToken, async (req, res) => {
   try {
     const { name, memberIds } = req.body;
 
@@ -1945,14 +2046,15 @@ app.post('/chats', authenticateToken, async (req, res) => {
     );
 
     // Add other members if provided
-    if (memberIds && Array.isArray(memberIds) && memberIds.length > 0) {
-      const values = memberIds.filter(id => id !== req.user.id).map(id => [chatId, id]);
-      if (values.length > 0) {
-        await db.query(
-          'INSERT INTO chat_members (chat_id, user_id) VALUES ?',
-          [values]
-        );
-      }
+    const extraMembers = Array.isArray(memberIds)
+      ? [...new Set(memberIds.map(Number).filter(id => Number.isInteger(id) && id > 0 && id !== req.user.id))]
+      : [];
+    if (extraMembers.length > 0) {
+      // Only existing users can be members (unknown ids are silently ignored)
+      await db.query(
+        'INSERT INTO chat_members (chat_id, user_id) SELECT ?, id FROM users WHERE id = ANY(?) ON CONFLICT DO NOTHING',
+        [chatId, extraMembers]
+      );
     }
 
     // Get created chat with details
@@ -1961,8 +2063,11 @@ app.post('/chats', authenticateToken, async (req, res) => {
       [chatId]
     );
 
-    // Notify all members via Socket.IO
-    io.emit('chat_created', { chatId: parseInt(chatId), chat: chats[0] });
+    // Subscribe every member's sockets to the chat room, then notify them
+    for (const memberId of [req.user.id, ...extraMembers]) {
+      joinChatRoom(memberId, chatId);
+    }
+    emitToChat(chatId, 'chat_created', { chatId: parseInt(chatId), chat: chats[0] });
 
     res.status(201).json(chats[0]);
   } catch (error) {
@@ -1972,7 +2077,7 @@ app.post('/chats', authenticateToken, async (req, res) => {
 });
 
 // Update chat (rename)
-app.put('/chats/:id', authenticateToken, async (req, res) => {
+api.put('/chats/:id', authenticateToken, async (req, res) => {
   try {
     const chatId = req.params.id;
     const { name } = req.body;
@@ -2000,7 +2105,7 @@ app.put('/chats/:id', authenticateToken, async (req, res) => {
     const [chats] = await db.query('SELECT * FROM chats WHERE id = ?', [chatId]);
 
     // Notify all members via Socket.IO
-    io.emit('chat_updated', { chatId: parseInt(chatId), chat: chats[0] });
+    emitToChat(chatId, 'chat_updated', { chatId: parseInt(chatId), chat: chats[0] });
 
     res.json(chats[0]);
   } catch (error) {
@@ -2010,7 +2115,7 @@ app.put('/chats/:id', authenticateToken, async (req, res) => {
 });
 
 // Delete chat
-app.delete('/chats/:id', authenticateToken, async (req, res) => {
+api.delete('/chats/:id', authenticateToken, async (req, res) => {
   try {
     const chatId = req.params.id;
 
@@ -2026,8 +2131,9 @@ app.delete('/chats/:id', authenticateToken, async (req, res) => {
 
     await db.query('DELETE FROM chats WHERE id = ?', [chatId]);
 
-    // Notify all members via Socket.IO
-    io.emit('chat_deleted', { chatId: parseInt(chatId) });
+    // Notify all members via Socket.IO, then dissolve the room
+    emitToChat(chatId, 'chat_deleted', { chatId: parseInt(chatId) });
+    io.in(chatRoom(chatId)).socketsLeave(chatRoom(chatId));
 
     res.json({ message: 'Chat deleted successfully' });
   } catch (error) {
@@ -2037,7 +2143,7 @@ app.delete('/chats/:id', authenticateToken, async (req, res) => {
 });
 
 // Get chat members
-app.get('/chats/:id/members', authenticateToken, async (req, res) => {
+api.get('/chats/:id/members', authenticateToken, async (req, res) => {
   try {
     const chatId = req.params.id;
 
@@ -2067,7 +2173,7 @@ app.get('/chats/:id/members', authenticateToken, async (req, res) => {
 });
 
 // Add member to chat
-app.post('/chats/:id/members', authenticateToken, async (req, res) => {
+api.post('/chats/:id/members', authenticateToken, async (req, res) => {
   try {
     const chatId = req.params.id;
     const { userId } = req.body;
@@ -2086,20 +2192,24 @@ app.post('/chats/:id/members', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Not a member of this chat' });
     }
 
-    // Add new member
-    await db.query(
-      'INSERT IGNORE INTO chat_members (chat_id, user_id) VALUES (?, ?)',
-      [chatId, userId]
-    );
-
     // Get added user details
     const [users] = await db.query(
       'SELECT id, name, email, role, avatar_url FROM users WHERE id = ?',
       [userId]
     );
+    if (users.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-    // Notify all members via Socket.IO
-    io.emit('member_added', { chatId: parseInt(chatId), user: users[0] });
+    // Add new member
+    await db.query(
+      'INSERT INTO chat_members (chat_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING',
+      [chatId, userId]
+    );
+
+    // Subscribe the new member's sockets and notify all members via Socket.IO
+    joinChatRoom(users[0].id, chatId);
+    emitToChat(chatId, 'member_added', { chatId: parseInt(chatId), user: users[0] });
 
     res.json({ message: 'Member added successfully', user: users[0] });
   } catch (error) {
@@ -2109,7 +2219,7 @@ app.post('/chats/:id/members', authenticateToken, async (req, res) => {
 });
 
 // Remove member from chat
-app.delete('/chats/:id/members/:userId', authenticateToken, async (req, res) => {
+api.delete('/chats/:id/members/:userId', authenticateToken, async (req, res) => {
   try {
     const chatId = req.params.id;
     const userIdToRemove = req.params.userId;
@@ -2130,8 +2240,9 @@ app.delete('/chats/:id/members/:userId', authenticateToken, async (req, res) => 
       [chatId, userIdToRemove]
     );
 
-    // Notify all members via Socket.IO
-    io.emit('member_removed', { chatId: parseInt(chatId), userId: userIdToRemove });
+    // Notify all members via Socket.IO, then unsubscribe the removed member
+    emitToChat(chatId, 'member_removed', { chatId: parseInt(chatId), userId: userIdToRemove });
+    leaveChatRoom(userIdToRemove, chatId);
 
     res.json({ message: 'Member removed successfully' });
   } catch (error) {
@@ -2141,11 +2252,11 @@ app.delete('/chats/:id/members/:userId', authenticateToken, async (req, res) => 
 });
 
 // Get messages from chat
-app.get('/chats/:id/messages', authenticateToken, async (req, res) => {
+api.get('/chats/:id/messages', authenticateToken, async (req, res) => {
   try {
     const chatId = req.params.id;
-    const limit = parseInt(req.query.limit) || 50;
-    const offset = parseInt(req.query.offset) || 0;
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
     // Check if user is member of chat
     const [isMember] = await db.query(
@@ -2174,7 +2285,7 @@ app.get('/chats/:id/messages', authenticateToken, async (req, res) => {
 });
 
 // Send message
-app.post('/chats/:id/messages', authenticateToken, upload.array('images', 10), async (req, res) => {
+api.post('/chats/:id/messages', authenticateToken, uploadImage.array('images', 10), async (req, res) => {
   try {
     const chatId = req.params.id;
     const { content } = req.body;
@@ -2212,9 +2323,8 @@ app.post('/chats/:id/messages', authenticateToken, upload.array('images', 10), a
       WHERE m.id = ?
     `, [result.insertId]);
 
-    // Emit to all clients via Socket.IO
-    console.log('[Socket.IO] Emitting new_message:', { chatId: parseInt(chatId), messageId: messages[0].id });
-    io.emit('new_message', { chatId: parseInt(chatId), message: messages[0] });
+    // Emit to the chat's members via Socket.IO
+    emitToChat(chatId, 'new_message', { chatId: parseInt(chatId), message: messages[0] });
 
     res.status(201).json(messages[0]);
   } catch (error) {
@@ -2224,7 +2334,7 @@ app.post('/chats/:id/messages', authenticateToken, upload.array('images', 10), a
 });
 
 // Edit message
-app.put('/chats/:chatId/messages/:messageId', authenticateToken, async (req, res) => {
+api.put('/chats/:chatId/messages/:messageId', authenticateToken, async (req, res) => {
   try {
     const { chatId, messageId } = req.params;
     const { content } = req.body;
@@ -2257,8 +2367,8 @@ app.put('/chats/:chatId/messages/:messageId', authenticateToken, async (req, res
       WHERE m.id = ?
     `, [messageId]);
 
-    // Emit to all clients via Socket.IO
-    io.emit('message_edited', { chatId: parseInt(chatId), message: updatedMessages[0] });
+    // Emit to the chat's members via Socket.IO
+    emitToChat(chatId, 'message_edited', { chatId: parseInt(chatId), message: updatedMessages[0] });
 
     res.json(updatedMessages[0]);
   } catch (error) {
@@ -2268,7 +2378,7 @@ app.put('/chats/:chatId/messages/:messageId', authenticateToken, async (req, res
 });
 
 // Delete message
-app.delete('/chats/:chatId/messages/:messageId', authenticateToken, async (req, res) => {
+api.delete('/chats/:chatId/messages/:messageId', authenticateToken, async (req, res) => {
   try {
     const { chatId, messageId } = req.params;
 
@@ -2285,8 +2395,8 @@ app.delete('/chats/:chatId/messages/:messageId', authenticateToken, async (req, 
     // Delete message
     await db.query('DELETE FROM messages WHERE id = ?', [messageId]);
 
-    // Emit to all clients via Socket.IO
-    io.emit('message_deleted', { chatId: parseInt(chatId), messageId: parseInt(messageId) });
+    // Emit to the chat's members via Socket.IO
+    emitToChat(chatId, 'message_deleted', { chatId: parseInt(chatId), messageId: parseInt(messageId) });
 
     res.json({ success: true });
   } catch (error) {
@@ -2297,8 +2407,31 @@ app.delete('/chats/:chatId/messages/:messageId', authenticateToken, async (req, 
 
 // ==================== END CHAT ENDPOINTS ====================
 
+// Socket.IO - authenticate the handshake with the same session cookie as the REST API.
+io.use((socket, next) => {
+  try {
+    const cookies = cookie.parse(socket.handshake.headers.cookie || '');
+    if (!cookies.token) return next(new Error('unauthorized'));
+    const decoded = verifySessionToken(cookies.token);
+    socket.data.userId = decoded.id;
+    next();
+  } catch (e) {
+    next(new Error('unauthorized'));
+  }
+});
+
 // Socket.IO - Real-time Online Presence
-io.on('connection', (socket) => {
+io.on('connection', async (socket) => {
+  const authedUserId = socket.data.userId;
+
+  // Private room for this user + one room per chat they belong to
+  socket.join(userRoom(authedUserId));
+  try {
+    const [memberships] = await db.query('SELECT chat_id FROM chat_members WHERE user_id = ?', [authedUserId]);
+    memberships.forEach(m => socket.join(chatRoom(m.chat_id)));
+  } catch (error) {
+    console.error('[Socket.IO] Failed to join chat rooms:', error);
+  }
 
   // Handle request for current online users
   socket.on('request_online_users', () => {
@@ -2310,8 +2443,9 @@ io.on('connection', (socket) => {
     socket.emit('online_users_update', onlineUsersList);
   });
 
-  // Handle user going online
-  socket.on('user_online', async (userId) => {
+  // Handle user going online (identity comes from the authenticated socket, not the payload)
+  socket.on('user_online', async () => {
+    const userId = authedUserId;
     try {
       // Get user info from database
       const [users] = await db.query('SELECT id, name, avatar_url FROM users WHERE id = ?', [userId]);
@@ -2337,15 +2471,17 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle typing indicator
+  // Handle typing indicator — only to members of that chat
   socket.on('user_typing', (data) => {
-    const { chatId, userId, userName } = data;
-    socket.broadcast.emit('user_typing', { chatId, userId, userName });
+    const { chatId, userName } = data || {};
+    if (!chatId) return;
+    socket.to(chatRoom(chatId)).emit('user_typing', { chatId, userId: authedUserId, userName });
   });
 
   socket.on('user_stopped_typing', (data) => {
-    const { chatId, userId } = data;
-    socket.broadcast.emit('user_stopped_typing', { chatId, userId });
+    const { chatId } = data || {};
+    if (!chatId) return;
+    socket.to(chatRoom(chatId)).emit('user_stopped_typing', { chatId, userId: authedUserId });
   });
 
   // Handle user going offline (disconnect)
@@ -2369,7 +2505,7 @@ io.on('connection', (socket) => {
 });
 
 // API endpoint to get current online users
-app.get('/online-users', (req, res) => {
+api.get('/online-users', authenticateToken, (req, res) => {
   const onlineUsersList = Array.from(onlineUsers.values()).map(u => ({
     id: u.id,
     name: u.name,
@@ -2378,14 +2514,65 @@ app.get('/online-users', (req, res) => {
   res.json(onlineUsersList);
 });
 
+// ---------------------------------------------------------------------------
+// Error handling for the API (multer / CORS / JSON parse errors → JSON, no stack traces)
+// ---------------------------------------------------------------------------
+api.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'File too large' : err.message });
+  }
+  if (err && /Invalid (file|image) type/.test(err.message || '')) {
+    return res.status(400).json({ error: err.message });
+  }
+  if (err && err.message === 'Not allowed by CORS') {
+    return res.status(403).json({ error: 'Not allowed by CORS' });
+  }
+  if (err && err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Invalid JSON body' });
+  }
+  console.error('[API] Unhandled error:', err);
+  res.status(err.status || 500).json({ error: 'Server error.' });
+});
+
+api.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+// ---------------------------------------------------------------------------
+// Static client (production): the Vite build is copied to server/public by the
+// Dockerfile and served from the same origin as the API.
+// ---------------------------------------------------------------------------
+const publicDir = process.env.PUBLIC_DIR
+  ? path.resolve(process.env.PUBLIC_DIR)
+  : path.join(__dirname, 'public');
+if (fs.existsSync(path.join(publicDir, 'index.html'))) {
+  app.use(express.static(publicDir, { index: 'index.html', maxAge: '1h' }));
+  app.get(/^(?!\/api\/|\/socket\.io\/).*/, (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(path.join(publicDir, 'index.html'));
+  });
+  console.log(`[Static] Serving client from ${publicDir}`);
+}
+
 // Start Server
 (async () => {
-  await ensureUsersAvatarUrlColumn();
-  await ensureMessagesImagesColumn();
-  await ensureChatTables();
-  await ensureSubmissionStatusColumn();
-  await ensureSubmissionViewedColumn();
+  try {
+    await runMigrations(db.pool);
+  } catch (err) {
+    console.error('[FATAL] Database migration failed:', err.message || err);
+    process.exit(1);
+  }
   server.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT} (${NODE_ENV})`);
   });
+
+  const shutdown = (signal) => {
+    console.log(`[Server] ${signal} received, shutting down`);
+    server.close(() => {
+      db.pool.end().finally(() => process.exit(0));
+    });
+    setTimeout(() => process.exit(1), 10000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 })();

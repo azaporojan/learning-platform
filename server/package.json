@@ -1,29 +1,36 @@
 {
-  "name": "server",
+  "name": "learning-platform-server",
   "version": "1.0.0",
-  "description": "",
+  "description": "Learning Platform API (Express + PostgreSQL + Socket.IO)",
   "main": "index.js",
-  "scripts": {
-    "start": "NODE_ENV=production node index.js",
-    "dev": "nodemon index.js",
-    "setup:db": "node scripts/setup_database.js",
-    "setup:paths": "node scripts/setup_paths.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "private": true,
+  "engines": {
+    "node": ">=20"
   },
-  "keywords": [],
-  "author": "",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "check": "node --check index.js && node --check db.js && node --check db/migrate.js",
+    "promote-admin": "node scripts/promote_admin.js",
+    "test": "node --test test/*.test.js"
+  },
   "license": "ISC",
   "dependencies": {
-    "bcrypt": "^5.1.1",
+    "bcrypt": "^6.0.0",
+    "cookie": "^1.0.2",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.3.0",
+    "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",
-    "mysql2": "^3.9.7",
-    "nodemailer": "^7.0.12",
-    "nodemon": "^3.1.0",
-    "socket.io": "^4.8.3"
+    "nodemailer": "^10.0.11",
+    "pg": "^8.23.0",
+    "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
   }
 }

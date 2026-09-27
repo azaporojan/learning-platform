@@ -8,7 +8,7 @@ interface ConfirmDialogProps {
   cancelText?: string;
   onConfirm: () => void;
   onCancel: () => void;
-  variant?: 'danger' | 'info' | 'success';
+  variant?: 'danger' | 'info' | 'success' | 'warning';
 }
 
 export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
@@ -29,6 +29,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         return 'bg-red-600 hover:bg-red-700 text-white';
       case 'success':
         return 'bg-green-600 hover:bg-green-700 text-white';
+      case 'warning':
+        return 'bg-amber-500 hover:bg-amber-600 text-white';
       default:
         return 'bg-primary hover:bg-primary-dark text-white';
     }
@@ -40,6 +42,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         return 'text-red-600';
       case 'success':
         return 'text-green-600';
+      case 'warning':
+        return 'text-amber-500';
       default:
         return 'text-blue-600';
     }
@@ -51,6 +55,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         return 'warning';
       case 'success':
         return 'check_circle';
+      case 'warning':
+        return 'warning';
       default:
         return 'info';
     }

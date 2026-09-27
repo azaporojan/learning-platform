@@ -634,7 +634,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                   <div
                     className="prose dark:prose-invert max-w-none bg-gray-50 dark:bg-gray-900 p-4 rounded-lg"
                     dangerouslySetInnerHTML={{
-                      __html: task.description || '<p class="text-gray-400 italic">No requirements specified yet.</p>'
+                      __html: task.description || '<p className="text-gray-400 italic">No requirements specified yet.</p>'
                     }}
                   />
                 </div>

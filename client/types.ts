@@ -8,11 +8,13 @@ export interface User {
   avatar_url?: string;
 }
 
+// Shape returned by GET /api/paths (ids are serialised as strings by the API)
 export interface Path {
-  id: number;
-  name: string;
+  id: string;
+  title: string;
   description: string;
-  stars_required: number;
+  status: 'locked' | 'unlocked' | 'in-progress';
+  requiredScore: number;
 }
 
 export interface Lesson {
