@@ -216,13 +216,27 @@ const transporter = nodemailer.createTransport({
   socketTimeout: 20000,
 });
 
+// Mask an address for logs: "al***@gmail.com"
+function maskEmail(email) {
+  const [local = '', domain = ''] = String(email || '').split('@');
+  return `${local.slice(0, 2)}***@${domain}`;
+}
+
 // Send an email, or log it when SMTP is not configured (dev / CI).
+// Every outcome is logged (accepted/rejected by the SMTP server, or the error) so a
+// "code never arrived" report can be traced from the container logs.
 async function deliverMail(message) {
+  const to = maskEmail(message.to);
   if (!emailEnabled) {
-    console.log(`[Email] (disabled) to=${message.to} subject="${message.subject}"`);
+    console.log(`[Email] (disabled) to=${to} subject="${message.subject}"`);
     return;
   }
-  await transporter.sendMail(message);
+  const started = Date.now();
+  const info = await transporter.sendMail(message);
+  console.log(
+    `[Email] sent to=${to} subject="${message.subject}" accepted=${(info.accepted || []).length} ` +
+    `rejected=${(info.rejected || []).length} id=${info.messageId || '-'} response="${info.response || ''}" in ${Date.now() - started}ms`
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -347,7 +361,7 @@ const sendLoginCode = async (email, code) => {
       `
     });
   } catch (error) {
-    console.error('[ERROR] Failed to send email:', error);
+    console.error(`[Email] FAILED login code to=${maskEmail(email)}:`, error.message || error);
     // Nu aruncam eroare aici ca sa nu blocam procesul, dar e bine de stiut
   }
 };
@@ -363,7 +377,7 @@ const sendEmail = async (email, subject, htmlContent) => {
       html: htmlContent
     });
   } catch (error) {
-    console.error('[ERROR] Failed to send email:', error);
+    console.error(`[Email] FAILED to=${maskEmail(email)} subject="${subject}":`, error.message || error);
   }
 };
 
@@ -389,7 +403,7 @@ const sendNotificationEmail = async (email, subject, message) => {
       `
     });
   } catch (error) {
-    console.error('[ERROR] Failed to send notification email:', error);
+    console.error(`[Email] FAILED notification to=${maskEmail(email)} subject="${subject}":`, error.message || error);
   }
 };
 
@@ -413,6 +427,7 @@ api.post('/login', authLimiter, async (req, res) => {
     const [users] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
 
     if (users.length === 0) {
+      console.log(`[Auth] login refused: unknown email ${maskEmail(email)} from ${req.ip}`);
       return res.status(401).json({ error: 'Incorrect email or password.' });
     }
 
@@ -421,6 +436,7 @@ api.post('/login', authLimiter, async (req, res) => {
     // Verifică parola
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
+      console.log(`[Auth] login refused: wrong password for user #${user.id} from ${req.ip}`);
       return res.status(401).json({ error: 'Incorrect email or password.' });
     }
 
@@ -439,6 +455,7 @@ api.post('/login', authLimiter, async (req, res) => {
     );
 
     // Trimite email (sau loghează în consolă)
+    console.log(`[Auth] login code issued for user #${user.id} (${maskEmail(user.email)}), sending email…`);
     await sendLoginCode(user.email, code);
 
     res.json({ message: 'Code sent via email.', step: 'code_required', userId: user.id });
@@ -465,6 +482,7 @@ api.post('/verify-code', authLimiter, async (req, res) => {
     // Verifică expirarea (și că există un cod activ)
     const now = new Date();
     if (!user.login_code || !user.login_code_expires || new Date(user.login_code_expires) < now) {
+      console.log(`[Auth] code verification refused for user #${user.id}: no active code or expired`);
       return res.status(400).json({ error: 'Code expired. Please try again.' });
     }
 
@@ -484,6 +502,7 @@ api.post('/verify-code', authLimiter, async (req, res) => {
 
     // Login cu succes -> Șterge codul folosit
     await db.query('UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ?', [userId]);
+    console.log(`[Auth] user #${user.id} logged in from ${req.ip}`);
 
     // Generare Token JWT
     const token = jwt.sign(
@@ -651,8 +670,8 @@ api.post('/register', authLimiter, async (req, res) => {
       [name, email, hashedPassword, isBootstrapAdmin ? 'admin' : 'student', 0, isBootstrapAdmin]
     );
 
+    console.log(`[Auth] registered user #${result.insertId} (${maskEmail(email)})${isBootstrapAdmin ? ' as bootstrap admin' : ''}`);
     if (isBootstrapAdmin) {
-      console.log(`[Auth] Bootstrap admin account created for ${email}`);
       return res.status(201).json({ message: 'Admin account created successfully! You can log in now.', userId: result.insertId });
     }
 
