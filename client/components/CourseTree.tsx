@@ -15,19 +15,21 @@ interface CourseTreeProps {
   onSelectTask: (task: RoadTask, lesson: RoadLesson, phase: Phase) => void;
   onOpenLesson: (lesson: RoadLesson, phase: Phase) => void;
   onOpenTask: (task: RoadTask, lesson: RoadLesson, phase: Phase) => void;
+  onOpenPhase?: (phase: Phase) => void;
   // Admin only
   onAddPhase?: () => void;
   onEditPhase?: (phase: Phase) => void;
   onAddLesson?: (phase: Phase) => void;
   onAddTask?: (lesson: RoadLesson, phase: Phase) => void;
+  onOpenScript?: (lesson: RoadLesson, phase: Phase) => void;
 }
 
 // Left pane: the course as a bullet tree (course → phases → lessons → tasks). Clicking an item
 // highlights and scrolls to its stop on the road; the small arrow opens it.
 export const CourseTree: React.FC<CourseTreeProps> = ({
   course, state, isAdmin, selected, collapsed, onToggleCollapse,
-  onSelectPhase, onSelectLesson, onSelectTask, onOpenLesson, onOpenTask,
-  onAddPhase, onEditPhase, onAddLesson, onAddTask,
+  onSelectPhase, onSelectLesson, onSelectTask, onOpenLesson, onOpenTask, onOpenPhase,
+  onAddPhase, onEditPhase, onAddLesson, onAddTask, onOpenScript,
 }) => {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [initialised, setInitialised] = useState(false);
@@ -119,6 +121,11 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
                       {phase.locked ? lockReasonText(phase, previous) : isAdmin ? phase.name.replace(/^.*?—\s*/, '') : `${done}/${phase.lessons.length} lessons done`}
                     </div>
                   </button>
+                  {!isAdmin && onOpenPhase && (
+                    <button onClick={() => onOpenPhase(phase)} title="About this phase" className="w-7 h-7 rounded-full flex items-center justify-center text-gray-400 hover:text-primary-dark hover:bg-white dark:hover:bg-gray-700 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <span className="material-icons text-base">info_outline</span>
+                    </button>
+                  )}
                   {isAdmin && onEditPhase && (
                     <button onClick={() => onEditPhase(phase)} title="Edit phase" className="w-7 h-7 rounded-full flex items-center justify-center text-gray-400 hover:text-primary-dark hover:bg-white dark:hover:bg-gray-700 opacity-0 group-hover:opacity-100 transition-opacity">
                       <span className="material-icons text-base">edit</span>
@@ -142,6 +149,11 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
                                 {lesson.title}
                               </span>
                             </button>
+                            {isAdmin && onOpenScript && (
+                              <button onClick={() => onOpenScript(lesson, phase)} title="Lesson script (admin only)" className="w-6 h-6 rounded-full flex items-center justify-center text-gray-400 hover:text-purple-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <span className="material-icons text-base">description</span>
+                              </button>
+                            )}
                             {isAdmin && onAddTask && (
                               <button onClick={() => onAddTask(lesson, phase)} title="Add task" className="w-6 h-6 rounded-full flex items-center justify-center text-gray-400 hover:text-green-600 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <span className="material-icons text-base">add_task</span>
