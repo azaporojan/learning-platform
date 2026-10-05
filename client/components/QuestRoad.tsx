@@ -109,6 +109,11 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
   const roadPoints = layout.points.map((p) => `${p.x},${p.y}`).join(' ');
   const donePoints = currentIndex >= 0 ? layout.points.slice(0, currentIndex + 1).map((p) => `${p.x},${p.y}`).join(' ') : '';
   const isSelected = (type: string, id: number) => selected !== null && selected.type === type && selected.id === id;
+  const lastRow = (index: number) => Math.floor(index / layout.cols) === layout.rows - 1;
+  const hasSelection = (stop: Stop) =>
+    selected !== null && stop.kind === 'lesson' && (
+      (selected.type === 'lesson' && selected.id === stop.lesson!.id) ||
+      (selected.type === 'task' && stop.lesson!.tasks.some((t) => t.id === selected.id)));
 
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-auto custom-scrollbar bg-white dark:bg-gray-950">
@@ -134,7 +139,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
             const reason = phase.locked ? lockReasonText(phase, previous) : '';
             const sel = isSelected('phase', phase.id);
             return (
-              <div key={stop.key} className="absolute group" style={{ left: p.x, top: p.y, transform: 'translate(-50%, -50%)' }}>
+              <div key={stop.key} className={`absolute group z-10 hover:z-50 ${sel ? 'z-40' : ''}`} style={{ left: p.x, top: p.y, transform: 'translate(-50%, -50%)' }}>
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 text-center pointer-events-none" style={{ width: labelWidth }}>
                   <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-extrabold uppercase tracking-wide shadow-sm border ${
                     status === 'locked' ? 'bg-gray-100 text-gray-400 border-gray-200 dark:bg-gray-800 dark:border-gray-700'
@@ -160,7 +165,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                   </span>
                   {status === 'current' && <span className="absolute inset-0 rounded-2xl bg-primary/40 animate-ping" />}
                 </button>
-                <Tooltip text={phase.name} sub={reason || `${phase.lessons.length} lessons`} />
+                <Tooltip text={phase.name} sub={reason || `${phase.lessons.length} lessons`} above={lastRow(i)} />
               </div>
             );
           }
@@ -171,7 +176,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
           const unviewed = isAdmin ? lesson.tasks.reduce((n, t) => n + (t.unviewed_count || 0), 0) : 0;
           const hasNew = !isAdmin && lesson.tasks.some((t) => t.is_new && !t.completed) && status !== 'locked';
           return (
-            <div key={stop.key} className="absolute" style={{ left: p.x, top: p.y }}>
+            <div key={stop.key} className="absolute" style={{ left: p.x, top: p.y, zIndex: hasSelection(stop) ? 30 : undefined }}>
               {/* Label above the node */}
               <div className="absolute left-1/2 -translate-x-1/2 pointer-events-none" style={{ bottom: LESSON_SIZE / 2 + 6, width: labelWidth }}>
                 <div className={`mx-auto text-center text-[11px] leading-[14px] font-bold px-1.5 py-1 rounded-lg border shadow-sm line-clamp-2 ${
@@ -185,7 +190,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
               </div>
 
               {/* Lesson node */}
-              <div className="absolute group" style={{ left: 0, top: 0, transform: 'translate(-50%, -50%)' }}>
+              <div className={`absolute group z-10 hover:z-50 ${sel ? 'z-40' : ''}`} style={{ left: 0, top: 0, transform: 'translate(-50%, -50%)' }}>
                 <button
                   type="button"
                   data-road-node={`lesson-${lesson.id}`}
@@ -211,7 +216,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                     </span>
                   )}
                 </button>
-                <Tooltip text={lesson.title} sub={`${shortPhaseName(stop.phase)} · ${lesson.tasks.length} task${lesson.tasks.length === 1 ? '' : 's'}`} />
+                <Tooltip text={lesson.title} sub={`${shortPhaseName(stop.phase)} · ${lesson.tasks.length} task${lesson.tasks.length === 1 ? '' : 's'}`} above={lastRow(i)} />
               </div>
 
               {/* Task chain below the lesson */}
@@ -222,7 +227,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                 const ts = state.tasks.get(task.id) || 'open';
                 const tsel = isSelected('task', task.id);
                 return (
-                  <div key={task.id} className="absolute group" style={{ left: 0, top: TASK_FIRST_DY + k * TASK_STEP, transform: 'translate(-50%, -50%)' }}>
+                  <div key={task.id} className={`absolute group z-10 hover:z-50 ${tsel ? 'z-40' : ''}`} style={{ left: 0, top: TASK_FIRST_DY + k * TASK_STEP, transform: 'translate(-50%, -50%)' }}>
                     <button
                       type="button"
                       data-road-node={`task-${task.id}`}
@@ -241,7 +246,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                         </span>
                       )}
                     </button>
-                    <Tooltip text={task.title} sub={`${task.type === 'mandatory' ? 'Mandatory' : 'Optional'} · ${task.xp_reward} ★${task.deadline ? ` · due ${new Date(task.deadline).toLocaleDateString()}` : ''}`} />
+                    <Tooltip text={task.title} sub={`${task.type === 'mandatory' ? 'Mandatory' : 'Optional'} · ${task.xp_reward} ★${task.deadline ? ` · due ${new Date(task.deadline).toLocaleDateString()}` : ''}`} above={lastRow(i)} />
                   </div>
                 );
               })}
@@ -259,8 +264,8 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
   );
 };
 
-const Tooltip: React.FC<{ text: string; sub?: string }> = ({ text, sub }) => (
-  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-max max-w-[240px] px-3 py-2 rounded-lg bg-gray-900 text-white text-xs shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+const Tooltip: React.FC<{ text: string; sub?: string; above?: boolean }> = ({ text, sub, above }) => (
+  <div className={`absolute left-1/2 -translate-x-1/2 w-max max-w-[240px] px-3 py-2 rounded-lg bg-gray-900 text-white text-xs shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 ${above ? 'bottom-full mb-2' : 'top-full mt-2'}`}>
     <div className="font-bold leading-snug">{text}</div>
     {sub && <div className="text-gray-300 mt-0.5">{sub}</div>}
   </div>
