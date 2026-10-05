@@ -156,7 +156,7 @@ now decided by course enrolment and the phase gates above; the call answers 404.
 | `PUT /api/lessons/:id` | `{title, description?, order?, x?, y?, parentId?}` | Update a lesson; the optional graph fields move it without deleting it (keeps tasks and submissions) |
 | `DELETE /api/lessons/:id` | — | Delete a lesson and its tasks |
 | `GET /api/lessons/:id/script` | — | The teacher's Markdown script for the lesson (admin only; never shown to students) |
-| `PUT /api/lessons/:id/script` | `{script}` | Save the lesson script (Markdown, ≤ 200 000 chars) |
+| `PUT /api/lessons/:id/script` | `{script}` | Save the lesson script (Markdown, ≤ 200 000 chars). Last write wins: there is no concurrency guard between two editors |
 | `POST /api/tasks` | `{lessonId, title, type?, xp?, deadline?, x, y, order?, description?}` | Create one task; emails students who unlocked the path |
 | `GET /api/tasks/:id` | — | Task details |
 | `PUT /api/tasks/:id` | `{title, type, xp?, deadline?, description?, order?, x?, y?}` | Update a task; `order`/`x`/`y` move it on the graph |

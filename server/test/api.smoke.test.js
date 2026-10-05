@@ -288,6 +288,14 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const detailsNoScript = await stud(`/paths/${paths.body[0].id}/details`);
   assert.equal(detailsNoScript.body[0].script, undefined);
   assert.equal(JSON.stringify(detailsNoScript.body).includes('# Plan'), false);
+  // …nor through the course road, for anyone (admins read it only via the dedicated endpoint)
+  for (const who of [stud, admin, anon]) {
+    const road = await who(`/courses/${course.body.id}`);
+    assert.equal(road.status, 200);
+    assert.equal(JSON.stringify(road.body).includes('# Plan'), false);
+    assert.equal(road.body.phases[0].lessons[0].script, undefined);
+  }
+  assert.equal((await admin('/lessons/abc/script')).status, 404);
   const viewed = await stud(`/tasks/${task.body.id}/mark-viewed`, { method: 'POST' });
   assert.equal(viewed.status, 200);
   const viewedAgain = await stud(`/tasks/${task.body.id}/mark-viewed`, { method: 'POST' }); // upsert path
