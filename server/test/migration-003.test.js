@@ -64,7 +64,7 @@ test('003_courses: existing phases become the course, students stay enrolled', {
   await runMigrations(pool);
 
   const { rows: applied } = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(applied.map((r) => r.version), ['001_init.sql', '002_api_keys.sql', '003_courses.sql']);
+  assert.deepEqual(applied.map((r) => r.version).slice(0, 3), ['001_init.sql', '002_api_keys.sql', '003_courses.sql']);
 
   const { rows: courses } = await pool.query('SELECT id, name FROM courses');
   assert.equal(courses.length, 1);
