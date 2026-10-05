@@ -274,13 +274,25 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   // Editing the lesson's title/summary keeps the script
   assert.equal((await admin(`/lessons/${lesson.body.id}`, { method: 'PUT', json: { title: 'Intro', description: '' } })).status, 200);
   assert.match((await admin(`/lessons/${lesson.body.id}/script`)).body.script, /^# Plan/);
-  // Optimistic concurrency: a stale expected_updated_at is refused, the current one is accepted
-  const stale = await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Older', expected_updated_at: '2000-01-01T00:00:00.000Z' } });
+  // Optimistic concurrency on the script's own stamp: stale → 409, current → 200, and a title edit
+  // in between does not count as a conflict (lessons.updated_at moves, script_updated_at does not)
+  const stale = await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Older', expected_script_updated_at: '2000-01-01T00:00:00.000Z' } });
   assert.equal(stale.status, 409);
-  const fresh = await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Plan v2', expected_updated_at: (await admin(`/lessons/${lesson.body.id}/script`)).body.updated_at } });
+  assert.ok(stale.body.script_updated_at);
+  const stamp = (await admin(`/lessons/${lesson.body.id}/script`)).body.script_updated_at;
+  assert.equal((await admin(`/lessons/${lesson.body.id}`, { method: 'PUT', json: { title: 'Intro', description: 'edited meanwhile' } })).status, 200);
+  const fresh = await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Plan v2', expected_script_updated_at: stamp } });
   assert.equal(fresh.status, 200, JSON.stringify(fresh.body));
-  assert.ok(fresh.body.updated_at);
-  assert.equal((await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 'x', expected_updated_at: 'yesterday' } })).status, 400);
+  assert.ok(fresh.body.script_updated_at);
+  assert.equal((await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 'x', expected_script_updated_at: 'yesterday' } })).status, 400);
+  // The check and the write are one statement: two saves racing with the same stamp → exactly one wins
+  const racers = await Promise.all(['# A', '# B'].map((s) => admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: s, expected_script_updated_at: fresh.body.script_updated_at } })));
+  assert.deepEqual(racers.map((r) => r.status).sort(), [200, 409]);
+  // A lesson that never had a script: the expectation "null" is accepted once, then conflicts
+  const neverSaved = await admin(`/lessons/${second.body.id}/script`);
+  assert.equal(neverSaved.body.script_updated_at, null);
+  assert.equal((await admin(`/lessons/${second.body.id}/script`, { method: 'PUT', json: { script: 'first', expected_script_updated_at: null } })).status, 200);
+  assert.equal((await admin(`/lessons/${second.body.id}/script`, { method: 'PUT', json: { script: 'second', expected_script_updated_at: null } })).status, 409);
   assert.equal((await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Plan\n\n| step | min |\n|---|---|\n| intro | 10 |' } })).status, 200);
   assert.equal((await admin('/lessons/999999/script')).status, 404);
   assert.equal((await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 'x'.repeat(200001) } })).status, 400);

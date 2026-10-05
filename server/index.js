@@ -1473,9 +1473,9 @@ api.put('/lessons/:id', authenticateToken, requireAdmin, async (req, res) => {
 const MAX_SCRIPT_CHARS = 200000;
 api.get('/lessons/:id/script', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const [rows] = await db.query('SELECT id, title, script, updated_at FROM lessons WHERE id = ?', [req.params.id]);
+    const [rows] = await db.query('SELECT id, title, script, script_updated_at FROM lessons WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'Lesson not found' });
-    res.json({ id: rows[0].id, title: rows[0].title, script: rows[0].script || '', updated_at: rows[0].updated_at });
+    res.json({ id: rows[0].id, title: rows[0].title, script: rows[0].script || '', script_updated_at: rows[0].script_updated_at });
   } catch (err) {
     console.error('[GET /lessons/:id/script] Error:', err);
     res.status(500).json({ error: 'Failed to fetch lesson script' });
@@ -1483,23 +1483,29 @@ api.get('/lessons/:id/script', authenticateToken, requireAdmin, async (req, res)
 });
 
 api.put('/lessons/:id/script', authenticateToken, requireAdmin, async (req, res) => {
-  const { script, expected_updated_at } = req.body || {};
+  const { script, expected_script_updated_at: expected } = req.body || {};
   if (typeof script !== 'string') return res.status(400).json({ error: 'script must be a string' });
   if (script.length > MAX_SCRIPT_CHARS) return res.status(400).json({ error: `script is too long (max ${MAX_SCRIPT_CHARS} characters)` });
-  if (expected_updated_at !== undefined && (typeof expected_updated_at !== 'string' || Number.isNaN(Date.parse(expected_updated_at)))) {
-    return res.status(400).json({ error: 'expected_updated_at must be an ISO timestamp' });
+  if (expected !== undefined && expected !== null && (typeof expected !== 'string' || Number.isNaN(Date.parse(expected)))) {
+    return res.status(400).json({ error: 'expected_script_updated_at must be an ISO timestamp or null' });
   }
   try {
-    // Optimistic concurrency: a caller that sends the updated_at it last read gets a 409 instead of
-    // silently overwriting a newer copy (two admin tabs, or a stale browser draft).
-    const [current] = await db.query('SELECT updated_at FROM lessons WHERE id = ?', [req.params.id]);
-    if (current.length === 0) return res.status(404).json({ error: 'Lesson not found' });
-    if (expected_updated_at !== undefined && new Date(current[0].updated_at).getTime() !== Date.parse(expected_updated_at)) {
-      return res.status(409).json({ error: 'This lesson script was changed elsewhere. Reload to see the latest version.', updated_at: current[0].updated_at });
+    // Optimistic concurrency in one statement: the write only happens if the script's own save
+    // stamp still equals what the caller last read (null = "never saved" is a valid expectation).
+    // Compared at millisecond precision, which is what the JSON round-trip of the stamp carries.
+    const checked = expected !== undefined;
+    const [updated] = await db.query(
+      `UPDATE lessons SET script = ?, script_updated_at = NOW()
+       WHERE id = ? ${checked ? "AND date_trunc('milliseconds', script_updated_at) IS NOT DISTINCT FROM ?::timestamptz" : ''}
+       RETURNING script_updated_at`,
+      checked ? [script, req.params.id, expected] : [script, req.params.id]
+    );
+    if (updated.length === 0) {
+      const [current] = await db.query('SELECT script_updated_at FROM lessons WHERE id = ?', [req.params.id]);
+      if (current.length === 0) return res.status(404).json({ error: 'Lesson not found' });
+      return res.status(409).json({ error: 'This lesson script was changed elsewhere. Reload to see the latest version.', script_updated_at: current[0].script_updated_at });
     }
-    await db.query('UPDATE lessons SET script = ? WHERE id = ?', [script, req.params.id]);
-    const [after] = await db.query('SELECT updated_at FROM lessons WHERE id = ?', [req.params.id]);
-    res.json({ success: true, updated_at: after[0].updated_at });
+    res.json({ success: true, script_updated_at: updated[0].script_updated_at });
   } catch (err) {
     console.error('[PUT /lessons/:id/script] Error:', err);
     res.status(500).json({ error: 'Failed to save lesson script' });

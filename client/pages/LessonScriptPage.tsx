@@ -43,11 +43,11 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
       ]);
       if (!cr.ok || !sr.ok) { setNotFound(true); return; }
       const c: CourseDetail = await cr.json();
-      const s: { title: string; script: string; updated_at: string } = await sr.json();
+      const s: { title: string; script: string; script_updated_at: string | null } = await sr.json();
       setCourse(c);
       setTitle(s.title);
       setSaved(s.script);
-      setUpdatedAt(s.updated_at);
+      setUpdatedAt(s.script_updated_at);
       setConflict(false);
       let draft: string | null = null;
       try { draft = localStorage.getItem(DRAFT_KEY(lessonId)); } catch { /* ignore */ }
@@ -82,13 +82,13 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ script, expected_updated_at: updatedAt || undefined })
+        body: JSON.stringify({ script, expected_script_updated_at: updatedAt }) // null = "never saved" is a valid expectation
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 409) { setConflict(true); throw new Error(data.error || 'Changed elsewhere'); }
       if (!res.ok) throw new Error(data.error || 'Failed to save');
       setSaved(script);
-      setUpdatedAt(data.updated_at || updatedAt);
+      setUpdatedAt(data.script_updated_at || updatedAt);
       setSavedAt(new Date());
     } catch (err: any) {
       setError(err?.message || 'Failed to save');
