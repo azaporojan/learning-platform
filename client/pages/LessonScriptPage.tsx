@@ -30,6 +30,8 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null); // server copy we last read (concurrency guard)
+  const [conflict, setConflict] = useState(false);
 
   const load = useCallback(async () => {
     if (!courseId || !lessonId) return;
@@ -41,10 +43,12 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
       ]);
       if (!cr.ok || !sr.ok) { setNotFound(true); return; }
       const c: CourseDetail = await cr.json();
-      const s: { title: string; script: string } = await sr.json();
+      const s: { title: string; script: string; updated_at: string } = await sr.json();
       setCourse(c);
       setTitle(s.title);
       setSaved(s.script);
+      setUpdatedAt(s.updated_at);
+      setConflict(false);
       let draft: string | null = null;
       try { draft = localStorage.getItem(DRAFT_KEY(lessonId)); } catch { /* ignore */ }
       setScript(draft !== null && draft !== s.script ? draft : s.script);
@@ -78,13 +82,13 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ script })
+        body: JSON.stringify({ script, expected_updated_at: updatedAt || undefined })
       });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to save');
-      }
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) { setConflict(true); throw new Error(data.error || 'Changed elsewhere'); }
+      if (!res.ok) throw new Error(data.error || 'Failed to save');
       setSaved(script);
+      setUpdatedAt(data.updated_at || updatedAt);
       setSavedAt(new Date());
     } catch (err: any) {
       setError(err?.message || 'Failed to save');
@@ -190,7 +194,19 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
         </button>
       </div>
 
-      {error && <div className="mx-5 mt-3 p-3 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-700 rounded-lg text-red-700 dark:text-red-300 text-sm">{error}</div>}
+      {error && (
+        <div className="mx-5 mt-3 p-3 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-700 rounded-lg text-red-700 dark:text-red-300 text-sm flex items-center justify-between gap-3">
+          <span>{error}</span>
+          {conflict && (
+            <button
+              onClick={() => { if (window.confirm('Reload the latest version from the server? Your unsaved text here will be replaced.')) { try { if (lessonId) localStorage.removeItem(DRAFT_KEY(lessonId)); } catch { /* ignore */ } load(); } }}
+              className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-red-300 font-bold text-red-700 dark:text-red-300 whitespace-nowrap"
+            >
+              Reload latest
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Body */}
       {mode === 'edit' ? (

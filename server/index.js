@@ -1483,13 +1483,23 @@ api.get('/lessons/:id/script', authenticateToken, requireAdmin, async (req, res)
 });
 
 api.put('/lessons/:id/script', authenticateToken, requireAdmin, async (req, res) => {
-  const { script } = req.body || {};
+  const { script, expected_updated_at } = req.body || {};
   if (typeof script !== 'string') return res.status(400).json({ error: 'script must be a string' });
   if (script.length > MAX_SCRIPT_CHARS) return res.status(400).json({ error: `script is too long (max ${MAX_SCRIPT_CHARS} characters)` });
+  if (expected_updated_at !== undefined && (typeof expected_updated_at !== 'string' || Number.isNaN(Date.parse(expected_updated_at)))) {
+    return res.status(400).json({ error: 'expected_updated_at must be an ISO timestamp' });
+  }
   try {
-    const [result] = await db.query('UPDATE lessons SET script = ? WHERE id = ?', [script, req.params.id]);
-    if (result.affectedRows === 0) return res.status(404).json({ error: 'Lesson not found' });
-    res.json({ success: true });
+    // Optimistic concurrency: a caller that sends the updated_at it last read gets a 409 instead of
+    // silently overwriting a newer copy (two admin tabs, or a stale browser draft).
+    const [current] = await db.query('SELECT updated_at FROM lessons WHERE id = ?', [req.params.id]);
+    if (current.length === 0) return res.status(404).json({ error: 'Lesson not found' });
+    if (expected_updated_at !== undefined && new Date(current[0].updated_at).getTime() !== Date.parse(expected_updated_at)) {
+      return res.status(409).json({ error: 'This lesson script was changed elsewhere. Reload to see the latest version.', updated_at: current[0].updated_at });
+    }
+    await db.query('UPDATE lessons SET script = ? WHERE id = ?', [script, req.params.id]);
+    const [after] = await db.query('SELECT updated_at FROM lessons WHERE id = ?', [req.params.id]);
+    res.json({ success: true, updated_at: after[0].updated_at });
   } catch (err) {
     console.error('[PUT /lessons/:id/script] Error:', err);
     res.status(500).json({ error: 'Failed to save lesson script' });
@@ -1875,7 +1885,8 @@ api.get('/admin/submissions', authenticateToken, requireAdmin, async (req, res) 
     const [counts] = await db.query(`SELECT COALESCE(status, 'pending') AS status, COUNT(*)::int AS n FROM task_submissions GROUP BY 1`);
     const summary = { pending: 0, approved: 0, rejected: 0 };
     counts.forEach((c) => { summary[c.status] = c.n; });
-    res.json({ submissions: rows, counts: summary });
+    // The list is a window of the newest `limit` rows; `truncated` tells the client when older ones exist.
+    res.json({ submissions: rows, counts: summary, limit, truncated: rows.length >= limit });
   } catch (err) {
     console.error('[GET /admin/submissions] Error:', err);
     res.status(500).json({ error: 'Failed to fetch submissions' });

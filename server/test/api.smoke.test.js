@@ -271,6 +271,17 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const readScript = await admin(`/lessons/${lesson.body.id}/script`);
   assert.equal(readScript.status, 200);
   assert.match(readScript.body.script, /^# Plan/);
+  // Editing the lesson's title/summary keeps the script
+  assert.equal((await admin(`/lessons/${lesson.body.id}`, { method: 'PUT', json: { title: 'Intro', description: '' } })).status, 200);
+  assert.match((await admin(`/lessons/${lesson.body.id}/script`)).body.script, /^# Plan/);
+  // Optimistic concurrency: a stale expected_updated_at is refused, the current one is accepted
+  const stale = await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Older', expected_updated_at: '2000-01-01T00:00:00.000Z' } });
+  assert.equal(stale.status, 409);
+  const fresh = await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Plan v2', expected_updated_at: (await admin(`/lessons/${lesson.body.id}/script`)).body.updated_at } });
+  assert.equal(fresh.status, 200, JSON.stringify(fresh.body));
+  assert.ok(fresh.body.updated_at);
+  assert.equal((await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 'x', expected_updated_at: 'yesterday' } })).status, 400);
+  assert.equal((await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Plan\n\n| step | min |\n|---|---|\n| intro | 10 |' } })).status, 200);
   assert.equal((await admin('/lessons/999999/script')).status, 404);
   assert.equal((await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 'x'.repeat(200001) } })).status, 400);
   const gone = await admin(`/lessons/${second.body.id}`, { method: 'DELETE' });
@@ -372,6 +383,8 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal((await admin('/admin/submissions?status=rejected')).body.submissions.length, 0);
   assert.equal((await admin('/admin/submissions?status=all')).body.submissions.length, 1);
   assert.strictEqual(inbox.body.counts.pending, 1); // numeric, not a bigint string
+  assert.equal(inbox.body.truncated, false);
+  assert.equal((await admin('/admin/submissions?limit=1')).body.truncated, true);
   assert.equal((await admin('/admin/submissions?status=bogus&limit=99999')).status, 200); // falls back to pending, clamps limit
   assert.equal((await admin('/admin/submissions?limit=abc')).body.submissions.length, 1);
 
@@ -394,6 +407,11 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(approveAll.status, 200, JSON.stringify(approveAll.body));
   const leaderboard = await anon('/users');
   assert.equal(leaderboard.body[0].stars, 10);
+  const inboxAfter = await admin('/admin/submissions?status=approved');
+  assert.equal(inboxAfter.body.submissions.length, 1);
+  assert.equal(inboxAfter.body.submissions[0].status, 'approved');
+  assert.strictEqual(inboxAfter.body.counts.approved, 1);
+  assert.strictEqual(inboxAfter.body.counts.pending, 0);
 
   // The course road: enrolment gates everything for a student, then the sequence gates phase 2
   const phase2Lesson = await admin('/lessons', { method: 'POST', json: { pathId: phase2.body.id, title: 'P2 L1', description: 'What phase 2 covers', order: 1 } });

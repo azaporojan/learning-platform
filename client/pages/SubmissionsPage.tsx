@@ -50,6 +50,7 @@ export const SubmissionsPage: React.FC<SubmissionsPageProps> = ({ currentUser })
   const [filter, setFilter] = useState<Filter>('pending');
   const [rows, setRows] = useState<InboxRow[]>([]);
   const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
+  const [truncated, setTruncated] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   const fetchInbox = useCallback(async () => {
@@ -59,6 +60,7 @@ export const SubmissionsPage: React.FC<SubmissionsPageProps> = ({ currentUser })
         const data = await res.json();
         setRows(data.submissions);
         setCounts(data.counts);
+        setTruncated(!!data.truncated);
       }
     } catch (err) {
       console.error('Failed to fetch submissions', err);
@@ -129,6 +131,11 @@ export const SubmissionsPage: React.FC<SubmissionsPageProps> = ({ currentUser })
           </div>
         )}
 
+        {truncated && (
+          <p className="mb-3 text-xs font-semibold text-gray-500 dark:text-gray-400 flex items-center gap-1">
+            <span className="material-icons text-sm">info</span>Showing the newest {rows.length} submissions; older ones are not listed. Use the status filters to narrow down.
+          </p>
+        )}
         <div className="space-y-2">
           {rows.map((row) => {
             const link = submissionDeepLink(row);
