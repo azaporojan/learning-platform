@@ -117,16 +117,22 @@ All accept the same bearer header. Ids in responses are integers; `GET /api/path
 | `PUT /api/paths/:id` | `{name, description?, stars_required?}` | Update a path |
 | `DELETE /api/paths/:id` | — | Delete a path and everything in it |
 | `POST /api/lessons` | `{pathId, title, description?, x, y, order, parentId?}` | Create one lesson (you supply the graph position) |
-| `PUT /api/lessons/:id` | `{title, description?}` | Update a lesson |
+| `PUT /api/lessons/:id` | `{title, description?, order?, x?, y?, parentId?}` | Update a lesson; the optional graph fields move it without deleting it (keeps tasks and submissions) |
 | `DELETE /api/lessons/:id` | — | Delete a lesson and its tasks |
 | `POST /api/tasks` | `{lessonId, title, type?, xp?, deadline?, x, y, order?, description?}` | Create one task; emails students who unlocked the path |
 | `GET /api/tasks/:id` | — | Task details |
-| `PUT /api/tasks/:id` | `{title, type, xp?, deadline?, description?}` | Update a task |
+| `PUT /api/tasks/:id` | `{title, type, xp?, deadline?, description?, order?, x?, y?}` | Update a task; `order`/`x`/`y` move it on the graph |
 | `DELETE /api/tasks/:id` | — | Delete a task |
 | `GET /api/admin/users` | — | All users (admin view) |
 | `GET /api/admin/api-keys` | — | List keys (names/prefixes only) |
 | `POST /api/admin/api-keys` | `{name}` | Create a key (plaintext returned once) |
 | `DELETE /api/admin/api-keys/:id` | — | Revoke a key |
+
+To restructure an existing path (insert lessons between existing ones, renumber weeks) prefer
+`PUT` with `order`/`x`/`y`/`parentId` over delete-and-recreate: deleting a lesson cascades to its
+tasks and to every student submission on them. Students see lessons ordered by `order`, and a
+lesson is locked until all mandatory tasks of every lesson before it are approved.
+`scripts/restructure-weeks.mjs` is a worked example (dry-run by default, `--apply` to execute).
 
 For the graph position convention used by `POST /lessons` / `POST /tasks`: the first lesson sits at
 `x=80, y=250`; each next lesson is `+250` on x with `parentId` = previous lesson; a lesson's first
