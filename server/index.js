@@ -1492,7 +1492,9 @@ api.put('/lessons/:id/script', authenticateToken, requireAdmin, async (req, res)
   try {
     // Optimistic concurrency in one statement: the write only happens if the script's own save
     // stamp still equals what the caller last read (null = "never saved" is a valid expectation).
-    // Compared at millisecond precision, which is what the JSON round-trip of the stamp carries.
+    // Keep the date_trunc + IS NOT DISTINCT FROM: the column holds microseconds but the stamp the
+    // client echoes back went through JSON/Date (milliseconds), so a plain `=` would never match;
+    // IS NOT DISTINCT FROM is what lets `null` (never saved) compare as equal.
     const checked = expected !== undefined;
     const [updated] = await db.query(
       `UPDATE lessons SET script = ?, script_updated_at = NOW()
