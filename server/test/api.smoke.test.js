@@ -321,6 +321,9 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
     assert.equal(road.status, 200);
     assert.equal(JSON.stringify(road.body).includes('# Plan'), false);
     assert.equal(road.body.phases[0].lessons[0].script, undefined);
+    for (const key of ['id', 'path_id', 'title', 'description', 'order_index', 'position_x', 'position_y', 'created_at', 'updated_at', 'completed', 'tasks']) {
+      assert.ok(key in road.body.phases[0].lessons[0], `road lesson is missing ${key}`);
+    }
   }
   assert.equal((await admin('/lessons/abc/script')).status, 404);
   const viewed = await stud(`/tasks/${task.body.id}/mark-viewed`, { method: 'POST' });
@@ -384,6 +387,9 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
 
   // Admin review inbox: every submission with its place in the course and a deep-link target
   assert.equal((await stud('/admin/submissions')).status, 403);
+  assert.equal((await anon('/admin/submissions')).status, 401);
+  assert.equal((await anon(`/lessons/${lesson.body.id}/script`)).status, 401);
+  assert.equal((await anon(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 'x' } })).status, 401);
   const inbox = await admin('/admin/submissions');
   assert.equal(inbox.status, 200, JSON.stringify(inbox.body));
   assert.equal(inbox.body.counts.pending, 1);
@@ -429,12 +435,15 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const pendingRest = await admin(`/admin/submissions?status=pending&limit=3&before=${pendingFirst.body.next_cursor}`);
   assert.deepEqual(pendingRest.body.submissions.map((s) => s.id), seen.slice(3));
   assert.equal(pendingRest.body.has_more, false);
-  assert.strictEqual(pendingRest.body.counts.pending, 4);
+  assert.strictEqual(pendingFirst.body.counts.pending, 4);
+  assert.equal(pendingRest.body.counts, null);
   const exact = await admin('/admin/submissions?status=all&limit=4'); // total is an exact multiple of the page size
   assert.equal(exact.body.submissions.length, 4);
   assert.equal(exact.body.has_more, false);
   assert.equal(exact.body.next_cursor, null);
-  assert.equal((await admin('/admin/submissions?before=abc')).status, 200); // malformed cursor → ignored
+  assert.equal((await admin('/admin/submissions?before=abc')).status, 400); // malformed cursor → error, never "start over"
+  assert.equal((await admin('/admin/submissions?before=12345678901')).status, 400);
+  assert.equal((await admin(`/admin/submissions?status=all&limit=2&before=${seen[1]}`)).body.counts, null); // totals only on the first page
   const extra = (await admin('/admin/submissions?status=all')).body.submissions.filter((s) => (s.comment || '').startsWith('page test'));
   for (const s of extra) assert.equal((await stud(`/submissions/${s.id}`, { method: 'DELETE' })).status, 200);
   assert.equal((await admin('/admin/submissions?status=bogus&limit=99999')).status, 200); // falls back to pending, clamps limit

@@ -1869,14 +1869,20 @@ api.get('/tasks/:id/submissions', authenticateToken, async (req, res) => {
 api.get('/admin/submissions', authenticateToken, requireAdmin, async (req, res) => {
   const status = ['pending', 'approved', 'rejected', 'all'].includes(req.query.status) ? req.query.status : 'pending';
   const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 50));
-  const before = /^\d{1,9}$/.test(String(req.query.before || '')) ? Number(req.query.before) : null;
+  // A malformed cursor is an error, not "start over": restarting would repeat rows in an infinite scroll.
+  if (req.query.before !== undefined && !/^\d{1,9}$/.test(String(req.query.before))) {
+    return res.status(400).json({ error: 'before must be a submission id' });
+  }
+  const before = req.query.before !== undefined ? Number(req.query.before) : null;
   try {
+    // task_submissions.status is NOT NULL DEFAULT 'pending' (001), so plain comparisons keep the
+    // (status) index usable.
     const where = [];
     const params = [];
-    if (status !== 'all') { where.push("COALESCE(s.status, 'pending') = ?"); params.push(status); }
+    if (status !== 'all') { where.push('s.status = ?'); params.push(status); }
     if (before !== null) { where.push('s.id < ?'); params.push(before); }
     const [rows] = await db.query(
-      `SELECT s.id, COALESCE(s.status, 'pending') AS status, s.submitted_at, s.is_viewed, s.file_name, s.file_size,
+      `SELECT s.id, s.status, s.submitted_at, s.is_viewed, s.file_name, s.file_size,
               LEFT(COALESCE(s.comment, ''), 300) AS comment,
               u.id AS user_id, u.name AS user_name, u.avatar_url AS user_avatar,
               t.id AS task_id, t.title AS task_title, t.type AS task_type, t.xp_reward,
@@ -1898,9 +1904,14 @@ api.get('/admin/submissions', authenticateToken, requireAdmin, async (req, res) 
     // when the total is an exact multiple of the page size).
     const hasMore = rows.length > limit;
     if (hasMore) rows.pop();
-    const [counts] = await db.query(`SELECT COALESCE(status, 'pending') AS status, COUNT(*)::int AS n FROM task_submissions GROUP BY 1`);
-    const summary = { pending: 0, approved: 0, rejected: 0 };
-    counts.forEach((c) => { summary[c.status] = c.n; });
+    // Per-status totals are computed for the first page only (an infinite scroll re-reads them
+    // when it reloads the first page, not on every older page).
+    let summary = null;
+    if (before === null) {
+      const [counts] = await db.query('SELECT status, COUNT(*)::int AS n FROM task_submissions GROUP BY status');
+      summary = { pending: 0, approved: 0, rejected: 0 };
+      counts.forEach((c) => { summary[c.status] = c.n; });
+    }
     // A page of `limit` rows; `next_cursor` (when `has_more`) is the id to pass as `before` for the next page.
     res.json({ submissions: rows, counts: summary, limit, has_more: hasMore, next_cursor: hasMore ? rows[rows.length - 1].id : null });
   } catch (err) {
