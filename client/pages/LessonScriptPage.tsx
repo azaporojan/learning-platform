@@ -12,6 +12,24 @@ interface LessonScriptPageProps {
 
 const DRAFT_KEY = (lessonId: string) => `lesson-script-draft-${lessonId}`;
 
+// An unsaved draft is stored together with the save stamp it was written against, so a draft
+// from an older version of the script cannot silently overwrite a newer save from elsewhere.
+interface Draft { text: string; baseStamp: string | null }
+const readDraft = (lessonId: string): Draft | null => {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY(lessonId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed.text === 'string' ? { text: parsed.text, baseStamp: parsed.baseStamp ?? null } : null;
+  } catch { return null; }
+};
+const writeDraft = (lessonId: string, draft: Draft | null) => {
+  try {
+    if (draft) localStorage.setItem(DRAFT_KEY(lessonId), JSON.stringify(draft));
+    else localStorage.removeItem(DRAFT_KEY(lessonId));
+  } catch { /* ignore */ }
+};
+
 // Admin only: the teacher's Markdown script for a lesson. "Edit" shows the source next to a live
 // preview; "Follow" is the clean rendered view to keep open during the session, with prev/next
 // lesson navigation across the whole course.
@@ -32,44 +50,60 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null); // server copy we last read (concurrency guard)
   const [conflict, setConflict] = useState(false);
+  const [loadedLessonId, setLoadedLessonId] = useState<string | null>(null); // which lesson the state belongs to
+  const [staleDraft, setStaleDraft] = useState<Draft | null>(null); // a draft written against an older version
 
-  const load = useCallback(async () => {
+  // `ignore` guards against a slow response for lesson A landing after lesson B was opened.
+  const load = useCallback(async (ignore?: { current: boolean }) => {
     if (!courseId || !lessonId) return;
     setLoaded(false);
+    setLoadedLessonId(null);
     try {
       const [cr, sr] = await Promise.all([
         fetch(apiUrl(`/courses/${courseId}`), { credentials: 'include' }),
         fetch(apiUrl(`/lessons/${lessonId}/script`), { credentials: 'include' }),
       ]);
+      if (ignore?.current) return;
       if (!cr.ok || !sr.ok) { setNotFound(true); return; }
       const c: CourseDetail = await cr.json();
       const s: { title: string; script: string; script_updated_at: string | null } = await sr.json();
+      if (ignore?.current) return;
       setCourse(c);
       setTitle(s.title);
       setSaved(s.script);
       setUpdatedAt(s.script_updated_at);
       setConflict(false);
-      let draft: string | null = null;
-      try { draft = localStorage.getItem(DRAFT_KEY(lessonId)); } catch { /* ignore */ }
-      setScript(draft !== null && draft !== s.script ? draft : s.script);
+      const draft = readDraft(lessonId);
+      if (draft && draft.text !== s.script && draft.baseStamp === s.script_updated_at) {
+        setScript(draft.text); // same base version: resume the draft
+        setStaleDraft(null);
+      } else {
+        setScript(s.script);
+        // A draft from an older version is kept aside and offered, never applied silently
+        setStaleDraft(draft && draft.text !== s.script ? draft : null);
+        if (draft && draft.text === s.script) writeDraft(lessonId, null);
+      }
       setMode(s.script.trim() ? 'follow' : 'edit');
+      setLoadedLessonId(lessonId);
     } catch (err) {
-      console.error('Failed to load lesson script', err);
+      if (!ignore?.current) console.error('Failed to load lesson script', err);
     } finally {
-      setLoaded(true);
+      if (!ignore?.current) setLoaded(true);
     }
   }, [courseId, lessonId]);
 
-  useEffect(() => { load(); }, [load]);
-
-  // Keep an unsaved draft per lesson in this browser
   useEffect(() => {
-    if (!lessonId || !loaded) return;
-    try {
-      if (script !== saved) localStorage.setItem(DRAFT_KEY(lessonId), script);
-      else localStorage.removeItem(DRAFT_KEY(lessonId));
-    } catch { /* ignore */ }
-  }, [script, saved, lessonId, loaded]);
+    const ignore = { current: false };
+    load(ignore);
+    return () => { ignore.current = true; };
+  }, [load]);
+
+  // Keep an unsaved draft per lesson in this browser (only once the state belongs to this lesson)
+  useEffect(() => {
+    if (!lessonId || loadedLessonId !== lessonId) return;
+    if (script !== saved) writeDraft(lessonId, { text: script, baseStamp: updatedAt });
+    else writeDraft(lessonId, null);
+  }, [script, saved, lessonId, loadedLessonId, updatedAt]);
 
   const dirty = script !== saved;
 
@@ -199,12 +233,22 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
           <span>{error}</span>
           {conflict && (
             <button
-              onClick={() => { if (window.confirm('Reload the latest version from the server? Your unsaved text here will be replaced.')) { try { if (lessonId) localStorage.removeItem(DRAFT_KEY(lessonId)); } catch { /* ignore */ } load(); } }}
+              onClick={() => { if (window.confirm('Reload the latest version from the server? Your unsaved text here will be replaced.')) { if (lessonId) writeDraft(lessonId, null); load(); } }}
               className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-red-300 font-bold text-red-700 dark:text-red-300 whitespace-nowrap"
             >
               Reload latest
             </button>
           )}
+        </div>
+      )}
+
+      {staleDraft && (
+        <div className="mx-5 mt-3 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg text-amber-800 dark:text-amber-200 text-sm flex items-center justify-between gap-3">
+          <span>This browser has an unsaved draft written against an <strong>older version</strong> of this script. The current version is shown.</span>
+          <span className="flex items-center gap-2 whitespace-nowrap">
+            <button onClick={() => { setScript(staleDraft.text); setStaleDraft(null); setMode('edit'); }} className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-amber-300 font-bold">Use the draft</button>
+            <button onClick={() => { if (lessonId) writeDraft(lessonId, null); setStaleDraft(null); }} className="px-3 py-1.5 rounded-lg font-bold text-amber-800 dark:text-amber-200 hover:underline">Discard it</button>
+          </span>
         </div>
       )}
 

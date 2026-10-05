@@ -421,6 +421,15 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(seen.length, 4);
   assert.deepEqual([...seen].sort((a, b) => b - a), seen); // strictly newest → oldest
   assert.equal(new Set(seen).size, 4);
+  // Status filter combined with the cursor: the pending page walks the same ids, counts stay global
+  const pendingFirst = await admin('/admin/submissions?status=pending&limit=3');
+  assert.equal(pendingFirst.body.submissions.length, 3);
+  assert.equal(pendingFirst.body.has_more, true);
+  assert.deepEqual(pendingFirst.body.submissions.map((s) => s.id), seen.slice(0, 3));
+  const pendingRest = await admin(`/admin/submissions?status=pending&limit=3&before=${pendingFirst.body.next_cursor}`);
+  assert.deepEqual(pendingRest.body.submissions.map((s) => s.id), seen.slice(3));
+  assert.equal(pendingRest.body.has_more, false);
+  assert.strictEqual(pendingRest.body.counts.pending, 4);
   const exact = await admin('/admin/submissions?status=all&limit=4'); // total is an exact multiple of the page size
   assert.equal(exact.body.submissions.length, 4);
   assert.equal(exact.body.has_more, false);
