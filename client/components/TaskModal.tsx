@@ -52,6 +52,7 @@ interface TaskModalProps {
   currentUserId: number;
   currentUser?: any;
   onUpdate?: () => void;
+  initialMode?: 'view' | 'submissions'; // e.g. the review inbox deep-links straight to the submissions tab
 }
 
 export const TaskModal: React.FC<TaskModalProps> = ({
@@ -61,9 +62,10 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   isAdmin,
   currentUserId,
   currentUser,
-  onUpdate
+  onUpdate,
+  initialMode = 'view'
 }) => {
-  const [mode, setMode] = useState<'view' | 'edit' | 'submissions'>('view');
+  const [mode, setMode] = useState<'view' | 'edit' | 'submissions'>(initialMode);
   const [editData, setEditData] = useState({
     title: task.title,
     type: task.type,
