@@ -81,7 +81,7 @@ export const CourseModal: React.FC<CourseModalProps> = ({ isOpen, course, onClos
       <ConfirmDialog
         isOpen={showDeleteConfirm}
         title="Delete Course"
-        message={`Delete "${course?.name}"? Its phases are kept and become unassigned; you can attach them to another course later.`}
+        message={`Delete "${course?.name}"? Its phases are kept but become unassigned, which hides them from students until you attach them to a course again. All enrolments in this course are removed and cannot be restored.`}
         confirmText="Delete"
         cancelText="Cancel"
         variant="danger"
