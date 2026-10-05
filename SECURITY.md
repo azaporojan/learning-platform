@@ -27,8 +27,15 @@ The pre-deployment review found and fixed the following (all in `server/index.js
 ## Operating rules
 
 - Every admin route uses `authenticateToken, requireAdmin`; every user route uses `authenticateToken`.
-  Only `/api/health`, `/api/login`, `/api/verify-code`, `/api/register`, `/api/users` (leaderboard)
-  and `/api/paths*` (course catalogue, read-only) are reachable without a session.
+  Only `/api/health`, `/api/login`, `/api/verify-code`, `/api/register`, `/api/users` (leaderboard),
+  `/api/paths*` and `/api/courses*` (course catalogue, read-only) are reachable without a session.
+  For phases a caller has not reached (not enrolled, previous phase unfinished, stars gate),
+  `GET /api/courses/:id` keeps lesson titles, summaries and task titles visible but omits the task
+  briefs, and `POST /api/tasks/:id/submit` enforces the same gates server-side (403); the legacy
+  read routes (`GET /api/paths/:id/details`, `GET /api/tasks/:id`) follow the same rule.
+- `GET /api/users/directory` (the Users page) shows every approved user's name, role, stars and
+  avatar to any logged-in user — by design, it replaces the old public leaderboard. Emails and
+  approval state stay admin-only (`/api/admin/users`).
 - Secrets live only in the Dokploy **Environment** tab (never in git): `JWT_SECRET` (≥ 32 random
   chars), `DB_PASSWORD`, `EMAIL_PASS`. `.env` files are git-ignored.
 - The database role `learning_platform` is not a superuser and owns only its own database

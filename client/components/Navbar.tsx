@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { NavLink, Link } from 'react-router-dom';
 import { useDialog } from '../hooks/useDialog';
 import { useOnlineUsers } from '../hooks/useOnlineUsers';
 import { useSocket } from '../contexts/SocketContext';
 import { AlertDialog } from './AlertDialog';
 import { apiUrl, getFileUrl } from '../config';
 import { NotificationDropdown } from './NotificationDropdown';
-import UsersManagementModal from './UsersManagementModal';
 import ApiKeysModal from './ApiKeysModal';
 
 interface NavbarProps {
@@ -32,12 +32,18 @@ const getGradientForName = (name: string): string => {
   return gradients[hash % gradients.length];
 };
 
+const navLinkClass = ({ isActive }: { isActive: boolean }) =>
+  `flex items-center px-4 py-2 rounded-xl text-sm font-bold transition-colors ${
+    isActive
+      ? 'bg-primary/20 text-primary-dark dark:text-primary'
+      : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+  }`;
+
 export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, currentUser, onLogout, onUserUpdated }) => {
   // Get online users from Socket.IO context
   const onlineUsers = useOnlineUsers();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [showUsersModal, setShowUsersModal] = useState(false);
   const [showApiKeysModal, setShowApiKeysModal] = useState(false);
   const [profileName, setProfileName] = useState('');
   const [selectedAvatarFile, setSelectedAvatarFile] = useState<File | null>(null);
@@ -183,10 +189,30 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
       />
 
       <nav className="bg-card-light dark:bg-card-dark border-b border-gray-200 dark:border-gray-700 px-6 py-3 flex justify-between items-center sticky top-0 z-50">
-        <div className="flex items-center">
-          <a href="#" className="text-3xl font-extrabold italic text-primary hover:text-primary-dark transition-colors">
+        <div className="flex items-center space-x-8">
+          <Link to="/courses" className="text-3xl font-extrabold italic text-primary hover:text-primary-dark transition-colors">
             Learning
-          </a>
+          </Link>
+
+          {/* Primary navigation */}
+          {currentUser && (
+            <div className="hidden md:flex items-center space-x-1">
+              <NavLink to="/courses" className={navLinkClass}>
+                <span className="material-icons text-lg mr-1.5">map</span>
+                {currentUser.role === 'admin' ? 'Courses' : 'All courses'}
+              </NavLink>
+              {currentUser.role !== 'admin' && (
+                <NavLink to="/my-courses" className={navLinkClass}>
+                  <span className="material-icons text-lg mr-1.5">school</span>
+                  My courses
+                </NavLink>
+              )}
+              <NavLink to="/users" className={navLinkClass}>
+                <span className="material-icons text-lg mr-1.5">group</span>
+                Users
+              </NavLink>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center space-x-6">
@@ -293,18 +319,23 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
                       <span className="text-sm text-gray-700 dark:text-gray-300">Edit Profile</span>
                     </button>
 
-                    {currentUser?.role === 'admin' && (
-                      <button
-                        className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                        onClick={() => {
-                          setShowUserMenu(false);
-                          setShowUsersModal(true);
-                        }}
-                      >
+                    {/* Small screens: the primary navigation lives in this menu */}
+                    <div className="md:hidden border-b border-gray-200 dark:border-gray-700">
+                      <Link to="/courses" onClick={() => setShowUserMenu(false)} className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+                        <span className="material-icons text-gray-600 dark:text-gray-400">map</span>
+                        <span className="text-sm text-gray-700 dark:text-gray-300">{currentUser.role === 'admin' ? 'Courses' : 'All courses'}</span>
+                      </Link>
+                      {currentUser.role !== 'admin' && (
+                        <Link to="/my-courses" onClick={() => setShowUserMenu(false)} className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+                          <span className="material-icons text-gray-600 dark:text-gray-400">school</span>
+                          <span className="text-sm text-gray-700 dark:text-gray-300">My courses</span>
+                        </Link>
+                      )}
+                      <Link to="/users" onClick={() => setShowUserMenu(false)} className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                         <span className="material-icons text-gray-600 dark:text-gray-400">group</span>
                         <span className="text-sm text-gray-700 dark:text-gray-300">Users</span>
-                      </button>
-                    )}
+                      </Link>
+                    </div>
 
                     {currentUser?.role === 'admin' && (
                       <button
@@ -429,15 +460,6 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
             </div>
           </div>
         </div>
-      )}
-
-      {/* Users Management Modal */}
-      {currentUser && currentUser.role === 'admin' && (
-        <UsersManagementModal
-          isOpen={showUsersModal}
-          onClose={() => setShowUsersModal(false)}
-          currentUserId={currentUser.id}
-        />
       )}
 
       {/* API Keys Modal */}

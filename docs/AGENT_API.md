@@ -29,7 +29,36 @@ Authorization: Bearer lp_…
 No cookie or CSRF handling is needed. Requests are rate-limited (600 per 15 minutes per IP).
 A revoked or unknown key, or a key whose owner is no longer an admin, gets `401 {"error":"Invalid API key"}`.
 
-## 3. Import a whole path in one call (recommended)
+## 3. Courses and phases
+
+Content is organised as **course → phases → lessons → tasks**. A *phase* is what the API calls a
+*path* (`/api/paths`); students see all phases of a course as one continuous road. Each phase has:
+
+| Field | Meaning |
+|---|---|
+| `course_id` | The course it belongs to (`null` = unassigned: an admin workspace, locked for students even through the legacy routes) |
+| `order_index` | Position of the phase on the course road |
+| `requires_previous` | `true` (default): locked until every mandatory task of the previous phase is approved. A previous phase with no mandatory tasks (e.g. one you are still filling) counts as done, so it never blocks the next one |
+| `stars_required` | Extra gate: students need this many stars (0 = none) |
+
+Students **enrol** in a course (`POST /api/courses/:id/enroll`); only enrolled students can start
+its road and they get notifications for new tasks in it. The gates are enforced by the server:
+`GET /api/courses/:id` returns locked phases with their lesson titles, summaries and task titles
+but without the task briefs, and `POST /api/tasks/:id/submit` answers `403 {"lockReasons":[…]}` for
+a phase the student has not reached. Phases of a course are always numbered `1..n`: creating or importing a
+phase appends it, and `PUT /api/paths/:id` with `order_index` (or a new `course_id`) re-sequences
+the others.
+
+| Method & path | Body | Purpose |
+|---|---|---|
+| `GET /api/courses` | — | List courses with phase/lesson counts, enrolment and (for students) progress |
+| `GET /api/courses/:id` | — | The whole road: phases → lessons → tasks with the caller's completion flags and per-phase `locked` / `lockReasons` |
+| `POST /api/courses` | `{name, description?}` | Create a course |
+| `PUT /api/courses/:id` | `{name, description?}` | Update a course |
+| `DELETE /api/courses/:id` | — | Delete a course; its phases are kept as unassigned |
+| `POST` / `DELETE /api/courses/:id/enroll` | — | Enrol in / leave a course (as the caller) |
+
+## 4. Import a whole path in one call (recommended)
 
 `POST /api/admin/paths/import` creates a path with all its lessons and tasks inside a single
 transaction and lays the nodes out exactly like the admin UI does (lessons left→right, each
@@ -49,6 +78,8 @@ curl -sS -X POST "$LEARNING_API_URL/admin/paths/import" \
   "name": "Git & GitHub",
   "description": "Version control from zero to pull requests",
   "stars_required": 0,
+  "courseId": 1,
+  "requires_previous": true,
   "lessons": [
     {
       "title": "Repositories and commits",
@@ -75,7 +106,9 @@ Fields:
 |---|---|---|
 | `name` | yes (new path) | Path title, ≤ 255 chars |
 | `description` | no | Plain text |
-| `stars_required` | no | Stars a student needs to unlock the path (default 0) |
+| `stars_required` | no | Extra gate: stars a student needs to start the phase (default 0 = none) |
+| `courseId` | no | Course the new phase is appended to (last position on its road). Omit for an unassigned phase |
+| `requires_previous` | no | Lock the phase until the previous phase of the course is finished (default `true`) |
 | `pathId` | instead of `name` | Append the lessons to an existing path, continuing its chain |
 | `lessons[]` | yes | 1–200 lessons, in order |
 | `lessons[].title` | yes | ≤ 255 chars |
@@ -105,17 +138,20 @@ message per problem; nothing is created in that case. Students who have already 
 are **not** emailed by the import (unlike single `POST /api/tasks` calls); the graph updates live
 in open browsers.
 
-## 4. Fine-grained endpoints
+## 5. Fine-grained endpoints
 
 All accept the same bearer header. Ids in responses are integers; `GET /api/paths` returns ids as strings.
 
 | Method & path | Body | Purpose |
 |---|---|---|
-| `GET /api/paths` | — | List paths (`id`, `title`, `description`, `requiredScore`, `status`) |
+| `GET /api/paths` | — | List paths (`id`, `title`, `description`, `requiredScore`, `status`, `course_id`, `order_index`, `requires_previous`) |
 | `GET /api/paths/:id/details` | — | Lessons of a path with their tasks, positions and completion flags |
-| `POST /api/paths` | `{name, description?, stars_required?}` | Create an empty path |
-| `PUT /api/paths/:id` | `{name, description?, stars_required?}` | Update a path |
-| `DELETE /api/paths/:id` | — | Delete a path and everything in it |
+| `POST /api/paths` | `{name, description?, stars_required?, course_id?, requires_previous?}` | Create an empty path (appended to the end of its course) |
+| `PUT /api/paths/:id` | `{name, description?, stars_required?, course_id?, order_index?, requires_previous?}` | Update a path; the course fields are optional |
+| `DELETE /api/paths/:id` | — | Delete a path and everything in it (its course is renumbered) |
+
+Removed in this release: `POST /api/paths/:id/unlock` (the old stars-only unlock). Access to a phase is
+now decided by course enrolment and the phase gates above; the call answers 404.
 | `POST /api/lessons` | `{pathId, title, description?, x, y, order, parentId?}` | Create one lesson (you supply the graph position) |
 | `PUT /api/lessons/:id` | `{title, description?, order?, x?, y?, parentId?}` | Update a lesson; the optional graph fields move it without deleting it (keeps tasks and submissions) |
 | `DELETE /api/lessons/:id` | — | Delete a lesson and its tasks |
@@ -137,9 +173,10 @@ lesson is locked until all mandatory tasks of every lesson before it are approve
 For the graph position convention used by `POST /lessons` / `POST /tasks`: the first lesson sits at
 `x=80, y=250`; each next lesson is `+250` on x with `parentId` = previous lesson; a lesson's first
 task is at `(lesson.x + 120, lesson.y ∓ 120)` (minus for odd `order`, plus for even) and each further
-task `+150` on x. The import endpoint does this for you.
+task `+150` on x. The import endpoint does this for you. (The course road in the UI is laid out from
+`order` alone; the stored positions are kept for compatibility.)
 
-## 5. Using it from a Claude agent
+## 6. Using it from a Claude agent
 
 **Review before students see it.** Imported content goes live immediately, and lesson/task
 descriptions are rendered as HTML in the app (the same as content typed into the rich-text editor).
