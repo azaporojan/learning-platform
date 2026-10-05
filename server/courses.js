@@ -119,8 +119,18 @@ async function placePhase(tx, pathId, courseId, position) {
   if (previousCourseId !== null && previousCourseId !== courseId) await renumberCourse(tx, previousCourseId);
 }
 
+// Route ids must be positive integers; anything else is a 404, not a database error.
+const parseId = (value) => (/^\d{1,9}$/.test(String(value)) ? Number(value) : null);
+
 function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId }) {
   boundDb = db;
+  api.param('id', (req, res, next, value) => {
+    if (!req.path.startsWith('/courses/')) return next();
+    const id = parseId(value);
+    if (id === null) return res.status(404).json({ error: 'Course not found' });
+    req.params.id = id;
+    next();
+  });
 
   async function getCaller(userId) {
     if (!userId) return null;

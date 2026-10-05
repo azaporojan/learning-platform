@@ -366,9 +366,24 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const freePhase = await admin(`/paths/${phase3.body.id}`, { method: 'PUT', json: { name: 'Phase 3', requires_previous: false } });
   assert.equal(freePhase.status, 200);
   assert.deepEqual((await stud(`/courses/${course.body.id}`)).body.phases[2].lockReasons, []);
+  // A previous phase without lessons (or without mandatory tasks) never blocks: the batched road
+  // and the per-request submit check agree on that
+  const phase4 = await admin('/paths', { method: 'POST', json: { name: 'Phase 4 (empty)', course_id: course.body.id, requires_previous: false } });
+  const phase5 = await admin('/paths', { method: 'POST', json: { name: 'Phase 5', course_id: course.body.id } });
+  const phase5Lesson = await admin('/lessons', { method: 'POST', json: { pathId: phase5.body.id, title: 'P5 L1', order: 1 } });
+  const phase5Task = await admin('/tasks', { method: 'POST', json: { lessonId: phase5Lesson.body.id, title: 'P5 T1', type: 'mandatory', xp: 10, deadline: '2030-01-01' } });
+  const roadFive = await stud(`/courses/${course.body.id}`);
+  assert.deepEqual(roadFive.body.phases.map((p) => [p.order_index, p.lockReasons]), [[1, []], [2, []], [3, []], [4, []], [5, []]]);
+  const fiveForm = new FormData();
+  fiveForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'p5.txt');
+  const fiveSubmit = await stud(`/tasks/${phase5Task.body.id}/submit`, { method: 'POST', body: fiveForm });
+  assert.equal(fiveSubmit.status, 201, JSON.stringify(fiveSubmit.body));
+  for (const p of [phase4, phase5]) assert.equal((await admin(`/paths/${p.body.id}`, { method: 'DELETE' })).status, 200);
   // Deleting the phase closes the gap in the numbering
   const dropPhase3 = await admin(`/paths/${phase3.body.id}`, { method: 'DELETE' });
   assert.equal(dropPhase3.status, 200);
+  assert.equal((await admin('/courses/abc')).status, 404);
+  assert.equal((await admin('/courses/abc', { method: 'DELETE' })).status, 404);
   assert.equal((await admin('/paths/999999', { method: 'DELETE' })).status, 404);
   // Add a star gate on phase 2 that the student (10 stars) does not meet
   const gate = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 500 } });

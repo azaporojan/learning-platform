@@ -25,6 +25,15 @@ ALTER TABLE paths ADD COLUMN IF NOT EXISTS course_id INTEGER REFERENCES courses(
 ALTER TABLE paths ADD COLUMN IF NOT EXISTS order_index INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE paths ADD COLUMN IF NOT EXISTS requires_previous BOOLEAN NOT NULL DEFAULT TRUE;
 CREATE INDEX IF NOT EXISTS idx_paths_course ON paths (course_id, order_index);
+-- Phases of a course are numbered 1..n; placePhase() renumbers inside one transaction, so the
+-- constraint is checked at commit (deferred) rather than row by row.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_paths_course_order') THEN
+    ALTER TABLE paths ADD CONSTRAINT uq_paths_course_order
+      UNIQUE (course_id, order_index) DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS course_enrollments (
   id          SERIAL PRIMARY KEY,
