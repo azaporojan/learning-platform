@@ -38,7 +38,7 @@ Content is organised as **course → phases → lessons → tasks**. A *phase* i
 |---|---|
 | `course_id` | The course it belongs to (`null` = unassigned: an admin workspace, locked for students even through the legacy routes) |
 | `order_index` | Position of the phase on the course road |
-| `requires_previous` | `true` (default): locked until every mandatory task of the previous phase is approved |
+| `requires_previous` | `true` (default): locked until every mandatory task of the previous phase is approved. A previous phase with no mandatory tasks (e.g. one you are still filling) counts as done, so it never blocks the next one |
 | `stars_required` | Extra gate: students need this many stars (0 = none) |
 
 Students **enrol** in a course (`POST /api/courses/:id/enroll`); only enrolled students can start
