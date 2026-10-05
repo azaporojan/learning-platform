@@ -1377,8 +1377,9 @@ api.get('/paths/:pathId/details', async (req, res) => {
       // In a real app, you'd implement more complex logic based on mandatory tasks of previous lesson
       // For now, let's say Lesson N is unlocked if Lesson N-1 mandatory tasks are done.
 
+      const { script: _script, ...lessonPublic } = lesson; // admin-only; served by GET /lessons/:id/script
       return {
-        ...lesson,
+        ...lessonPublic,
         completed: isLessonCompleted,
         tasks: lessonTasks.map(t => ({
           ...t,
@@ -1461,6 +1462,34 @@ api.put('/lessons/:id', authenticateToken, requireAdmin, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to update lesson' });
+  }
+});
+
+// Lesson script (Admin only): the teacher's Markdown notes for a lesson. Never sent to students —
+// the course/road endpoints do not select this column, and /paths/:id/details strips it.
+const MAX_SCRIPT_CHARS = 200000;
+api.get('/lessons/:id/script', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT id, title, script, updated_at FROM lessons WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Lesson not found' });
+    res.json({ id: rows[0].id, title: rows[0].title, script: rows[0].script || '', updated_at: rows[0].updated_at });
+  } catch (err) {
+    console.error('[GET /lessons/:id/script] Error:', err);
+    res.status(500).json({ error: 'Failed to fetch lesson script' });
+  }
+});
+
+api.put('/lessons/:id/script', authenticateToken, requireAdmin, async (req, res) => {
+  const { script } = req.body || {};
+  if (typeof script !== 'string') return res.status(400).json({ error: 'script must be a string' });
+  if (script.length > MAX_SCRIPT_CHARS) return res.status(400).json({ error: `script is too long (max ${MAX_SCRIPT_CHARS} characters)` });
+  try {
+    const [result] = await db.query('UPDATE lessons SET script = ? WHERE id = ?', [script, req.params.id]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Lesson not found' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[PUT /lessons/:id/script] Error:', err);
+    res.status(500).json({ error: 'Failed to save lesson script' });
   }
 });
 
@@ -1811,6 +1840,41 @@ api.get('/tasks/:id/submissions', authenticateToken, async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: 'Failed to fetch submissions' });
+  }
+});
+
+// All submissions across courses (Admin only): who submitted what, where it sits in the course,
+// and its review status — the review inbox. ?status=pending|approved|rejected|all (default pending).
+api.get('/admin/submissions', authenticateToken, requireAdmin, async (req, res) => {
+  const status = ['pending', 'approved', 'rejected', 'all'].includes(req.query.status) ? req.query.status : 'pending';
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
+  try {
+    const [rows] = await db.query(
+      `SELECT s.id, s.status, s.submitted_at, s.is_viewed, s.file_name, s.file_size,
+              LEFT(COALESCE(s.comment, ''), 300) AS comment,
+              u.id AS user_id, u.name AS user_name, u.avatar_url AS user_avatar,
+              t.id AS task_id, t.title AS task_title, t.type AS task_type, t.xp_reward,
+              l.id AS lesson_id, l.title AS lesson_title,
+              p.id AS path_id, p.name AS path_name, p.order_index AS phase_order,
+              c.id AS course_id, c.name AS course_name
+       FROM task_submissions s
+       INNER JOIN users u ON u.id = s.user_id
+       INNER JOIN tasks t ON t.id = s.task_id
+       INNER JOIN lessons l ON l.id = t.lesson_id
+       INNER JOIN paths p ON p.id = l.path_id
+       LEFT JOIN courses c ON c.id = p.course_id
+       ${status === 'all' ? '' : "WHERE COALESCE(s.status, 'pending') = ?"}
+       ORDER BY s.submitted_at DESC
+       LIMIT ${limit}`,
+      status === 'all' ? [] : [status]
+    );
+    const [counts] = await db.query(`SELECT COALESCE(status, 'pending') AS status, COUNT(*) AS n FROM task_submissions GROUP BY 1`);
+    const summary = { pending: 0, approved: 0, rejected: 0 };
+    counts.forEach((c) => { summary[c.status] = c.n; });
+    res.json({ submissions: rows, counts: summary });
+  } catch (err) {
+    console.error('[GET /admin/submissions] Error:', err);
     res.status(500).json({ error: 'Failed to fetch submissions' });
   }
 });

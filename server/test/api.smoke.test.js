@@ -263,6 +263,15 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(selfParent.status, 400);
   const missing = await admin('/lessons/999999', { method: 'PUT', json: { title: 'nope' } });
   assert.equal(missing.status, 404);
+  // Lesson script (admin-only Markdown notes): saved/read by admins, invisible everywhere else
+  const badScript = await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 42 } });
+  assert.equal(badScript.status, 400);
+  const saveScript = await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Plan\n\n| step | min |\n|---|---|\n| intro | 10 |' } });
+  assert.equal(saveScript.status, 200, JSON.stringify(saveScript.body));
+  const readScript = await admin(`/lessons/${lesson.body.id}/script`);
+  assert.equal(readScript.status, 200);
+  assert.match(readScript.body.script, /^# Plan/);
+  assert.equal((await admin('/lessons/999999/script')).status, 404);
   const gone = await admin(`/lessons/${second.body.id}`, { method: 'DELETE' });
   assert.equal(gone.status, 200);
 
@@ -273,6 +282,11 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const addStars = await stud(`/admin/users/${student.id}/add-stars`, { method: 'POST', json: { stars: 100 } });
   assert.equal(addStars.status, 403);
 
+  assert.equal((await stud(`/lessons/${lesson.body.id}/script`)).status, 403);
+  assert.equal((await stud(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 'x' } })).status, 403);
+  const detailsNoScript = await stud(`/paths/${paths.body[0].id}/details`);
+  assert.equal(detailsNoScript.body[0].script, undefined);
+  assert.equal(JSON.stringify(detailsNoScript.body).includes('# Plan'), false);
   const viewed = await stud(`/tasks/${task.body.id}/mark-viewed`, { method: 'POST' });
   assert.equal(viewed.status, 200);
   const viewedAgain = await stud(`/tasks/${task.body.id}/mark-viewed`, { method: 'POST' }); // upsert path
@@ -331,6 +345,22 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal((await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: blank })).status, 400);
   for (const sid of [commentOnly.body.id, both.body.id]) assert.equal((await stud(`/submissions/${sid}`, { method: 'DELETE' })).status, 200);
   assert.equal(fs.readdirSync(uploadsDir).length, 1);
+
+  // Admin review inbox: every submission with its place in the course and a deep-link target
+  assert.equal((await stud('/admin/submissions')).status, 403);
+  const inbox = await admin('/admin/submissions');
+  assert.equal(inbox.status, 200, JSON.stringify(inbox.body));
+  assert.equal(inbox.body.counts.pending, 1);
+  assert.equal(inbox.body.submissions.length, 1);
+  const row = inbox.body.submissions[0];
+  assert.equal(row.user_name, 'Student');
+  assert.equal(row.task_id, task.body.id);
+  assert.equal(row.lesson_id, lesson.body.id);
+  assert.equal(row.course_id, course.body.id);
+  assert.equal(row.path_name, 'Phase 1');
+  assert.equal(row.status, 'pending');
+  assert.equal((await admin('/admin/submissions?status=approved')).body.submissions.length, 0);
+  assert.equal((await admin('/admin/submissions?status=all')).body.submissions.length, 1);
 
   // HTML uploads are served as downloads, never rendered inline
   const raw = await fetch(`${BASE}/uploads/${stored[0]}`);

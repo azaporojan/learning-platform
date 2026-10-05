@@ -8,6 +8,8 @@ import { SocketProvider } from './contexts/SocketContext';
 import { CoursesPage } from './pages/CoursesPage';
 import { CoursePage } from './pages/CoursePage';
 import { UsersPage } from './pages/UsersPage';
+import { LessonScriptPage } from './pages/LessonScriptPage';
+import { SubmissionsPage } from './pages/SubmissionsPage';
 import { User } from './types';
 import { apiUrl } from './config';
 
@@ -144,7 +146,9 @@ const App: React.FC = () => {
               element={isAdmin ? <Navigate to="/courses" replace /> : <CoursesPage mode="mine" currentUser={currentUser} />}
             />
             <Route path="/courses/:id" element={<CoursePage currentUser={currentUser} />} />
+            <Route path="/courses/:courseId/lessons/:lessonId/script" element={<LessonScriptPage currentUser={currentUser} />} />
             <Route path="/users" element={<UsersPage currentUser={currentUser} />} />
+            <Route path="/submissions" element={<SubmissionsPage currentUser={currentUser} />} />
             <Route path="*" element={<Navigate to="/courses" replace />} />
           </Routes>
         </main>

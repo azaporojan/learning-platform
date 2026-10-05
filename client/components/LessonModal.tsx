@@ -14,6 +14,7 @@ interface LessonModalProps {
   onClose: () => void;
   onChanged: () => void;
   onOpenTask: (task: RoadTask) => void;
+  onOpenScript?: () => void; // admin: the teacher's Markdown script for this lesson
 }
 
 const isProbablyHtml = (value: string) => /<\s*[a-z][\s\S]*>/i.test(value);
@@ -28,7 +29,7 @@ const toHtml = (value: string) => {
 
 // View a lesson (summary + its tasks); admins can edit the title/summary with the rich-text
 // editor or delete the lesson.
-export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, isAdmin, onClose, onChanged, onOpenTask }) => {
+export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, isAdmin, onClose, onChanged, onOpenTask, onOpenScript }) => {
   const [mode, setMode] = useState<'view' | 'edit' | 'delete'>('view');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -244,6 +245,11 @@ export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, is
                   <button onClick={() => setMode('delete')} className="px-5 py-2.5 bg-red-500 hover:bg-red-600 text-white font-bold rounded-lg transition-colors flex items-center">
                     <span className="material-icons text-sm mr-1">delete</span>Delete
                   </button>
+                  {onOpenScript && (
+                    <button onClick={onOpenScript} title="Your Markdown notes for teaching this lesson (students never see them)" className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg transition-colors flex items-center">
+                      <span className="material-icons text-sm mr-1">description</span>Lesson script
+                    </button>
+                  )}
                 </div>
               ) : <div />}
               <button onClick={onClose} className="px-6 py-2.5 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold rounded-lg transition-colors">Close</button>
