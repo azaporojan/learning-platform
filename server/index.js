@@ -1118,7 +1118,8 @@ api.post('/tasks/:taskId/mark-viewed', authenticateToken, async (req, res) => {
 
 // Get all paths with unlock status for current user
 // Courses (course → phases → lessons → tasks), enrolment and the users directory.
-require('./courses').registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId });
+const courseRoutes = require('./courses');
+courseRoutes.registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId });
 
 api.get('/paths', async (req, res) => {
   const userId = optionalUserId(req);
@@ -1184,41 +1185,42 @@ api.post('/paths', authenticateToken, async (req, res) => {
     if (userRows.length === 0 || userRows[0].role !== 'admin') {
       return res.status(403).json({ error: 'Admin access required' });
     }
-    const phaseErrors = validatePhaseFields({ course_id, requires_previous });
+    const phaseErrors = validatePhaseFields({ name, course_id, requires_previous });
     if (phaseErrors.length > 0) return res.status(400).json({ error: phaseErrors.join('; ') });
 
-    // A new phase goes to the end of its course's road.
+    // A new phase goes to the end of its course's road (placePhase keeps the numbering 1..n).
     const courseId = course_id ?? null;
-    const [last] = await db.query(
-      courseId === null
-        ? 'SELECT COALESCE(MAX(order_index), 0) AS max FROM paths WHERE course_id IS NULL'
-        : 'SELECT COALESCE(MAX(order_index), 0) AS max FROM paths WHERE course_id = ?',
-      courseId === null ? [] : [courseId]
-    );
-    const [result] = await db.query(
-      'INSERT INTO paths (name, description, stars_required, course_id, order_index, requires_previous) VALUES (?, ?, ?, ?, ?, ?)',
-      [name, description || '', stars_required || 0, courseId, (last[0].max || 0) + 1, requires_previous ?? true]
-    );
+    const created = await db.transaction(async (tx) => {
+      const [result] = await tx.query(
+        'INSERT INTO paths (name, description, stars_required, course_id, order_index, requires_previous) VALUES (?, ?, ?, ?, ?, ?)',
+        [name.trim(), description || '', stars_required || 0, null, 1, requires_previous ?? true]
+      );
+      await courseRoutes.placePhase(tx, result.insertId, courseId, null);
+      const [rows] = await tx.query('SELECT * FROM paths WHERE id = ?', [result.insertId]);
+      return rows[0];
+    });
     if (courseId !== null) io.emit('course:updated', { courseId });
 
     res.json({
-      id: result.insertId,
-      name,
-      description,
-      stars_required: stars_required || 0,
-      course_id: courseId,
-      order_index: (last[0].max || 0) + 1,
-      requires_previous: requires_previous ?? true
+      id: created.id,
+      name: created.name,
+      description: created.description,
+      stars_required: created.stars_required,
+      course_id: created.course_id,
+      order_index: created.order_index,
+      requires_previous: created.requires_previous
     });
   } catch (error) {
+    if (error.status === 404) return res.status(404).json({ error: error.message });
     console.error('[POST /paths] Error:', error);
     res.status(500).json({ error: 'Failed to create path' });
   }
 });
 
 // Optional course fields of a path ("phase"): where it sits on a course road and how it is gated.
-function validatePhaseFields({ course_id, order_index, requires_previous }) {
+function validatePhaseFields({ name, course_id, order_index, requires_previous }) {
   const errors = [];
+  if (typeof name !== 'string' || !name.trim() || name.length > 255) errors.push('name is required (max 255 chars)');
   if (course_id !== undefined && course_id !== null && (!Number.isInteger(course_id) || course_id < 1)) errors.push('course_id must be a positive integer or null');
   if (order_index !== undefined && (!Number.isInteger(order_index) || order_index < 1)) errors.push('order_index must be a positive integer');
   if (requires_previous !== undefined && typeof requires_previous !== 'boolean') errors.push('requires_previous must be a boolean');
@@ -1236,25 +1238,36 @@ api.put('/paths/:id', authenticateToken, async (req, res) => {
     if (userRows.length === 0 || userRows[0].role !== 'admin') {
       return res.status(403).json({ error: 'Admin access required' });
     }
-    const phaseErrors = validatePhaseFields({ course_id, order_index, requires_previous });
+    const phaseErrors = validatePhaseFields({ name, course_id, order_index, requires_previous });
     if (phaseErrors.length > 0) return res.status(400).json({ error: phaseErrors.join('; ') });
 
     // Course / order / gating fields are optional so older callers (and the agent API) that
-    // send only name/description/stars_required keep working.
-    const sets = ['name = ?', 'description = ?', 'stars_required = ?'];
-    const params = [name, description || '', stars_required || 0];
-    if (course_id !== undefined) { sets.push('course_id = ?'); params.push(course_id); }
-    if (order_index !== undefined) { sets.push('order_index = ?'); params.push(order_index); }
-    if (requires_previous !== undefined) { sets.push('requires_previous = ?'); params.push(requires_previous); }
-    params.push(id);
-    const [before] = await db.query('SELECT course_id FROM paths WHERE id = ?', [id]);
-    const [result] = await db.query(`UPDATE paths SET ${sets.join(', ')} WHERE id = ?`, params);
-    if (result.affectedRows === 0) return res.status(404).json({ error: 'Path not found' });
+    // send only name/description/stars_required keep working. A change of course or order goes
+    // through placePhase so the phases of each affected course stay numbered 1..n.
+    const touched = await db.transaction(async (tx) => {
+      const [before] = await tx.query('SELECT course_id FROM paths WHERE id = ? FOR UPDATE', [id]);
+      if (before.length === 0) { const err = new Error('Path not found'); err.status = 404; throw err; }
+      const sets = ['name = ?', 'description = ?', 'stars_required = ?'];
+      const params = [name.trim(), description || '', stars_required || 0];
+      if (requires_previous !== undefined) { sets.push('requires_previous = ?'); params.push(requires_previous); }
+      params.push(id);
+      await tx.query(`UPDATE paths SET ${sets.join(', ')} WHERE id = ?`, params);
 
-    const touched = new Set([before[0]?.course_id, course_id].filter((c) => c !== undefined && c !== null));
-    touched.forEach((courseId) => io.emit('course:updated', { courseId }));
+      const oldCourseId = before[0].course_id;
+      const newCourseId = course_id === undefined ? oldCourseId : course_id;
+      if (course_id !== undefined || order_index !== undefined) {
+        // Same course + no explicit position → keep its place; new course + no position → append.
+        const position = order_index !== undefined ? order_index : (newCourseId === oldCourseId ? undefined : null);
+        if (position !== undefined) await courseRoutes.placePhase(tx, Number(id), newCourseId, position);
+        if (oldCourseId !== null && oldCourseId !== newCourseId) await courseRoutes.renumberCourse(tx, oldCourseId);
+      }
+      return [oldCourseId, newCourseId].filter((c) => c !== null && c !== undefined);
+    });
+
+    new Set(touched).forEach((courseId) => io.emit('course:updated', { courseId }));
     res.json({ success: true });
   } catch (error) {
+    if (error.status === 404) return res.status(404).json({ error: error.message });
     console.error('[PUT /paths/:id] Error:', error);
     res.status(500).json({ error: 'Failed to update path' });
   }
@@ -1689,6 +1702,14 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
   }
 
   try {
+    // Phase gating is enforced here, not only in the UI: a student cannot submit to a task of a
+    // phase they have not reached (not enrolled, previous phase unfinished, stars gate).
+    const lockReasons = await courseRoutes.taskLockReasons(userId, id);
+    if (lockReasons.length > 0) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(403).json({ error: 'This phase is locked for you', lockReasons });
+    }
+
     const [result] = await db.query(
       'INSERT INTO task_submissions (task_id, user_id, file_name, file_path, file_size) VALUES (?, ?, ?, ?, ?)',
       [id, userId, req.file.originalname, req.file.filename, req.file.size]
@@ -2282,18 +2303,13 @@ api.post('/admin/paths/import', authenticateToken, requireAdmin, async (req, res
           const [courses] = await tx.query('SELECT id FROM courses WHERE id = ?', [courseId]);
           if (courses.length === 0) { const err = new Error('Course not found'); err.status = 404; throw err; }
         }
-        const [last] = await tx.query(
-          courseId === null
-            ? 'SELECT COALESCE(MAX(order_index), 0) AS max FROM paths WHERE course_id IS NULL'
-            : 'SELECT COALESCE(MAX(order_index), 0) AS max FROM paths WHERE course_id = ?',
-          courseId === null ? [] : [courseId]
-        );
         const [result] = await tx.query(
           'INSERT INTO paths (name, description, stars_required, course_id, order_index, requires_previous) VALUES (?, ?, ?, ?, ?, ?)',
-          [body.name.trim(), body.description || '', body.stars_required || 0, courseId, (last[0].max || 0) + 1, body.requires_previous ?? true]
+          [body.name.trim(), body.description || '', body.stars_required || 0, null, 1, body.requires_previous ?? true]
         );
         pathId = result.insertId;
         pathName = body.name.trim();
+        await courseRoutes.placePhase(tx, pathId, courseId, null); // appends; numbering stays 1..n
       } else {
         pathId = Number(body.pathId);
         // Lock the path row for the rest of the transaction so two concurrent appends

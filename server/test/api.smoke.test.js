@@ -200,6 +200,14 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(phase2.body.requires_previous, true);
   const badPhase = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', requires_previous: 'yes' } });
   assert.equal(badPhase.status, 400);
+  const noName = await admin('/paths', { method: 'POST', json: { course_id: course.body.id } });
+  assert.equal(noName.status, 400);
+  const ghostCourse = await admin('/paths', { method: 'POST', json: { name: 'x', course_id: 999999 } });
+  assert.equal(ghostCourse.status, 404);
+  const ghostCoursePut = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', course_id: 999999 } });
+  assert.equal(ghostCoursePut.status, 404);
+  const missingPhase = await admin('/paths/999999', { method: 'PUT', json: { name: 'x' } });
+  assert.equal(missingPhase.status, 404);
   const paths = await anon('/paths');
   assert.equal(paths.body.length, 2);
   assert.equal(paths.body[0].course_id, course.body.id);
@@ -251,6 +259,16 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const viewedAgain = await stud(`/tasks/${task.body.id}/mark-viewed`, { method: 'POST' }); // upsert path
   assert.equal(viewedAgain.status, 200);
 
+  // Phase gating is server-side: without enrolment the submission is refused (and the upload dropped)
+  const earlyForm = new FormData();
+  earlyForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'early.txt');
+  const early = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: earlyForm });
+  assert.equal(early.status, 403, JSON.stringify(early.body));
+  assert.deepEqual(early.body.lockReasons, ['enroll']);
+  assert.equal(fs.readdirSync(uploadsDir).length, 0);
+  const firstEnrol = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' });
+  assert.equal(firstEnrol.status, 200);
+
   const form = new FormData();
   form.append('file', new Blob(['<script>alert(1)</script>'], { type: 'text/html' }), '../evil name.html');
   const submit = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: form });
@@ -284,10 +302,24 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(phase2Lesson.status, 201);
   const phase2Task = await admin('/tasks', { method: 'POST', json: { lessonId: phase2Lesson.body.id, title: 'P2 T1', type: 'mandatory', xp: 10, deadline: '2030-01-01' } });
   assert.equal(phase2Task.status, 201);
+  const describe = await admin(`/tasks/${phase2Task.body.id}`, { method: 'PUT', json: { title: 'P2 T1', type: 'mandatory', xp: 10, deadline: '2030-01-01', description: 'secret brief' } });
+  assert.equal(describe.status, 200);
+  const leaveFirst = await stud(`/courses/${course.body.id}/enroll`, { method: 'DELETE' });
+  assert.equal(leaveFirst.status, 200);
   const roadBefore = await stud(`/courses/${course.body.id}`);
   assert.equal(roadBefore.status, 200);
   assert.equal(roadBefore.body.enrolled, false);
   assert.deepEqual(roadBefore.body.phases.map((p) => p.lockReasons), [['enroll'], ['enroll']]);
+  // Locked phases come back as an outline only (titles, no descriptions)
+  assert.equal(roadBefore.body.phases[1].lessons[0].tasks[0].title, 'P2 T1');
+  assert.equal(roadBefore.body.phases[1].lessons[0].tasks[0].description, '');
+  // …and the server refuses submissions to a phase the student has not reached
+  const lockedForm = new FormData();
+  lockedForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'early.txt');
+  const lockedSubmit = await stud(`/tasks/${phase2Task.body.id}/submit`, { method: 'POST', body: lockedForm });
+  assert.equal(lockedSubmit.status, 403, JSON.stringify(lockedSubmit.body));
+  assert.deepEqual(lockedSubmit.body.lockReasons, ['enroll']);
+  assert.equal(fs.readdirSync(uploadsDir).length, 1); // the rejected upload was removed
   const enrol = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' });
   assert.equal(enrol.status, 200);
   const enrolAgain = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' }); // idempotent
@@ -304,11 +336,22 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(roadAfter.body.phases[0].lessons[0].completed, true);
   assert.equal(roadAfter.body.phases[0].lessons[0].tasks[0].completed, true);
   assert.equal(roadAfter.body.phases[1].lessons[0].tasks[0].is_new, true);
+  assert.equal(roadAfter.body.phases[1].lessons[0].tasks[0].description, 'secret brief'); // reached → full content
   // Add a star gate on phase 2 that the student (10 stars) does not meet
   const gate = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 500 } });
   assert.equal(gate.status, 200);
   const roadGated = await stud(`/courses/${course.body.id}`);
   assert.deepEqual(roadGated.body.phases[1].lockReasons, ['stars']);
+  const starsForm = new FormData();
+  starsForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'early.txt');
+  const starsSubmit = await stud(`/tasks/${phase2Task.body.id}/submit`, { method: 'POST', body: starsForm });
+  assert.equal(starsSubmit.status, 403);
+  assert.deepEqual(starsSubmit.body.lockReasons, ['stars']);
+  // Admins are never gated
+  const adminForm = new FormData();
+  adminForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'admin.txt');
+  const adminSubmit = await admin(`/tasks/${phase2Task.body.id}/submit`, { method: 'POST', body: adminForm });
+  assert.equal(adminSubmit.status, 201);
   // Admin never sees locks and gets unviewed-submission counts instead of NEW badges
   const adminRoad = await admin(`/courses/${course.body.id}`);
   assert.deepEqual(adminRoad.body.phases.map((p) => p.locked), [false, false]);
@@ -336,6 +379,21 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(orphan.course_id, null);
   const reattach = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 0, course_id: course.body.id, order_index: 2 } });
   assert.equal(reattach.status, 200);
+  // Phases of a course are always numbered 1..n: moving one re-sequences the others
+  const phaseOrder = async () => (await admin(`/courses/${course.body.id}`)).body.phases.map((p) => [p.name, p.order_index]);
+  assert.deepEqual(await phaseOrder(), [['Phase 1', 1], ['Phase 2', 2]]);
+  const toFront = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 0, order_index: 1 } });
+  assert.equal(toFront.status, 200);
+  assert.deepEqual(await phaseOrder(), [['Phase 2', 1], ['Phase 1', 2]]);
+  const backAgain = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 0, order_index: 9 } }); // beyond the end → last
+  assert.equal(backAgain.status, 200);
+  assert.deepEqual(await phaseOrder(), [['Phase 1', 1], ['Phase 2', 2]]);
+  // Now that the phase 2 gate is gone and phase 1 is done, the student can submit
+  const openForm = new FormData();
+  openForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'ok.txt');
+  await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' });
+  const openSubmit = await stud(`/tasks/${phase2Task.body.id}/submit`, { method: 'POST', body: openForm });
+  assert.equal(openSubmit.status, 201, JSON.stringify(openSubmit.body));
 
   // Chats: membership enforced, bulk insert + ON CONFLICT paths work
   const chat = await admin('/chats', { method: 'POST', json: { name: 'General', memberIds: [student.id, student.id, 9999] } });

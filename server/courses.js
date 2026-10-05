@@ -17,8 +17,86 @@
 //   - stars_required > 0: the student has at least that many stars
 // ---------------------------------------------------------------------------
 
+const isAdminRole = (role) => role === 'admin';
+
+// Why a phase (path) is locked for a user: [] = accessible. Mirrors the per-phase logic of
+// GET /courses/:id and is what the submission route enforces. Paths outside any course keep
+// the legacy behaviour (no course gating). Admins are never locked.
+async function phaseLockReasons(db, userId, pathId) {
+  const [users] = await db.query('SELECT role, stars FROM users WHERE id = ?', [userId]);
+  if (users.length === 0) return ['enroll'];
+  if (isAdminRole(users[0].role)) return [];
+  const [paths] = await db.query('SELECT id, course_id, order_index, stars_required, requires_previous FROM paths WHERE id = ?', [pathId]);
+  if (paths.length === 0) return [];
+  const path = paths[0];
+  if (path.course_id === null) return [];
+
+  const reasons = [];
+  const [enrolled] = await db.query('SELECT 1 FROM course_enrollments WHERE user_id = ? AND course_id = ?', [userId, path.course_id]);
+  if (enrolled.length === 0) reasons.push('enroll');
+  if (path.requires_previous) {
+    const [previous] = await db.query(
+      `SELECT id FROM paths WHERE course_id = ? AND (order_index < ? OR (order_index = ? AND id < ?))
+       ORDER BY order_index DESC, id DESC LIMIT 1`,
+      [path.course_id, path.order_index, path.order_index, path.id]
+    );
+    if (previous.length > 0) {
+      const [pending] = await db.query(
+        `SELECT COUNT(*) AS n FROM tasks t INNER JOIN lessons l ON l.id = t.lesson_id
+         WHERE l.path_id = ? AND t.type = 'mandatory'
+           AND NOT EXISTS (SELECT 1 FROM user_progress up WHERE up.user_id = ? AND up.entity_type = 'task' AND up.entity_id = t.id)`,
+        [previous[0].id, userId]
+      );
+      if (pending[0].n > 0) reasons.push('previous');
+    }
+  }
+  if (path.stars_required > 0 && (users[0].stars || 0) < path.stars_required) reasons.push('stars');
+  return reasons;
+}
+
+async function taskLockReasons(db, userId, taskId) {
+  const [rows] = await db.query('SELECT l.path_id FROM tasks t INNER JOIN lessons l ON l.id = t.lesson_id WHERE t.id = ?', [taskId]);
+  if (rows.length === 0) return [];
+  return phaseLockReasons(db, userId, rows[0].path_id);
+}
+
+let boundDb = null;
+
+// Renumber a course's phases 1..n (by current order_index, then id).
+async function renumberCourse(tx, courseId) {
+  await tx.query(
+    `UPDATE paths p SET order_index = o.rn
+     FROM (SELECT id, ROW_NUMBER() OVER (ORDER BY order_index ASC, id ASC) AS rn FROM paths WHERE course_id = ?) o
+     WHERE p.id = o.id AND p.order_index <> o.rn`,
+    [courseId]
+  );
+}
+
+// Put a phase into a course at a 1-based position (null = append) and keep every phase of the
+// course numbered 1..n without gaps or duplicates. Runs inside the caller's transaction and
+// locks the course row, so concurrent appends cannot pick the same index.
+async function placePhase(tx, pathId, courseId, position) {
+  if (courseId === null || courseId === undefined) {
+    await tx.query('UPDATE paths SET course_id = NULL WHERE id = ?', [pathId]);
+    return;
+  }
+  const [courses] = await tx.query('SELECT id FROM courses WHERE id = ? FOR UPDATE', [courseId]);
+  if (courses.length === 0) { const err = new Error('Course not found'); err.status = 404; throw err; }
+  // Spread the existing phases out (2, 4, 6, …) so the moved one can slot in between (2k-1).
+  await tx.query('UPDATE paths SET order_index = order_index * 2 WHERE course_id = ? AND id <> ?', [courseId, pathId]);
+  let target;
+  if (position === null || position === undefined) {
+    const [max] = await tx.query('SELECT COALESCE(MAX(order_index), 0) AS max FROM paths WHERE course_id = ? AND id <> ?', [courseId, pathId]);
+    target = max[0].max + 1;
+  } else {
+    target = position * 2 - 1;
+  }
+  await tx.query('UPDATE paths SET course_id = ?, order_index = ? WHERE id = ?', [courseId, target, pathId]);
+  await renumberCourse(tx, courseId);
+}
+
 function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId }) {
-  const isAdminRole = (role) => role === 'admin';
+  boundDb = db;
 
   async function getCaller(userId) {
     if (!userId) return null;
@@ -177,10 +255,10 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
       let lessons = [];
       let tasks = [];
       if (pathIds.length > 0) {
-        [lessons] = await db.query(`SELECT * FROM lessons WHERE path_id IN (${pathIds.join(',')}) ORDER BY order_index ASC, id ASC`);
+        [lessons] = await db.query('SELECT * FROM lessons WHERE path_id = ANY(?) ORDER BY order_index ASC, id ASC', [pathIds]);
         const lessonIds = lessons.map((l) => l.id);
         if (lessonIds.length > 0) {
-          [tasks] = await db.query(`SELECT * FROM tasks WHERE lesson_id IN (${lessonIds.join(',')}) ORDER BY order_index ASC, id ASC`);
+          [tasks] = await db.query('SELECT * FROM tasks WHERE lesson_id = ANY(?) ORDER BY order_index ASC, id ASC', [lessonIds]);
         }
       }
       const taskIds = tasks.map((t) => t.id);
@@ -197,12 +275,12 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
           if (admin) {
             const [unviewed] = await db.query(`
               SELECT task_id, COUNT(*) AS count FROM task_submissions
-              WHERE task_id IN (${taskIds.join(',')}) AND status != 'rejected' AND (is_viewed = FALSE OR is_viewed IS NULL)
-              GROUP BY task_id`);
+              WHERE task_id = ANY(?) AND status != 'rejected' AND (is_viewed = FALSE OR is_viewed IS NULL)
+              GROUP BY task_id`, [taskIds]);
             const map = new Map(unviewed.map((u) => [u.task_id, u.count]));
             tasks.forEach((t) => { t.unviewed_count = map.get(t.id) || 0; });
           } else {
-            const [views] = await db.query(`SELECT task_id, viewed_at FROM user_task_views WHERE user_id = ? AND task_id IN (${taskIds.join(',')})`, [caller.id]);
+            const [views] = await db.query('SELECT task_id, viewed_at FROM user_task_views WHERE user_id = ? AND task_id = ANY(?)', [caller.id, taskIds]);
             const map = new Map(views.map((v) => [v.task_id, v.viewed_at]));
             tasks.forEach((t) => { t.is_new = !map.get(t.id); });
           }
@@ -238,6 +316,11 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
           if (p.stars_required > 0 && (caller?.stars || 0) < p.stars_required) lockReasons.push('stars');
         }
         previousPhaseDone = phaseLessons.every(lessonMandatoryDone);
+        // Locked phases are shown as an outline only: titles stay (the road needs them), the
+        // lesson and task descriptions are not sent until the student reaches the phase.
+        if (lockReasons.length > 0) {
+          phaseLessons.forEach((l) => { l.description = ''; l.tasks.forEach((t) => { t.description = ''; }); });
+        }
         return {
           id: p.id, name: p.name, description: p.description || '', order_index: p.order_index,
           stars_required: p.stars_required, requires_previous: p.requires_previous,
@@ -267,4 +350,10 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
   });
 }
 
-module.exports = { registerCourseRoutes };
+module.exports = {
+  registerCourseRoutes,
+  placePhase,
+  renumberCourse,
+  phaseLockReasons: (userId, pathId) => phaseLockReasons(boundDb, userId, pathId),
+  taskLockReasons: (userId, taskId) => taskLockReasons(boundDb, userId, taskId),
+};
