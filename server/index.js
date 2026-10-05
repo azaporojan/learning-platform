@@ -1380,16 +1380,47 @@ api.post('/lessons', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
+// Optional graph fields shared by PUT /lessons/:id and PUT /tasks/:id. Each one is applied only
+// when present, so existing callers that send title/description alone keep working.
+function validateGraphFields({ order, x, y }) {
+  const errors = [];
+  if (order !== undefined && (!Number.isInteger(order) || order < 1)) errors.push('order must be a positive integer');
+  if (x !== undefined && !Number.isInteger(x)) errors.push('x must be an integer');
+  if (y !== undefined && !Number.isInteger(y)) errors.push('y must be an integer');
+  return errors;
+}
+
 // Update Lesson (Admin only)
 api.put('/lessons/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { title, description } = req.body;
+  const { title, description, order, x, y, parentId } = req.body;
+
+  if (typeof title !== 'string' || !title.trim() || title.length > 255) {
+    return res.status(400).json({ error: 'title is required (max 255 chars)' });
+  }
+  const errors = validateGraphFields({ order, x, y });
+  if (parentId !== undefined && parentId !== null && (!Number.isInteger(parentId) || parentId < 1)) {
+    errors.push('parentId must be a positive integer or null');
+  }
+  if (parentId !== undefined && parentId !== null && Number(parentId) === Number(id)) {
+    errors.push('a lesson cannot be its own parent');
+  }
+  if (errors.length > 0) return res.status(400).json({ error: errors.join('; ') });
 
   try {
-    await db.query(
-      'UPDATE lessons SET title = ?, description = ? WHERE id = ?',
-      [title, description || '', id]
-    );
+    // Optional graph fields (order / position / parent) let an admin or the agent API move a
+    // node without deleting it — deleting would cascade to tasks and student submissions.
+    const sets = ['title = ?', 'description = ?'];
+    const params = [title, description || ''];
+    if (order !== undefined) { sets.push('order_index = ?'); params.push(order); }
+    if (x !== undefined) { sets.push('position_x = ?'); params.push(x); }
+    if (y !== undefined) { sets.push('position_y = ?'); params.push(y); }
+    if (parentId !== undefined) { sets.push('parent_id = ?'); params.push(parentId); }
+    params.push(id);
+    const result = await db.query(`UPDATE lessons SET ${sets.join(', ')} WHERE id = ?`, params);
+    if (result[0].affectedRows === 0) return res.status(404).json({ error: 'Lesson not found' });
+
+    io.emit('lesson:updated', { lessonId: Number(id), title });
     res.json({ message: 'Lesson updated' });
   } catch (err) {
     console.error(err);
@@ -1517,8 +1548,10 @@ api.post('/tasks', authenticateToken, requireAdmin, async (req, res) => {
 // Update Task (Admin only)
 api.put('/tasks/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { title, type, xp, deadline, description } = req.body;
+  const { title, type, xp, deadline, description, order, x, y } = req.body;
 
+  const errors = validateGraphFields({ order, x, y });
+  if (errors.length > 0) return res.status(400).json({ error: errors.join('; ') });
 
   try {
     // Normalise the deadline to an ISO timestamp (or null)
@@ -1531,10 +1564,14 @@ api.put('/tasks/:id', authenticateToken, requireAdmin, async (req, res) => {
       deadlineTs = date.toISOString();
     }
 
-    const result = await db.query(
-      'UPDATE tasks SET title = ?, type = ?, xp_reward = ?, deadline = ?, description = ? WHERE id = ?',
-      [title, type, xp || 0, deadlineTs, description || '', id]
-    );
+    const sets = ['title = ?', 'type = ?', 'xp_reward = ?', 'deadline = ?', 'description = ?'];
+    const params = [title, type, xp || 0, deadlineTs, description || ''];
+    if (order !== undefined) { sets.push('order_index = ?'); params.push(order); }
+    if (x !== undefined) { sets.push('position_x = ?'); params.push(x); }
+    if (y !== undefined) { sets.push('position_y = ?'); params.push(y); }
+    params.push(id);
+    const result = await db.query(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`, params);
+    if (result[0].affectedRows === 0) return res.status(404).json({ error: 'Task not found' });
 
     // Emit Socket.IO event for live task update
     io.emit('task:updated', {

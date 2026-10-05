@@ -226,6 +226,7 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
     socket.on('task:submission_uploaded', handleTaskChange);
     socket.on('task:viewed', handleTaskViewed);
     socket.on('lesson:created', handleTaskChange); // Refresh when lessons are created
+    socket.on('lesson:updated', handleTaskChange); // Refresh when lessons are renamed or moved
     socket.on('lesson:deleted', handleTaskChange); // Refresh when lessons are deleted
 
 
@@ -237,6 +238,7 @@ export const PathDetails: React.FC<PathDetailsProps> = ({ path, onBack, currentU
       socket.off('task:submission_uploaded', handleTaskChange);
       socket.off('task:viewed', handleTaskViewed);
       socket.off('lesson:created', handleTaskChange);
+      socket.off('lesson:updated', handleTaskChange);
       socket.off('lesson:deleted', handleTaskChange);
     };
   }, [socket, currentUser]);

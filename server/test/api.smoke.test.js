@@ -190,6 +190,32 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(details.status, 200);
   assert.equal(details.body[0].tasks.length, 1);
 
+  // Moving nodes: PUT accepts optional order / position / parent so a path can be restructured
+  // without deleting lessons (which would cascade to tasks and submissions).
+  const second = await admin('/lessons', { method: 'POST', json: { pathId: paths.body[0].id, title: 'Second', order: 2, x: 330, y: 250, parentId: lesson.body.id } });
+  assert.equal(second.status, 201);
+  const moved = await admin(`/lessons/${lesson.body.id}`, { method: 'PUT', json: { title: 'Intro (moved)', description: 'd', order: 3, x: 580, y: 250, parentId: second.body.id } });
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  const movedTask = await admin(`/tasks/${task.body.id}`, { method: 'PUT', json: { title: 'Task 1', type: 'mandatory', xp: 10, deadline: '2030-01-01', x: 700, y: 130 } });
+  assert.equal(movedTask.status, 200, JSON.stringify(movedTask.body));
+  const reordered = await admin(`/paths/${paths.body[0].id}/details`);
+  assert.deepEqual(reordered.body.map((l) => [l.title, l.order_index, l.position_x, l.parent_id]), [['Second', 2, 330, lesson.body.id], ['Intro (moved)', 3, 580, second.body.id]]);
+  assert.equal(reordered.body[1].tasks[0].position_x, 700);
+  assert.equal(reordered.body[1].tasks[0].position_y, 130);
+  // Plain title/description updates (the UI's call) keep working and leave the graph alone
+  const renamed = await admin(`/lessons/${lesson.body.id}`, { method: 'PUT', json: { title: 'Intro', description: '' } });
+  assert.equal(renamed.status, 200);
+  const unchanged = await admin(`/paths/${paths.body[0].id}/details`);
+  assert.equal(unchanged.body[1].order_index, 3);
+  const badOrder = await admin(`/lessons/${lesson.body.id}`, { method: 'PUT', json: { title: 'Intro', order: 0 } });
+  assert.equal(badOrder.status, 400);
+  const selfParent = await admin(`/lessons/${lesson.body.id}`, { method: 'PUT', json: { title: 'Intro', parentId: lesson.body.id } });
+  assert.equal(selfParent.status, 400);
+  const missing = await admin('/lessons/999999', { method: 'PUT', json: { title: 'nope' } });
+  assert.equal(missing.status, 404);
+  const gone = await admin(`/lessons/${second.body.id}`, { method: 'DELETE' });
+  assert.equal(gone.status, 200);
+
   // Student session: cannot touch admin routes, can view + submit, sees only own submissions
   const stud = await loginAs('student@example.test', 'StudentPass1!');
   const forbidden = await stud('/lessons', { method: 'POST', json: { pathId: 1, title: 'x', order: 2 } });
