@@ -1876,7 +1876,7 @@ api.get('/admin/submissions', authenticateToken, requireAdmin, async (req, res) 
     if (status !== 'all') { where.push("COALESCE(s.status, 'pending') = ?"); params.push(status); }
     if (before !== null) { where.push('s.id < ?'); params.push(before); }
     const [rows] = await db.query(
-      `SELECT s.id, s.status, s.submitted_at, s.is_viewed, s.file_name, s.file_size,
+      `SELECT s.id, COALESCE(s.status, 'pending') AS status, s.submitted_at, s.is_viewed, s.file_name, s.file_size,
               LEFT(COALESCE(s.comment, ''), 300) AS comment,
               u.id AS user_id, u.name AS user_name, u.avatar_url AS user_avatar,
               t.id AS task_id, t.title AS task_title, t.type AS task_type, t.xp_reward,
@@ -1891,14 +1891,17 @@ api.get('/admin/submissions', authenticateToken, requireAdmin, async (req, res) 
        LEFT JOIN courses c ON c.id = p.course_id
        ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
        ORDER BY s.id DESC
-       LIMIT ${limit}`,
+       LIMIT ${limit + 1}`,
       params
     );
+    // One extra row is fetched only to know whether an older page exists (no false "has_more"
+    // when the total is an exact multiple of the page size).
+    const hasMore = rows.length > limit;
+    if (hasMore) rows.pop();
     const [counts] = await db.query(`SELECT COALESCE(status, 'pending') AS status, COUNT(*)::int AS n FROM task_submissions GROUP BY 1`);
     const summary = { pending: 0, approved: 0, rejected: 0 };
     counts.forEach((c) => { summary[c.status] = c.n; });
     // A page of `limit` rows; `next_cursor` (when `has_more`) is the id to pass as `before` for the next page.
-    const hasMore = rows.length >= limit;
     res.json({ submissions: rows, counts: summary, limit, has_more: hasMore, next_cursor: hasMore ? rows[rows.length - 1].id : null });
   } catch (err) {
     console.error('[GET /admin/submissions] Error:', err);

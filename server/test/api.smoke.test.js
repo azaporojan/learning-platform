@@ -239,6 +239,10 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const details = await admin(`/paths/${paths.body[0].id}/details`);
   assert.equal(details.status, 200);
   assert.equal(details.body[0].tasks.length, 1);
+  // Response shape of the legacy route stays stable (explicit column list)
+  for (const key of ['id', 'path_id', 'title', 'description', 'position_x', 'position_y', 'order_index', 'parent_id', 'created_at', 'updated_at', 'completed', 'tasks']) {
+    assert.ok(key in details.body[0], `details lesson is missing ${key}`);
+  }
 
   // Moving nodes: PUT accepts optional order / position / parent so a path can be restructured
   // without deleting lessons (which would cascade to tasks and submissions).
@@ -397,6 +401,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.strictEqual(inbox.body.counts.pending, 1); // numeric, not a bigint string
   assert.equal(inbox.body.has_more, false);
   assert.equal(inbox.body.next_cursor, null);
+  assert.equal((await admin('/admin/submissions?limit=1')).body.has_more, false); // exactly one row, page of one → no extra empty page
   // Cursor paging: newest first, `before=next_cursor` walks to older rows without gaps or repeats
   for (const n of [1, 2, 3]) {
     const f = new FormData();
@@ -416,6 +421,10 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(seen.length, 4);
   assert.deepEqual([...seen].sort((a, b) => b - a), seen); // strictly newest → oldest
   assert.equal(new Set(seen).size, 4);
+  const exact = await admin('/admin/submissions?status=all&limit=4'); // total is an exact multiple of the page size
+  assert.equal(exact.body.submissions.length, 4);
+  assert.equal(exact.body.has_more, false);
+  assert.equal(exact.body.next_cursor, null);
   assert.equal((await admin('/admin/submissions?before=abc')).status, 200); // malformed cursor → ignored
   const extra = (await admin('/admin/submissions?status=all')).body.submissions.filter((s) => (s.comment || '').startsWith('page test'));
   for (const s of extra) assert.equal((await stud(`/submissions/${s.id}`, { method: 'DELETE' })).status, 200);
