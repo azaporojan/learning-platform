@@ -36,7 +36,7 @@ Content is organised as **course → phases → lessons → tasks**. A *phase* i
 
 | Field | Meaning |
 |---|---|
-| `course_id` | The course it belongs to (`null` = unassigned, not visible to students) |
+| `course_id` | The course it belongs to (`null` = unassigned: an admin workspace, locked for students even through the legacy routes) |
 | `order_index` | Position of the phase on the course road |
 | `requires_previous` | `true` (default): locked until every mandatory task of the previous phase is approved |
 | `stars_required` | Extra gate: students need this many stars (0 = none) |

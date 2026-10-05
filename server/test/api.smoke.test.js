@@ -200,6 +200,10 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(phase2.body.requires_previous, true);
   const badPhase = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', requires_previous: 'yes' } });
   assert.equal(badPhase.status, 400);
+  const badStars = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 'lots' } });
+  assert.equal(badStars.status, 400);
+  const negativeStars = await admin('/paths', { method: 'POST', json: { name: 'x', stars_required: -1 } });
+  assert.equal(negativeStars.status, 400);
   const noName = await admin('/paths', { method: 'POST', json: { course_id: course.body.id } });
   assert.equal(noName.status, 400);
   const ghostCourse = await admin('/paths', { method: 'POST', json: { name: 'x', course_id: 999999 } });
@@ -384,6 +388,13 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(dropPhase3.status, 200);
   assert.equal((await admin('/courses/abc')).status, 404);
   assert.equal((await admin('/courses/abc', { method: 'DELETE' })).status, 404);
+  assert.equal((await anon('/paths/abc/details')).status, 404);
+  assert.equal((await stud('/tasks/abc')).status, 404);
+  const ghostForm = new FormData();
+  ghostForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'ghost.txt');
+  const ghostSubmit = await stud('/tasks/999999/submit', { method: 'POST', body: ghostForm });
+  assert.equal(ghostSubmit.status, 404);
+  assert.ok(!fs.readdirSync(uploadsDir).some((f) => f.endsWith('ghost.txt')));
   assert.equal((await admin('/paths/999999', { method: 'DELETE' })).status, 404);
   // Add a star gate on phase 2 that the student (10 stars) does not meet
   const gate = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 500 } });
@@ -428,6 +439,15 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(dropCourse.status, 200);
   const orphan = (await admin('/paths')).body.find((p) => p.id === String(phase2.body.id));
   assert.equal(orphan.course_id, null);
+  // An unassigned phase is an admin workspace: students cannot read its briefs or submit to it
+  const orphanDetails = await stud(`/paths/${phase2.body.id}/details`);
+  assert.equal(orphanDetails.body[0].tasks[0].description, '');
+  const orphanForm = new FormData();
+  orphanForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'orphan.txt');
+  const orphanSubmit = await stud(`/tasks/${phase2Task.body.id}/submit`, { method: 'POST', body: orphanForm });
+  assert.equal(orphanSubmit.status, 403);
+  assert.deepEqual(orphanSubmit.body.lockReasons, ['unpublished']);
+  assert.equal((await admin(`/paths/${phase2.body.id}/details`)).body[0].tasks[0].description, 'secret brief');
   const reattach = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 0, course_id: course.body.id, order_index: 2 } });
   assert.equal(reattach.status, 200);
   // Phases of a course are always numbered 1..n: moving one re-sequences the others

@@ -95,6 +95,7 @@ export function shortPhaseName(phase: Phase): string {
 
 export function lockReasonText(phase: Phase, previous: Phase | null): string {
   const parts: string[] = [];
+  if (phase.lockReasons.includes('unpublished')) parts.push('Not published yet');
   if (phase.lockReasons.includes('enroll')) parts.push('Enrol in the course to start');
   if (phase.lockReasons.includes('previous')) parts.push(previous ? `Finish ${shortPhaseName(previous)} first` : 'Finish the previous phase first');
   if (phase.lockReasons.includes('stars')) parts.push(`Needs ${phase.stars_required} stars`);

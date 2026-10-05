@@ -62,7 +62,7 @@ export interface RoadLesson {
   tasks: RoadTask[];
 }
 
-export type LockReason = 'enroll' | 'previous' | 'stars';
+export type LockReason = 'enroll' | 'previous' | 'stars' | 'unpublished';
 
 export interface Phase {
   id: number;

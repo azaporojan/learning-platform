@@ -42,11 +42,12 @@ async function phaseLockReasons(db, userId, pathId) {
   const [paths] = await db.query('SELECT id, course_id, order_index, stars_required, requires_previous FROM paths WHERE id = ?', [pathId]);
   if (paths.length === 0) return [];
   const path = paths[0];
-  if (path.course_id === null) return []; // legacy: a path outside any course is not gated
-
   const [users] = userId ? await db.query('SELECT role, stars FROM users WHERE id = ?', [userId]) : [[]];
+  if (users.length > 0 && isAdminRole(users[0].role)) return [];
+  // A path outside any course is an admin workspace (e.g. after its course was deleted or while
+  // it is being prepared): students cannot reach it, whatever its gates say.
+  if (path.course_id === null) return ['unpublished'];
   if (users.length === 0) return ['enroll'];
-  if (isAdminRole(users[0].role)) return [];
 
   const [enrolled] = await db.query('SELECT 1 FROM course_enrollments WHERE user_id = ? AND course_id = ?', [userId, path.course_id]);
   const [previous] = await db.query(
@@ -70,13 +71,12 @@ async function phaseLockReasons(db, userId, pathId) {
   });
 }
 
+// null when the task does not exist (so callers can answer 404 instead of inserting).
 async function taskLockReasons(db, userId, taskId) {
   const [rows] = await db.query('SELECT l.path_id FROM tasks t INNER JOIN lessons l ON l.id = t.lesson_id WHERE t.id = ?', [taskId]);
-  if (rows.length === 0) return [];
+  if (rows.length === 0) return null;
   return phaseLockReasons(db, userId, rows[0].path_id);
 }
-
-let boundDb = null;
 
 // Renumber a course's phases 1..n (by current order_index, then id).
 async function renumberCourse(tx, courseId) {
@@ -119,18 +119,7 @@ async function placePhase(tx, pathId, courseId, position) {
   if (previousCourseId !== null && previousCourseId !== courseId) await renumberCourse(tx, previousCourseId);
 }
 
-// Route ids must be positive integers; anything else is a 404, not a database error.
-const parseId = (value) => (/^\d{1,9}$/.test(String(value)) ? Number(value) : null);
-
 function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId }) {
-  boundDb = db;
-  api.param('id', (req, res, next, value) => {
-    if (!req.path.startsWith('/courses/')) return next();
-    const id = parseId(value);
-    if (id === null) return res.status(404).json({ error: 'Course not found' });
-    req.params.id = id;
-    next();
-  });
 
   async function getCaller(userId) {
     if (!userId) return null;
@@ -382,10 +371,4 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
   });
 }
 
-module.exports = {
-  registerCourseRoutes,
-  placePhase,
-  renumberCourse,
-  phaseLockReasons: (userId, pathId) => phaseLockReasons(boundDb, userId, pathId),
-  taskLockReasons: (userId, taskId) => taskLockReasons(boundDb, userId, taskId),
-};
+module.exports = { registerCourseRoutes, placePhase, renumberCourse, phaseLockReasons, taskLockReasons };

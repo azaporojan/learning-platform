@@ -115,6 +115,13 @@ const authLimiter = rateLimit({
 // All routes live under /api so the built client can be served from the same origin.
 const api = express.Router();
 api.use(apiLimiter);
+// Every route id is a SERIAL integer: a malformed one is a 404, not a PostgreSQL cast error (500).
+for (const name of ['id', 'pathId', 'lessonId', 'taskId', 'userId', 'chatId', 'messageId']) {
+  api.param(name, (req, res, next, value) => {
+    if (!/^\d{1,9}$/.test(String(value))) return res.status(404).json({ error: 'Not found' });
+    next();
+  });
+}
 app.use('/api', api);
 
 // ---------------------------------------------------------------------------
@@ -1179,7 +1186,7 @@ api.get('/paths', async (req, res) => {
 api.post('/paths', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { name, description, stars_required, course_id, requires_previous } = req.body;
-    const phaseErrors = validatePhaseFields({ name, course_id, requires_previous });
+    const phaseErrors = validatePhaseFields({ name, stars_required, course_id, requires_previous });
     if (phaseErrors.length > 0) return res.status(400).json({ error: phaseErrors.join('; ') });
 
     // A new phase goes to the end of its course's road (placePhase keeps the numbering 1..n).
@@ -1212,9 +1219,10 @@ api.post('/paths', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // Optional course fields of a path ("phase"): where it sits on a course road and how it is gated.
-function validatePhaseFields({ name, course_id, order_index, requires_previous }) {
+function validatePhaseFields({ name, stars_required, course_id, order_index, requires_previous }) {
   const errors = [];
   if (typeof name !== 'string' || !name.trim() || name.length > 255) errors.push('name is required (max 255 chars)');
+  if (stars_required !== undefined && stars_required !== null && (!Number.isInteger(stars_required) || stars_required < 0)) errors.push('stars_required must be a non-negative integer');
   if (course_id !== undefined && course_id !== null && (!Number.isInteger(course_id) || course_id < 1)) errors.push('course_id must be a positive integer or null');
   if (order_index !== undefined && (!Number.isInteger(order_index) || order_index < 1)) errors.push('order_index must be a positive integer');
   if (requires_previous !== undefined && typeof requires_previous !== 'boolean') errors.push('requires_previous must be a boolean');
@@ -1226,7 +1234,7 @@ api.put('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, description, stars_required, course_id, order_index, requires_previous } = req.body;
-    const phaseErrors = validatePhaseFields({ name, course_id, order_index, requires_previous });
+    const phaseErrors = validatePhaseFields({ name, stars_required, course_id, order_index, requires_previous });
     if (phaseErrors.length > 0) return res.status(400).json({ error: phaseErrors.join('; ') });
 
     // Course / order / gating fields are optional so older callers (and the agent API) that
@@ -1351,7 +1359,7 @@ api.get('/paths/:pathId/details', async (req, res) => {
 
     // Same visibility rule as GET /courses/:id: in a phase the caller has not reached, task
     // briefs are withheld (titles and lesson summaries stay visible).
-    const phaseLocked = (await courseRoutes.phaseLockReasons(userId, pathId)).length > 0;
+    const phaseLocked = (await courseRoutes.phaseLockReasons(db, userId, pathId)).length > 0;
 
     // Construct the response tree
     const result = lessons.map(lesson => {
@@ -1644,7 +1652,7 @@ api.get('/tasks/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Task not found' });
     }
     // The brief of a task in a phase the caller has not reached is withheld (see GET /courses/:id)
-    const locked = (await courseRoutes.taskLockReasons(req.user.id, id)).length > 0;
+    const locked = ((await courseRoutes.taskLockReasons(db, req.user.id, id)) || []).length > 0;
     res.json(locked ? { ...rows[0], description: '' } : rows[0]);
   } catch (err) {
     console.error(err);
@@ -1664,7 +1672,11 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
   try {
     // Phase gating is enforced here, not only in the UI: a student cannot submit to a task of a
     // phase they have not reached (not enrolled, previous phase unfinished, stars gate).
-    const lockReasons = await courseRoutes.taskLockReasons(userId, id);
+    const lockReasons = await courseRoutes.taskLockReasons(db, userId, id);
+    if (lockReasons === null) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(404).json({ error: 'Task not found' });
+    }
     if (lockReasons.length > 0) {
       fs.unlink(req.file.path, () => {});
       return res.status(403).json({ error: 'This phase is locked for you', lockReasons });
