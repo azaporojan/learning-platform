@@ -156,7 +156,7 @@ now decided by course enrolment and the phase gates above; the call answers 404.
 | `PUT /api/lessons/:id` | `{title, description?, order?, x?, y?, parentId?}` | Update a lesson; the optional graph fields move it without deleting it (keeps tasks and submissions) |
 | `DELETE /api/lessons/:id` | — | Delete a lesson and its tasks |
 | `GET /api/lessons/:id/script` | — | `{id, title, script, script_updated_at}` — the teacher's Markdown script (admin only; never shown to students) |
-| `PUT /api/lessons/:id/script` | `{script, expected_script_updated_at?}` | Save the script (Markdown, ≤ 200 000 chars) → `{success, script_updated_at}`. With `expected_script_updated_at` (the value last read, `null` if none) the write is atomic and a newer server copy answers `409` instead of being overwritten |
+| `PUT /api/lessons/:id/script` | `{script, expected_script_updated_at?}` | Save the script (Markdown, ≤ 200 000 chars) → `{success, script_updated_at}`. With `expected_script_updated_at` (the value last read, `null` if none) the write is atomic and a newer server copy answers `409` instead of being overwritten; **omit the field and the save overwrites unconditionally** (the app always sends it) |
 | `POST /api/tasks` | `{lessonId, title, type?, xp?, deadline?, x, y, order?, description?}` | Create one task; emails students who unlocked the path |
 | `GET /api/tasks/:id` | — | Task details |
 | `PUT /api/tasks/:id` | `{title, type, xp?, deadline?, description?, order?, x?, y?}` | Update a task; `order`/`x`/`y` move it on the graph |
