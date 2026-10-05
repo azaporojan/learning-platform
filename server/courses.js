@@ -91,20 +91,29 @@ async function renumberCourse(tx, courseId) {
 // Put a phase into a course at a 1-based position (null = append) and keep every phase of the
 // course numbered 1..n without gaps or duplicates. Runs inside the caller's transaction and
 // locks the course row, so concurrent appends cannot pick the same index.
+// Lock order, everywhere a course's phases are rewritten: course rows first (ascending id), path
+// rows only afterwards. Callers must not hold a path row lock when they call this.
+async function lockCourses(tx, courseIds) {
+  const ids = [...new Set(courseIds.filter((c) => c !== null && c !== undefined))].sort((a, b) => a - b);
+  const found = new Set();
+  for (const id of ids) {
+    const [rows] = await tx.query('SELECT id FROM courses WHERE id = ? FOR UPDATE', [id]);
+    if (rows.length > 0) found.add(id);
+  }
+  return found;
+}
+
 async function placePhase(tx, pathId, courseId, position) {
   // If the phase leaves a course, that course is renumbered here too, so no caller can forget it.
   const [current] = await tx.query('SELECT course_id FROM paths WHERE id = ?', [pathId]);
   const previousCourseId = current.length > 0 ? current[0].course_id : null;
-  if (previousCourseId !== null && previousCourseId !== courseId) {
-    await tx.query('SELECT id FROM courses WHERE id = ? FOR UPDATE', [previousCourseId]);
-  }
+  const locked = await lockCourses(tx, [previousCourseId, courseId]);
   if (courseId === null || courseId === undefined) {
     await tx.query('UPDATE paths SET course_id = NULL, order_index = 1 WHERE id = ?', [pathId]);
     if (previousCourseId !== null) await renumberCourse(tx, previousCourseId);
     return;
   }
-  const [courses] = await tx.query('SELECT id FROM courses WHERE id = ? FOR UPDATE', [courseId]);
-  if (courses.length === 0) { const err = new Error('Course not found'); err.status = 404; throw err; }
+  if (!locked.has(courseId)) { const err = new Error('Course not found'); err.status = 404; throw err; }
   // Spread the existing phases out (2, 4, 6, …) so the moved one can slot in between (2k-1).
   await tx.query('UPDATE paths SET order_index = order_index * 2 WHERE course_id = ? AND id <> ?', [courseId, pathId]);
   let target;
@@ -247,6 +256,7 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
         'INSERT INTO course_enrollments (user_id, course_id) VALUES (?, ?) ON CONFLICT (user_id, course_id) DO NOTHING',
         [req.user.id, req.params.id]
       );
+      io.emit('course:updated', { courseId: Number(req.params.id) });
       res.json({ success: true, enrolled: true });
     } catch (err) {
       console.error('[POST /courses/:id/enroll] Error:', err);
@@ -257,6 +267,7 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
   api.delete('/courses/:id/enroll', authenticateToken, async (req, res) => {
     try {
       await db.query('DELETE FROM course_enrollments WHERE user_id = ? AND course_id = ?', [req.user.id, req.params.id]);
+      io.emit('course:updated', { courseId: Number(req.params.id) });
       res.json({ success: true, enrolled: false });
     } catch (err) {
       console.error('[DELETE /courses/:id/enroll] Error:', err);
@@ -371,4 +382,4 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
   });
 }
 
-module.exports = { registerCourseRoutes, placePhase, renumberCourse, phaseLockReasons, taskLockReasons };
+module.exports = { registerCourseRoutes, placePhase, renumberCourse, lockCourses, phaseLockReasons, taskLockReasons };

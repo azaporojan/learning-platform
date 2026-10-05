@@ -1219,12 +1219,13 @@ api.post('/paths', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // Optional course fields of a path ("phase"): where it sits on a course road and how it is gated.
+const MAX_PHASES = 1000; // keeps placePhase's position * 2 far from the INTEGER range
 function validatePhaseFields({ name, stars_required, course_id, order_index, requires_previous }) {
   const errors = [];
   if (typeof name !== 'string' || !name.trim() || name.length > 255) errors.push('name is required (max 255 chars)');
   if (stars_required !== undefined && stars_required !== null && (!Number.isInteger(stars_required) || stars_required < 0)) errors.push('stars_required must be a non-negative integer');
   if (course_id !== undefined && course_id !== null && (!Number.isInteger(course_id) || course_id < 1)) errors.push('course_id must be a positive integer or null');
-  if (order_index !== undefined && (!Number.isInteger(order_index) || order_index < 1)) errors.push('order_index must be a positive integer');
+  if (order_index !== undefined && (!Number.isInteger(order_index) || order_index < 1 || order_index > MAX_PHASES)) errors.push(`order_index must be an integer between 1 and ${MAX_PHASES}`);
   if (requires_previous !== undefined && typeof requires_previous !== 'boolean') errors.push('requires_previous must be a boolean');
   return errors;
 }
@@ -1241,14 +1242,10 @@ api.put('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
     // send only name/description/stars_required keep working. A change of course or order goes
     // through placePhase so the phases of each affected course stay numbered 1..n.
     const touched = await db.transaction(async (tx) => {
-      const [before] = await tx.query('SELECT course_id FROM paths WHERE id = ? FOR UPDATE', [id]);
+      // No row lock on the path here: placePhase locks the course rows first (fixed lock order),
+      // and only then are path rows written.
+      const [before] = await tx.query('SELECT course_id FROM paths WHERE id = ?', [id]);
       if (before.length === 0) { const err = new Error('Path not found'); err.status = 404; throw err; }
-      const sets = ['name = ?', 'description = ?', 'stars_required = ?'];
-      const params = [name.trim(), description || '', stars_required || 0];
-      if (requires_previous !== undefined) { sets.push('requires_previous = ?'); params.push(requires_previous); }
-      params.push(id);
-      await tx.query(`UPDATE paths SET ${sets.join(', ')} WHERE id = ?`, params);
-
       const oldCourseId = before[0].course_id;
       const newCourseId = course_id === undefined ? oldCourseId : course_id;
       if (course_id !== undefined || order_index !== undefined) {
@@ -1256,6 +1253,13 @@ api.put('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
         const position = order_index !== undefined ? order_index : (newCourseId === oldCourseId ? undefined : null);
         if (position !== undefined) await courseRoutes.placePhase(tx, Number(id), newCourseId, position); // renumbers both courses
       }
+
+      const sets = ['name = ?', 'description = ?', 'stars_required = ?'];
+      const params = [name.trim(), description || '', stars_required || 0];
+      if (requires_previous !== undefined) { sets.push('requires_previous = ?'); params.push(requires_previous); }
+      params.push(id);
+      const [result] = await tx.query(`UPDATE paths SET ${sets.join(', ')} WHERE id = ?`, params);
+      if (result.affectedRows === 0) { const err = new Error('Path not found'); err.status = 404; throw err; }
       return [oldCourseId, newCourseId].filter((c) => c !== null && c !== undefined);
     });
 
@@ -1275,9 +1279,12 @@ api.delete('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
 
     // Deleting a phase closes the gap in its course's numbering and refreshes open course pages.
     const courseId = await db.transaction(async (tx) => {
-      const [rows] = await tx.query('SELECT course_id FROM paths WHERE id = ? FOR UPDATE', [id]);
+      const [rows] = await tx.query('SELECT course_id FROM paths WHERE id = ?', [id]);
       if (rows.length === 0) { const err = new Error('Path not found'); err.status = 404; throw err; }
-      await tx.query('DELETE FROM paths WHERE id = ?', [id]);
+      // Same lock order as placePhase: the course row first, then the path rows.
+      await courseRoutes.lockCourses(tx, [rows[0].course_id]);
+      const [deleted] = await tx.query('DELETE FROM paths WHERE id = ?', [id]);
+      if (deleted.affectedRows === 0) { const err = new Error('Path not found'); err.status = 404; throw err; }
       if (rows[0].course_id !== null) await courseRoutes.renumberCourse(tx, rows[0].course_id);
       return rows[0].course_id;
     });

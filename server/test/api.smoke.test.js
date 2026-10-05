@@ -204,6 +204,21 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(badStars.status, 400);
   const negativeStars = await admin('/paths', { method: 'POST', json: { name: 'x', stars_required: -1 } });
   assert.equal(negativeStars.status, 400);
+  const hugeOrder = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', order_index: 2147483647 } });
+  assert.equal(hugeOrder.status, 400);
+
+  // Concurrent appends and moves in one course never collide (course row lock, fixed lock order)
+  const busy = await admin('/courses', { method: 'POST', json: { name: 'Busy' } });
+  const appended6 = await Promise.all([1, 2, 3, 4, 5, 6].map((n) => admin('/paths', { method: 'POST', json: { name: `B${n}`, course_id: busy.body.id } })));
+  assert.deepEqual(appended6.map((r) => r.status), [200, 200, 200, 200, 200, 200]);
+  const busyIds = appended6.map((r) => r.body.id);
+  const reordered6 = await Promise.all(busyIds.map((pid, i) => admin(`/paths/${pid}`, { method: 'PUT', json: { name: `B${i + 1}m`, order_index: 6 - i } })));
+  assert.deepEqual(reordered6.map((r) => r.status), [200, 200, 200, 200, 200, 200]);
+  const busyRoad = await admin(`/courses/${busy.body.id}`);
+  assert.deepEqual(busyRoad.body.phases.map((p) => p.order_index), [1, 2, 3, 4, 5, 6]);
+  const dropped = await Promise.all(busyIds.map((pid) => admin(`/paths/${pid}`, { method: 'DELETE' })));
+  assert.deepEqual(dropped.map((r) => r.status), [200, 200, 200, 200, 200, 200]);
+  assert.equal((await admin(`/courses/${busy.body.id}`, { method: 'DELETE' })).status, 200);
   const noName = await admin('/paths', { method: 'POST', json: { course_id: course.body.id } });
   assert.equal(noName.status, 400);
   const ghostCourse = await admin('/paths', { method: 'POST', json: { name: 'x', course_id: 999999 } });
