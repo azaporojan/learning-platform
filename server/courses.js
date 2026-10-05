@@ -92,8 +92,15 @@ async function renumberCourse(tx, courseId) {
 // course numbered 1..n without gaps or duplicates. Runs inside the caller's transaction and
 // locks the course row, so concurrent appends cannot pick the same index.
 async function placePhase(tx, pathId, courseId, position) {
+  // If the phase leaves a course, that course is renumbered here too, so no caller can forget it.
+  const [current] = await tx.query('SELECT course_id FROM paths WHERE id = ?', [pathId]);
+  const previousCourseId = current.length > 0 ? current[0].course_id : null;
+  if (previousCourseId !== null && previousCourseId !== courseId) {
+    await tx.query('SELECT id FROM courses WHERE id = ? FOR UPDATE', [previousCourseId]);
+  }
   if (courseId === null || courseId === undefined) {
-    await tx.query('UPDATE paths SET course_id = NULL WHERE id = ?', [pathId]);
+    await tx.query('UPDATE paths SET course_id = NULL, order_index = 1 WHERE id = ?', [pathId]);
+    if (previousCourseId !== null) await renumberCourse(tx, previousCourseId);
     return;
   }
   const [courses] = await tx.query('SELECT id FROM courses WHERE id = ? FOR UPDATE', [courseId]);
@@ -109,6 +116,7 @@ async function placePhase(tx, pathId, courseId, position) {
   }
   await tx.query('UPDATE paths SET course_id = ?, order_index = ? WHERE id = ?', [courseId, target, pathId]);
   await renumberCourse(tx, courseId);
+  if (previousCourseId !== null && previousCourseId !== courseId) await renumberCourse(tx, previousCourseId);
 }
 
 function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId }) {

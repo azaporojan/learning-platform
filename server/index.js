@@ -1246,8 +1246,7 @@ api.put('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
       if (course_id !== undefined || order_index !== undefined) {
         // Same course + no explicit position → keep its place; new course + no position → append.
         const position = order_index !== undefined ? order_index : (newCourseId === oldCourseId ? undefined : null);
-        if (position !== undefined) await courseRoutes.placePhase(tx, Number(id), newCourseId, position);
-        if (oldCourseId !== null && oldCourseId !== newCourseId) await courseRoutes.renumberCourse(tx, oldCourseId);
+        if (position !== undefined) await courseRoutes.placePhase(tx, Number(id), newCourseId, position); // renumbers both courses
       }
       return [oldCourseId, newCourseId].filter((c) => c !== null && c !== undefined);
     });
@@ -1283,46 +1282,9 @@ api.delete('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// Unlock path for current user
-api.post('/paths/:id/unlock', authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const userId = req.user.id;
-
-    // Check if path exists and get required stars
-    const [pathRows] = await db.query('SELECT stars_required FROM paths WHERE id = ?', [id]);
-    if (pathRows.length === 0) {
-      return res.status(404).json({ error: 'Path not found' });
-    }
-
-    const path = pathRows[0];
-
-    // Check if user has enough stars
-    const [userRows] = await db.query('SELECT stars FROM users WHERE id = ?', [userId]);
-    if (userRows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const user = userRows[0];
-    if (user.stars < path.stars_required) {
-      return res.status(403).json({ error: 'Not enough stars to unlock this path' });
-    }
-
-    // Check if already unlocked
-    const [existingUnlock] = await db.query('SELECT * FROM user_paths WHERE user_id = ? AND path_id = ?', [userId, id]);
-    if (existingUnlock.length > 0) {
-      return res.json({ message: 'Path already unlocked' });
-    }
-
-    // Unlock the path (don't deduct stars, just grant access)
-    await db.query('INSERT INTO user_paths (user_id, path_id) VALUES (?, ?)', [userId, id]);
-
-    res.json({ success: true, message: 'Path unlocked successfully' });
-  } catch (error) {
-    console.error('[POST /paths/:id/unlock] Error:', error);
-    res.status(500).json({ error: 'Failed to unlock path' });
-  }
-});
+// Access to a phase is decided by course enrolment and the phase gates (see courses.js);
+// the former POST /paths/:id/unlock (stars-only) is gone. user_paths is kept only for the
+// legacy "status" of GET /paths and for task-notification recipients.
 
 // --- PATH & LESSONS API ---
 
