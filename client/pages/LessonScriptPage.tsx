@@ -10,23 +10,25 @@ interface LessonScriptPageProps {
   currentUser: User;
 }
 
-const DRAFT_KEY = (lessonId: string) => `lesson-script-draft-${lessonId}`;
+// Keyed by user as well as lesson: another admin on the same browser never sees this draft
+// (drafts are also cleared on logout).
+const DRAFT_KEY = (userId: number, lessonId: string) => `lesson-script-draft-${userId}-${lessonId}`;
 
 // An unsaved draft is stored together with the save stamp it was written against, so a draft
 // from an older version of the script cannot silently overwrite a newer save from elsewhere.
 interface Draft { text: string; baseStamp: string | null }
-const readDraft = (lessonId: string): Draft | null => {
+const readDraft = (userId: number, lessonId: string): Draft | null => {
   try {
-    const raw = localStorage.getItem(DRAFT_KEY(lessonId));
+    const raw = localStorage.getItem(DRAFT_KEY(userId, lessonId));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed.text === 'string' ? { text: parsed.text, baseStamp: parsed.baseStamp ?? null } : null;
   } catch { return null; }
 };
-const writeDraft = (lessonId: string, draft: Draft | null) => {
+const writeDraft = (userId: number, lessonId: string, draft: Draft | null) => {
   try {
-    if (draft) localStorage.setItem(DRAFT_KEY(lessonId), JSON.stringify(draft));
-    else localStorage.removeItem(DRAFT_KEY(lessonId));
+    if (draft) localStorage.setItem(DRAFT_KEY(userId, lessonId), JSON.stringify(draft));
+    else localStorage.removeItem(DRAFT_KEY(userId, lessonId));
   } catch { /* ignore */ }
 };
 
@@ -73,7 +75,7 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
       setSaved(s.script);
       setUpdatedAt(s.script_updated_at);
       setConflict(false);
-      const draft = readDraft(lessonId);
+      const draft = readDraft(currentUser.id, lessonId);
       if (draft && draft.text !== s.script && draft.baseStamp === s.script_updated_at) {
         setScript(draft.text); // same base version: resume the draft
         setStaleDraft(null);
@@ -81,7 +83,7 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
         setScript(s.script);
         // A draft from an older version is kept aside and offered, never applied silently
         setStaleDraft(draft && draft.text !== s.script ? draft : null);
-        if (draft && draft.text === s.script) writeDraft(lessonId, null);
+        if (draft && draft.text === s.script) writeDraft(currentUser.id, lessonId, null);
       }
       setMode(s.script.trim() ? 'follow' : 'edit');
       setLoadedLessonId(lessonId);
@@ -90,7 +92,7 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
     } finally {
       if (!ignore?.current) setLoaded(true);
     }
-  }, [courseId, lessonId]);
+  }, [courseId, lessonId, currentUser.id]);
 
   useEffect(() => {
     const ignore = { current: false };
@@ -101,9 +103,9 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
   // Keep an unsaved draft per lesson in this browser (only once the state belongs to this lesson)
   useEffect(() => {
     if (!lessonId || loadedLessonId !== lessonId) return;
-    if (script !== saved) writeDraft(lessonId, { text: script, baseStamp: updatedAt });
-    else writeDraft(lessonId, null);
-  }, [script, saved, lessonId, loadedLessonId, updatedAt]);
+    if (script !== saved) writeDraft(currentUser.id, lessonId, { text: script, baseStamp: updatedAt });
+    else writeDraft(currentUser.id, lessonId, null);
+  }, [script, saved, lessonId, loadedLessonId, updatedAt, currentUser.id]);
 
   const dirty = script !== saved;
 
@@ -233,7 +235,7 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
           <span>{error}</span>
           {conflict && (
             <button
-              onClick={() => { if (window.confirm('Reload the latest version from the server? Your unsaved text here will be replaced.')) { if (lessonId) writeDraft(lessonId, null); load(); } }}
+              onClick={() => { if (window.confirm('Reload the latest version from the server? Your unsaved text here will be replaced.')) { if (lessonId) writeDraft(currentUser.id, lessonId, null); load(); } }}
               className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-red-300 font-bold text-red-700 dark:text-red-300 whitespace-nowrap"
             >
               Reload latest
@@ -247,7 +249,7 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
           <span>This browser has an unsaved draft written against an <strong>older version</strong> of this script. The current version is shown.</span>
           <span className="flex items-center gap-2 whitespace-nowrap">
             <button onClick={() => { setScript(staleDraft.text); setStaleDraft(null); setMode('edit'); }} className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-amber-300 font-bold">Use the draft</button>
-            <button onClick={() => { if (lessonId) writeDraft(lessonId, null); setStaleDraft(null); }} className="px-3 py-1.5 rounded-lg font-bold text-amber-800 dark:text-amber-200 hover:underline">Discard it</button>
+            <button onClick={() => { if (lessonId) writeDraft(currentUser.id, lessonId, null); setStaleDraft(null); }} className="px-3 py-1.5 rounded-lg font-bold text-amber-800 dark:text-amber-200 hover:underline">Discard it</button>
           </span>
         </div>
       )}
