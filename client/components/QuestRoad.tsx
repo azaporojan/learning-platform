@@ -139,7 +139,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
             const reason = phase.locked ? lockReasonText(phase, previous) : '';
             const sel = isSelected('phase', phase.id);
             return (
-              <div key={stop.key} className={`absolute group z-10 hover:z-50 ${sel ? 'z-40' : ''}`} style={{ left: p.x, top: p.y, transform: 'translate(-50%, -50%)' }}>
+              <div key={stop.key} className={`absolute group hover:z-50 ${sel ? 'z-40' : 'z-10'}`} style={{ left: p.x, top: p.y, transform: 'translate(-50%, -50%)' }}>
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 text-center pointer-events-none" style={{ width: labelWidth }}>
                   <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-extrabold uppercase tracking-wide shadow-sm border ${
                     status === 'locked' ? 'bg-gray-100 text-gray-400 border-gray-200 dark:bg-gray-800 dark:border-gray-700'
@@ -190,7 +190,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
               </div>
 
               {/* Lesson node */}
-              <div className={`absolute group z-10 hover:z-50 ${sel ? 'z-40' : ''}`} style={{ left: 0, top: 0, transform: 'translate(-50%, -50%)' }}>
+              <div className={`absolute group hover:z-50 ${sel ? 'z-40' : 'z-10'}`} style={{ left: 0, top: 0, transform: 'translate(-50%, -50%)' }}>
                 <button
                   type="button"
                   data-road-node={`lesson-${lesson.id}`}
@@ -227,7 +227,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                 const ts = state.tasks.get(task.id) || 'open';
                 const tsel = isSelected('task', task.id);
                 return (
-                  <div key={task.id} className={`absolute group z-10 hover:z-50 ${tsel ? 'z-40' : ''}`} style={{ left: 0, top: TASK_FIRST_DY + k * TASK_STEP, transform: 'translate(-50%, -50%)' }}>
+                  <div key={task.id} className={`absolute group hover:z-50 ${tsel ? 'z-40' : 'z-10'}`} style={{ left: 0, top: TASK_FIRST_DY + k * TASK_STEP, transform: 'translate(-50%, -50%)' }}>
                     <button
                       type="button"
                       data-road-node={`task-${task.id}`}
