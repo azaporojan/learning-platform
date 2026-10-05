@@ -296,6 +296,34 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(stored.length, 1);
   assert.match(stored[0], /-evil_name\.html$/); // sanitised basename, no traversal
 
+  // A submission can also be a comment only (PR link / Jira ticket), or a comment with a file
+  const empty = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: new FormData() });
+  assert.equal(empty.status, 400);
+  const commentForm = new FormData();
+  commentForm.append('comment', 'PR: https://github.com/example/repo/pull/12 — ready for review');
+  const commentOnly = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: commentForm });
+  assert.equal(commentOnly.status, 201, JSON.stringify(commentOnly.body));
+  assert.equal(commentOnly.body.fileName, null);
+  const noFile = await stud(`/submissions/download/${commentOnly.body.id}`);
+  assert.equal(noFile.status, 404);
+  const bothForm = new FormData();
+  bothForm.append('comment', 'see attached');
+  bothForm.append('file', new Blob(['notes'], { type: 'text/plain' }), 'notes.txt');
+  const both = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: bothForm });
+  assert.equal(both.status, 201);
+  const mine = await stud(`/tasks/${task.body.id}/submissions`);
+  assert.equal(mine.body.length, 3);
+  assert.deepEqual(mine.body.map((x) => [x.comment, x.file_name]).sort(), [
+    ['PR: https://github.com/example/repo/pull/12 — ready for review', null],
+    ['see attached', 'notes.txt'],
+    [null, 'evil name.html'],
+  ].sort());
+  const tooLong = new FormData();
+  tooLong.append('comment', 'x'.repeat(4001));
+  assert.equal((await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: tooLong })).status, 400);
+  for (const sid of [commentOnly.body.id, both.body.id]) assert.equal((await stud(`/submissions/${sid}`, { method: 'DELETE' })).status, 200);
+  assert.equal(fs.readdirSync(uploadsDir).length, 1);
+
   // HTML uploads are served as downloads, never rendered inline
   const raw = await fetch(`${BASE}/uploads/${stored[0]}`);
   assert.equal(raw.status, 200);

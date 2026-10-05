@@ -22,12 +22,27 @@ interface Submission {
   user_id: number;
   user_name: string;
   user_email: string;
-  file_name: string;
-  file_path: string;
-  file_size: number;
+  file_name: string | null;
+  file_path: string | null;
+  file_size: number | null;
+  comment?: string | null;
   submitted_at: string;
   status: 'pending' | 'approved' | 'rejected' | null;
 }
+
+// A submission's text part: plain text with http(s) links made clickable (PR links, Jira tickets…).
+const SubmissionComment: React.FC<{ text: string }> = ({ text }) => {
+  const parts = text.split(/(https?:\/\/[^\s<>"']+)/g);
+  return (
+    <p className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-words">
+      {parts.map((part, i) =>
+        /^https?:\/\//.test(part)
+          ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 underline break-all" onClick={(e) => e.stopPropagation()}>{part}</a>
+          : <React.Fragment key={i}>{part}</React.Fragment>
+      )}
+    </p>
+  );
+};
 
 interface TaskModalProps {
   task: Task;
@@ -65,6 +80,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   });
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [comment, setComment] = useState('');
   const [uploading, setUploading] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
@@ -350,36 +366,45 @@ export const TaskModal: React.FC<TaskModalProps> = ({
     setUploadFiles(uploadFiles.filter((_, i) => i !== index));
   };
 
+  const canSubmit = comment.trim().length > 0 || uploadFiles.length > 0;
+
+  // A submission is a comment (link to a PR / Jira ticket / notes), files, or both. The comment
+  // travels with the first file; further files are separate submissions.
   const handleTurnIn = async () => {
-    if (uploadFiles.length === 0) return;
+    if (!canSubmit) return;
 
     setUploading(true);
 
     try {
-      // Upload each file
-      for (const file of uploadFiles) {
+      const requests: FormData[] = [];
+      if (uploadFiles.length === 0) {
         const formData = new FormData();
-        formData.append('file', file);
-        formData.append('userId', currentUserId.toString());
-
-        const res = await fetch(apiUrl(`/tasks/${task.id}/submit`), {
-          method: 'POST',
-          credentials: 'include',
-          body: formData
+        formData.append('comment', comment.trim());
+        requests.push(formData);
+      } else {
+        uploadFiles.forEach((file, index) => {
+          const formData = new FormData();
+          formData.append('file', file);
+          if (index === 0 && comment.trim()) formData.append('comment', comment.trim());
+          requests.push(formData);
         });
+      }
 
+      for (const body of requests) {
+        const res = await fetch(apiUrl(`/tasks/${task.id}/submit`), { method: 'POST', credentials: 'include', body });
         if (!res.ok) {
-          throw new Error(`Failed to upload ${file.name}`);
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `Submission failed (${res.status})`);
         }
       }
 
-      // Clear files and refresh
       setUploadFiles([]);
+      setComment('');
       fetchSubmissions();
       if (onUpdate) onUpdate();
-    } catch (err) {
-      console.error('Failed to upload submissions:', err);
-      showAlert('Error', 'Failed to upload some files: ' + err, 'danger');
+    } catch (err: any) {
+      console.error('Failed to submit:', err);
+      showAlert('Error', err?.message || 'Failed to submit', 'danger');
     } finally {
       setUploading(false);
     }
@@ -645,6 +670,17 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                     <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
                       <span className="text-sm font-bold text-gray-500 mb-3 block">YOUR WORK</span>
 
+                      {/* Comment: PR link, Jira ticket, notes */}
+                      <textarea
+                        value={comment}
+                        onChange={(e) => setComment(e.target.value)}
+                        rows={3}
+                        maxLength={4000}
+                        placeholder="Link to your pull request, Jira ticket or repo, plus any notes for the reviewer…"
+                        className="w-full mb-3 p-3 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 text-sm focus:ring-2 focus:ring-primary outline-none resize-y"
+                        disabled={uploading}
+                      />
+
                       {/* Files to Upload */}
                       {uploadFiles.length > 0 && (
                         <div className="mb-4 space-y-2">
@@ -685,27 +721,27 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                           <span>Add File</span>
                         </label>
 
-                        {/* Turn In Button */}
-                        {uploadFiles.length > 0 && (
-                          <button
-                            onClick={handleTurnIn}
-                            disabled={uploading}
-                            className="px-6 py-2 bg-primary hover:bg-primary/90 text-white font-bold rounded-lg transition-colors disabled:opacity-50 flex items-center space-x-2 shadow-lg"
-                          >
-                            {uploading ? (
-                              <>
-                                <span className="material-icons animate-spin">refresh</span>
-                                <span>Turning in...</span>
-                              </>
-                            ) : (
-                              <>
-                                <span className="material-icons">upload</span>
-                                <span>Turn in</span>
-                              </>
-                            )}
-                          </button>
-                        )}
+                        {/* Submit Button */}
+                        <button
+                          onClick={handleTurnIn}
+                          disabled={uploading || !canSubmit}
+                          title={canSubmit ? 'Submit your work' : 'Write a comment or add a file first'}
+                          className="px-6 py-2 bg-primary hover:bg-primary/90 text-white font-bold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 shadow-lg"
+                        >
+                          {uploading ? (
+                            <>
+                              <span className="material-icons animate-spin">refresh</span>
+                              <span>Submitting...</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="material-icons">send</span>
+                              <span>Submit</span>
+                            </>
+                          )}
+                        </button>
                       </div>
+                      <p className="text-xs text-gray-400 mt-2">A comment, a file, or both. Mandatory tasks are unlocked once an admin approves your submission.</p>
                     </div>
 
                     {/* Student's Own Submissions */}
@@ -724,12 +760,15 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                                       <span className="font-bold text-gray-800 dark:text-white">Submitted</span>
                                       {renderStatusChip(sub.status)}
                                     </div>
+                                    {sub.comment && <div className="mb-2"><SubmissionComment text={sub.comment} /></div>}
                                     <div className="flex items-center space-x-4 text-sm text-gray-600 dark:text-gray-400">
-                                      <span className="flex items-center space-x-1">
-                                        <span className="material-icons text-sm">insert_drive_file</span>
-                                        <span>{sub.file_name}</span>
-                                      </span>
-                                      <span>{formatFileSize(sub.file_size)}</span>
+                                      {sub.file_name && (
+                                        <span className="flex items-center space-x-1">
+                                          <span className="material-icons text-sm">insert_drive_file</span>
+                                          <span>{sub.file_name}</span>
+                                        </span>
+                                      )}
+                                      {sub.file_size !== null && <span>{formatFileSize(sub.file_size)}</span>}
                                       <span>{formatDate(sub.submitted_at)}</span>
                                     </div>
                                   </div>
@@ -744,13 +783,15 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                                           <span className="material-icons text-sm">delete</span>
                                         </button>
                                       )}
-                                    <button
-                                      onClick={() => downloadFile(sub.id)}
-                                      className="px-3 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-lg transition-colors flex items-center space-x-1"
-                                    >
-                                      <span className="material-icons text-sm">download</span>
-                                      <span className="text-sm">Download</span>
-                                    </button>
+                                    {sub.file_name && (
+                                      <button
+                                        onClick={() => downloadFile(sub.id)}
+                                        className="px-3 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-lg transition-colors flex items-center space-x-1"
+                                      >
+                                        <span className="material-icons text-sm">download</span>
+                                        <span className="text-sm">Download</span>
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -895,29 +936,37 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                         .map(sub => (
                           <div key={sub.id} className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
                             <div className="flex items-center justify-between">
-                              <div className="flex-grow">
-                                <div className="flex items-center space-x-4 text-sm text-gray-600 dark:text-gray-400">
-                                  <span className="flex items-center space-x-1">
-                                    <span className="material-icons text-sm">insert_drive_file</span>
-                                    <span className="font-medium">{sub.file_name}</span>
-                                  </span>
-                                  <span>{formatFileSize(sub.file_size)}</span>
+                              <div className="flex-grow min-w-0">
+                                {sub.comment && <div className="mb-2"><SubmissionComment text={sub.comment} /></div>}
+                                <div className="flex items-center flex-wrap gap-x-4 gap-y-1 text-sm text-gray-600 dark:text-gray-400">
+                                  {sub.file_name ? (
+                                    <span className="flex items-center space-x-1">
+                                      <span className="material-icons text-sm">insert_drive_file</span>
+                                      <span className="font-medium">{sub.file_name}</span>
+                                    </span>
+                                  ) : (
+                                    <span className="flex items-center space-x-1 italic">
+                                      <span className="material-icons text-sm">chat</span>
+                                      <span>Comment only</span>
+                                    </span>
+                                  )}
+                                  {sub.file_size !== null && <span>{formatFileSize(sub.file_size)}</span>}
                                   <span>{formatDate(sub.submitted_at)}</span>
 
                                   {/* Status Chip */}
                                   {renderStatusChip(sub.status)}
                                 </div>
                               </div>
-                              <div className="flex items-center space-x-2">
-                                {/* Approve Button Removed - Using Approve All instead */}
-
-                                <button
-                                  onClick={() => downloadFile(sub.id)}
-                                  className="px-3 py-2 bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors flex items-center space-x-2"
-                                >
-                                  <span className="material-icons text-sm">download</span>
-                                  <span>Download</span>
-                                </button>
+                              <div className="flex items-center space-x-2 ml-3">
+                                {sub.file_name && (
+                                  <button
+                                    onClick={() => downloadFile(sub.id)}
+                                    className="px-3 py-2 bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors flex items-center space-x-2"
+                                  >
+                                    <span className="material-icons text-sm">download</span>
+                                    <span>Download</span>
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>

@@ -1671,9 +1671,16 @@ api.get('/tasks/:id', authenticateToken, async (req, res) => {
 api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (req, res) => {
   const { id } = req.params;
   const userId = req.user.id; // always the authenticated user — never trust the body
+  const dropUpload = () => { if (req.file) fs.unlink(req.file.path, () => {}); };
 
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded' });
+  // A submission is a comment (pull-request link, Jira ticket, note), a file, or both.
+  const comment = typeof req.body?.comment === 'string' ? req.body.comment.trim() : '';
+  if (comment.length > 4000) {
+    dropUpload();
+    return res.status(400).json({ error: 'Comment is too long (max 4000 characters)' });
+  }
+  if (!req.file && !comment) {
+    return res.status(400).json({ error: 'Add a comment (e.g. a link to your work) or a file' });
   }
 
   try {
@@ -1681,17 +1688,17 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
     // phase they have not reached (not enrolled, previous phase unfinished, stars gate).
     const lockReasons = await courseRoutes.taskLockReasons(db, userId, id);
     if (lockReasons === null) {
-      fs.unlink(req.file.path, () => {});
+      dropUpload();
       return res.status(404).json({ error: 'Task not found' });
     }
     if (lockReasons.length > 0) {
-      fs.unlink(req.file.path, () => {});
+      dropUpload();
       return res.status(403).json({ error: 'This phase is locked for you', lockReasons });
     }
 
     const [result] = await db.query(
-      'INSERT INTO task_submissions (task_id, user_id, file_name, file_path, file_size) VALUES (?, ?, ?, ?, ?)',
-      [id, userId, req.file.originalname, req.file.filename, req.file.size]
+      'INSERT INTO task_submissions (task_id, user_id, file_name, file_path, file_size, comment) VALUES (?, ?, ?, ?, ?, ?)',
+      [id, userId, req.file ? req.file.originalname : null, req.file ? req.file.filename : null, req.file ? req.file.size : null, comment || null]
     );
 
     // Get task, lesson, path and user info
@@ -1715,7 +1722,7 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
       }
 
       // Create detailed notification message
-      const notificationMessage = `${users[0].name} has uploaded a submission for task "${task.title}" (${task.type.charAt(0).toUpperCase() + task.type.slice(1)}) in lesson "${lessonTitle}" from path "${pathName}".`;
+      const notificationMessage = `${users[0].name} has submitted ${req.file ? 'a file' : 'a comment'} for task "${task.title}" (${task.type.charAt(0).toUpperCase() + task.type.slice(1)}) in lesson "${lessonTitle}" from path "${pathName}".`;
 
       // Notify all admins about the submission
       await notifyAdmins(
@@ -1727,7 +1734,8 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
           taskId: id,
           userId,
           submissionId: result.insertId,
-          fileName: req.file.originalname,
+          fileName: req.file ? req.file.originalname : null,
+          comment: comment || null,
           taskTitle: task.title,
           taskType: task.type,
           lessonTitle,
@@ -1751,7 +1759,8 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
             <p><strong>Type:</strong> ${task.type.charAt(0).toUpperCase() + task.type.slice(1)}</p>
             <p><strong>Lesson:</strong> ${escapeHtml(lessonTitle)}</p>
             <p><strong>Path:</strong> ${escapeHtml(pathName)}</p>
-            <p><strong>File:</strong> ${escapeHtml(req.file.originalname)}</p>
+            ${req.file ? `<p><strong>File:</strong> ${escapeHtml(req.file.originalname)}</p>` : ''}
+            ${comment ? `<p><strong>Comment:</strong> ${escapeHtml(comment)}</p>` : ''}
             <p style="color: #999; font-size: 12px; margin-top: 20px;">Please review the submission in the platform.</p>
           </div>
         `;
@@ -1762,7 +1771,8 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
     res.status(201).json({
       id: result.insertId,
       message: 'Submission uploaded successfully',
-      fileName: req.file.originalname
+      fileName: req.file ? req.file.originalname : null,
+      comment: comment || null
     });
   } catch (err) {
     console.error(err);
@@ -1826,6 +1836,9 @@ api.get('/submissions/download/:id', authenticateToken, async (req, res) => {
       }
     }
 
+    if (!submission.file_path) {
+      return res.status(404).json({ error: 'This submission has no file (comment only)' });
+    }
     const filePath = path.join(uploadsDir, path.basename(submission.file_path));
 
     if (!fs.existsSync(filePath)) {
