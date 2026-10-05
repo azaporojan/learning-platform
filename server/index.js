@@ -1701,6 +1701,9 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
       [id, userId, req.file ? req.file.originalname : null, req.file ? req.file.filename : null, req.file ? req.file.size : null, comment || null]
     );
 
+    // The submission is saved at this point: a failure while notifying admins must not turn
+    // into a 500 (the student would retry and create a duplicate).
+    try {
     // Get task, lesson, path and user info
     const [tasks] = await db.query('SELECT title, lesson_id, type FROM tasks WHERE id = ?', [id]);
     const [users] = await db.query('SELECT name, email FROM users WHERE id = ?', [userId]);
@@ -1735,7 +1738,7 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
           userId,
           submissionId: result.insertId,
           fileName: req.file ? req.file.originalname : null,
-          comment: comment || null,
+          comment: comment ? (comment.length > 200 ? `${comment.slice(0, 200)}…` : comment) : null, // preview only
           taskTitle: task.title,
           taskType: task.type,
           lessonTitle,
@@ -1766,6 +1769,9 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
         `;
         await sendEmail(admin.email, 'New Task Submission! 📤', emailHtml);
       }
+    }
+    } catch (notifyErr) {
+      console.error('[Submit] Saved, but notifying admins failed:', notifyErr);
     }
 
     res.status(201).json({

@@ -321,6 +321,14 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const tooLong = new FormData();
   tooLong.append('comment', 'x'.repeat(4001));
   assert.equal((await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: tooLong })).status, 400);
+  const atLimit = new FormData();
+  atLimit.append('comment', 'y'.repeat(4000));
+  const limitOk = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: atLimit });
+  assert.equal(limitOk.status, 201);
+  assert.equal((await stud(`/submissions/${limitOk.body.id}`, { method: 'DELETE' })).status, 200);
+  const blank = new FormData();
+  blank.append('comment', '   \n\t ');
+  assert.equal((await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: blank })).status, 400);
   for (const sid of [commentOnly.body.id, both.body.id]) assert.equal((await stud(`/submissions/${sid}`, { method: 'DELETE' })).status, 200);
   assert.equal(fs.readdirSync(uploadsDir).length, 1);
 
