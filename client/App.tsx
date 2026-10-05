@@ -49,6 +49,10 @@ const App: React.FC = () => {
   const handleLogout = async () => {
     try {
       await fetch(apiUrl('/logout'), { method: 'POST', credentials: 'include' });
+      // Admin-only lesson-script drafts must not outlive the session on a shared machine
+      try {
+        Object.keys(localStorage).filter((k) => k.startsWith('lesson-script-draft-')).forEach((k) => localStorage.removeItem(k));
+      } catch { /* ignore */ }
       setCurrentUser(null);
     } catch (error) {
       console.error('Logout failed', error);

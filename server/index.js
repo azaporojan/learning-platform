@@ -1310,7 +1310,11 @@ api.get('/paths/:pathId/details', async (req, res) => {
 
   try {
     // 1. Get Lessons
-    const [lessons] = await db.query('SELECT * FROM lessons WHERE path_id = ? ORDER BY order_index ASC', [pathId]);
+    // Explicit columns: `script` (the admin-only teaching notes) must never travel with lesson rows.
+    const [lessons] = await db.query(
+      'SELECT id, path_id, title, description, position_x, position_y, order_index, parent_id, created_at, updated_at FROM lessons WHERE path_id = ? ORDER BY order_index ASC',
+      [pathId]
+    );
 
     // 2. Get Tasks for these lessons
     const lessonIds = lessons.map(l => l.id);
@@ -1377,9 +1381,8 @@ api.get('/paths/:pathId/details', async (req, res) => {
       // In a real app, you'd implement more complex logic based on mandatory tasks of previous lesson
       // For now, let's say Lesson N is unlocked if Lesson N-1 mandatory tasks are done.
 
-      const { script: _script, ...lessonPublic } = lesson; // admin-only; served by GET /lessons/:id/script
       return {
-        ...lessonPublic,
+        ...lesson,
         completed: isLessonCompleted,
         tasks: lessonTasks.map(t => ({
           ...t,
@@ -1869,7 +1872,7 @@ api.get('/admin/submissions', authenticateToken, requireAdmin, async (req, res) 
        LIMIT ${limit}`,
       status === 'all' ? [] : [status]
     );
-    const [counts] = await db.query(`SELECT COALESCE(status, 'pending') AS status, COUNT(*) AS n FROM task_submissions GROUP BY 1`);
+    const [counts] = await db.query(`SELECT COALESCE(status, 'pending') AS status, COUNT(*)::int AS n FROM task_submissions GROUP BY 1`);
     const summary = { pending: 0, approved: 0, rejected: 0 };
     counts.forEach((c) => { summary[c.status] = c.n; });
     res.json({ submissions: rows, counts: summary });

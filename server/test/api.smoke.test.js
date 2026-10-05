@@ -272,6 +272,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(readScript.status, 200);
   assert.match(readScript.body.script, /^# Plan/);
   assert.equal((await admin('/lessons/999999/script')).status, 404);
+  assert.equal((await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 'x'.repeat(200001) } })).status, 400);
   const gone = await admin(`/lessons/${second.body.id}`, { method: 'DELETE' });
   assert.equal(gone.status, 200);
 
@@ -360,7 +361,11 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(row.path_name, 'Phase 1');
   assert.equal(row.status, 'pending');
   assert.equal((await admin('/admin/submissions?status=approved')).body.submissions.length, 0);
+  assert.equal((await admin('/admin/submissions?status=rejected')).body.submissions.length, 0);
   assert.equal((await admin('/admin/submissions?status=all')).body.submissions.length, 1);
+  assert.strictEqual(inbox.body.counts.pending, 1); // numeric, not a bigint string
+  assert.equal((await admin('/admin/submissions?status=bogus&limit=99999')).status, 200); // falls back to pending, clamps limit
+  assert.equal((await admin('/admin/submissions?limit=abc')).body.submissions.length, 1);
 
   // HTML uploads are served as downloads, never rendered inline
   const raw = await fetch(`${BASE}/uploads/${stored[0]}`);

@@ -162,6 +162,7 @@ now decided by course enrolment and the phase gates above; the call answers 404.
 | `PUT /api/tasks/:id` | `{title, type, xp?, deadline?, description?, order?, x?, y?}` | Update a task; `order`/`x`/`y` move it on the graph |
 | `DELETE /api/tasks/:id` | — | Delete a task |
 | `GET /api/admin/users` | — | All users (admin view) |
+| `GET /api/admin/submissions` | `?status=pending\|approved\|rejected\|all&limit=` | Review inbox: every submission with student, task, lesson, phase, course and status; `comment` is a 300-char preview (the full text is on `GET /api/tasks/:id/submissions`) |
 | `GET /api/admin/api-keys` | — | List keys (names/prefixes only) |
 | `POST /api/admin/api-keys` | `{name}` | Create a key (plaintext returned once) |
 | `DELETE /api/admin/api-keys/:id` | — | Revoke a key |
