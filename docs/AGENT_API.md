@@ -148,7 +148,10 @@ All accept the same bearer header. Ids in responses are integers; `GET /api/path
 | `GET /api/paths/:id/details` | — | Lessons of a path with their tasks, positions and completion flags |
 | `POST /api/paths` | `{name, description?, stars_required?, course_id?, requires_previous?}` | Create an empty path (appended to the end of its course) |
 | `PUT /api/paths/:id` | `{name, description?, stars_required?, course_id?, order_index?, requires_previous?}` | Update a path; the course fields are optional |
-| `DELETE /api/paths/:id` | — | Delete a path and everything in it |
+| `DELETE /api/paths/:id` | — | Delete a path and everything in it (its course is renumbered) |
+
+Removed in this release: `POST /api/paths/:id/unlock` (the old stars-only unlock). Access to a phase is
+now decided by course enrolment and the phase gates above; the call answers 404.
 | `POST /api/lessons` | `{pathId, title, description?, x, y, order, parentId?}` | Create one lesson (you supply the graph position) |
 | `PUT /api/lessons/:id` | `{title, description?, order?, x?, y?, parentId?}` | Update a lesson; the optional graph fields move it without deleting it (keeps tasks and submissions) |
 | `DELETE /api/lessons/:id` | — | Delete a lesson and its tasks |
