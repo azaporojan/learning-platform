@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import ReactDOM from 'react-dom';
 import { apiUrl, getFileUrl } from '../config';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -12,15 +11,15 @@ interface User {
   avatar_url: string | null;
   is_approved: boolean;
   created_at: string;
+  courses?: { id: number; name: string }[];
 }
 
-interface UsersManagementModalProps {
-  isOpen: boolean;
-  onClose: () => void;
+interface UsersAdminTableProps {
   currentUserId: number;
 }
 
-export default function UsersManagementModal({ isOpen, onClose, currentUserId }: UsersManagementModalProps) {
+// Admin view of the Users page: every account with role, approval state, stars and enrolments.
+export function UsersAdminTable({ currentUserId }: UsersAdminTableProps) {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -32,10 +31,8 @@ export default function UsersManagementModal({ isOpen, onClose, currentUserId }:
   const [starsAmount, setStarsAmount] = useState<string>('10');
 
   useEffect(() => {
-    if (isOpen) {
-      fetchUsers();
-    }
-  }, [isOpen]);
+    fetchUsers();
+  }, []);
 
   const fetchUsers = async () => {
     try {
@@ -154,30 +151,12 @@ export default function UsersManagementModal({ isOpen, onClose, currentUserId }:
     }
   };
 
-  if (!isOpen) return null;
-
-  return ReactDOM.createPortal(
+  return (
     <>
-      <div className="fixed inset-0 bg-black/70 z-[150] flex items-center justify-center p-4" onClick={onClose}>
-        <div 
-          className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden shadow-2xl flex flex-col"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
-            <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100">
-              Users Management
-            </h2>
-            <button
-              onClick={onClose}
-              className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
-            >
-              <span className="material-icons text-3xl">close</span>
-            </button>
-          </div>
-
+      <div>
+        <div>
           {/* Content */}
-          <div className="flex-1 overflow-y-auto p-6">
+          <div>
             {loading ? (
               <div className="text-center py-8">
                 <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
@@ -193,6 +172,7 @@ export default function UsersManagementModal({ isOpen, onClose, currentUserId }:
                       <th className="text-left py-3 px-4 text-gray-600 dark:text-gray-300 font-semibold">Role</th>
                       <th className="text-left py-3 px-4 text-gray-600 dark:text-gray-300 font-semibold">Stars</th>
                       <th className="text-left py-3 px-4 text-gray-600 dark:text-gray-300 font-semibold">Status</th>
+                      <th className="text-left py-3 px-4 text-gray-600 dark:text-gray-300 font-semibold">Courses</th>
                       <th className="text-right py-3 px-4 text-gray-600 dark:text-gray-300 font-semibold">Actions</th>
                     </tr>
                   </thead>
@@ -222,6 +202,11 @@ export default function UsersManagementModal({ isOpen, onClose, currentUserId }:
                           }`}>
                             {user.is_approved ? 'Approved' : 'Pending'}
                           </span>
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-600 dark:text-gray-400">
+                          {user.courses && user.courses.length > 0
+                            ? user.courses.map((c) => c.name).join(', ')
+                            : <span className="text-gray-300 dark:text-gray-600">—</span>}
                         </td>
                         <td className="py-3 px-4 text-right space-x-2">
                           <button
@@ -421,7 +406,6 @@ export default function UsersManagementModal({ isOpen, onClose, currentUserId }:
         onConfirm={() => deleteConfirm.userId && handleDelete(deleteConfirm.userId)}
         onCancel={() => setDeleteConfirm({ isOpen: false })}
       />
-    </>,
-    document.body
+    </>
   );
 }

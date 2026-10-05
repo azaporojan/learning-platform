@@ -15,6 +15,81 @@ export interface Path {
   description: string;
   status: 'locked' | 'unlocked' | 'in-progress';
   requiredScore: number;
+  course_id?: number | null;
+  order_index?: number;
+  requires_previous?: boolean;
+}
+
+// GET /api/courses
+export interface Course {
+  id: number;
+  name: string;
+  description: string;
+  phaseCount: number;
+  lessonCount: number;
+  studentCount: number;
+  enrolled: boolean;
+  // Students only: mandatory tasks approved / total mandatory tasks
+  progress: { total: number; done: number } | null;
+}
+
+// GET /api/courses/:id — the whole road
+export interface RoadTask {
+  id: number;
+  lesson_id: number;
+  title: string;
+  description?: string;
+  type: 'mandatory' | 'optional';
+  xp_reward: number;
+  deadline: string | null;
+  order_index: number;
+  position_x: number;
+  position_y: number;
+  completed: boolean;
+  is_new?: boolean;
+  unviewed_count?: number;
+}
+
+export interface RoadLesson {
+  id: number;
+  path_id: number;
+  title: string;
+  description?: string;
+  order_index: number;
+  position_x: number;
+  position_y: number;
+  completed: boolean;
+  tasks: RoadTask[];
+}
+
+export type LockReason = 'enroll' | 'previous' | 'stars';
+
+export interface Phase {
+  id: number;
+  name: string;
+  description: string;
+  order_index: number;
+  stars_required: number;
+  requires_previous: boolean;
+  locked: boolean;
+  lockReasons: LockReason[];
+  lessons: RoadLesson[];
+}
+
+export interface CourseDetail {
+  id: number;
+  name: string;
+  description: string;
+  enrolled: boolean;
+  phases: Phase[];
+}
+
+export interface DirectoryUser {
+  id: number;
+  name: string;
+  role: 'admin' | 'student';
+  stars: number;
+  avatar_url?: string | null;
 }
 
 export interface Lesson {

@@ -18,7 +18,10 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 ### Pentru Studenți
 - 🔐 Autentificare securizată cu email și cod 2FA
 - 📊 Sistem de puncte (stars) și leaderboard
-- 🛤️ Căi de învățare (Paths) cu lecții și task-uri
+- 🎓 Cursuri (ex. „QA Automation Engineer”) cu înscriere — „All courses” / „My courses”
+- 🛤️ Fiecare curs este un drum continuu: faze → lecții → task-uri, cu faze blocate până sunt atinse (configurabil per fază: faza anterioară terminată și/sau stele necesare)
+- 🗺️ Hartă tip quest: ✕ pentru lecțiile terminate, 🚩 unde ești acum, ? pentru ce urmează; cuprins pliabil în stânga care sare la lecție
+- 👥 Pagina „Users” cu rolurile admin/student (studenții văd clasamentul, adminii gestionează conturile)
 - 📝 Task-uri cu deadline-uri și upload de fișiere
 - 🔔 Notificări în timp real pentru task-uri noi
 - 💬 Chat în timp real cu Socket.IO
@@ -28,7 +31,7 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 
 ### Pentru Administratori
 - 👨‍💼 Panou complet de administrare
-- ➕ Creare și editare căi de învățare
+- ➕ Creare și editare cursuri și faze (ordine, blocare după faza anterioară, stele necesare)
 - 📚 Management lecții și task-uri
 - ✅ Aprobare/respingere submisii studenți
 - 🔄 Notificări live pentru submisii noi
@@ -207,6 +210,7 @@ docker run --rm -p 3001:3001 --env-file server/.env -e DB_HOST=host.docker.inter
 ```
 learning-platform/
 ├── client/                 # Frontend React
+│   ├── pages/             # Routes: Courses, Course road, Users
 │   ├── components/        # React components
 │   ├── contexts/          # React contexts (Socket)
 │   ├── hooks/             # Custom hooks
@@ -216,6 +220,7 @@ learning-platform/
 │   └── package.json
 ├── server/                # Backend Node.js
 │   ├── db/                # PostgreSQL pool + migrații SQL (forward-only)
+│   ├── courses.js         # Rute pentru cursuri, înscrieri, directorul de utilizatori
 │   ├── scripts/           # promote_admin.js
 │   ├── uploads/           # User uploaded files
 │   ├── index.js           # Main server file

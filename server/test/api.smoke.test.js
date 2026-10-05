@@ -129,10 +129,14 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
 
   const anon = session();
 
-  // Migrations seeded the default paths; anonymous callers can list them.
-  const paths = await anon('/paths');
-  assert.equal(paths.status, 200);
-  assert.equal(paths.body.length, 2);
+  // A fresh install starts with an empty catalogue (003 removes the unused demo paths of 001);
+  // anonymous callers can list paths and courses.
+  const emptyPaths = await anon('/paths');
+  assert.equal(emptyPaths.status, 200);
+  assert.equal(emptyPaths.body.length, 0);
+  const emptyCourses = await anon('/courses');
+  assert.equal(emptyCourses.status, 200);
+  assert.deepEqual(emptyCourses.body, []);
 
   // Admin-only routes reject anonymous requests (used to be wide open).
   for (const [method, url] of [['POST', '/lessons'], ['POST', '/tasks'], ['DELETE', '/lessons/1'], ['DELETE', '/tasks/1'], ['POST', '/upload-image']]) {
@@ -180,6 +184,25 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const pending = adminNotifs.body.find((n) => n.type === 'new_user_pending');
   assert.equal(pending.metadata.userId, student.id);
   assert.equal(pending.status, 'approved');
+
+  // Courses: admin creates a course and two phases; the second phase is gated on the first
+  const anonCourse = await anon('/courses', { method: 'POST', json: { name: 'x' } });
+  assert.equal(anonCourse.status, 401);
+  const badCourse = await admin('/courses', { method: 'POST', json: { name: '' } });
+  assert.equal(badCourse.status, 400);
+  const course = await admin('/courses', { method: 'POST', json: { name: 'QA Automation Engineer', description: 'd' } });
+  assert.equal(course.status, 201, JSON.stringify(course.body));
+  const phase1 = await admin('/paths', { method: 'POST', json: { name: 'Phase 1', stars_required: 0, course_id: course.body.id } });
+  assert.equal(phase1.status, 200, JSON.stringify(phase1.body));
+  assert.equal(phase1.body.order_index, 1);
+  const phase2 = await admin('/paths', { method: 'POST', json: { name: 'Phase 2', stars_required: 0, course_id: course.body.id } });
+  assert.equal(phase2.body.order_index, 2);
+  assert.equal(phase2.body.requires_previous, true);
+  const badPhase = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', requires_previous: 'yes' } });
+  assert.equal(badPhase.status, 400);
+  const paths = await anon('/paths');
+  assert.equal(paths.body.length, 2);
+  assert.equal(paths.body[0].course_id, course.body.id);
 
   // Content creation as admin (lesson → task) and the deadline normalisation
   const lesson = await admin('/lessons', { method: 'POST', json: { pathId: paths.body[0].id, title: 'Intro', order: 1 } });
@@ -256,6 +279,64 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const leaderboard = await anon('/users');
   assert.equal(leaderboard.body[0].stars, 10);
 
+  // The course road: enrolment gates everything for a student, then the sequence gates phase 2
+  const phase2Lesson = await admin('/lessons', { method: 'POST', json: { pathId: phase2.body.id, title: 'P2 L1', order: 1 } });
+  assert.equal(phase2Lesson.status, 201);
+  const phase2Task = await admin('/tasks', { method: 'POST', json: { lessonId: phase2Lesson.body.id, title: 'P2 T1', type: 'mandatory', xp: 10, deadline: '2030-01-01' } });
+  assert.equal(phase2Task.status, 201);
+  const roadBefore = await stud(`/courses/${course.body.id}`);
+  assert.equal(roadBefore.status, 200);
+  assert.equal(roadBefore.body.enrolled, false);
+  assert.deepEqual(roadBefore.body.phases.map((p) => p.lockReasons), [['enroll'], ['enroll']]);
+  const enrol = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' });
+  assert.equal(enrol.status, 200);
+  const enrolAgain = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' }); // idempotent
+  assert.equal(enrolAgain.status, 200);
+  const catalogue = await stud('/courses');
+  assert.equal(catalogue.body[0].enrolled, true);
+  assert.equal(catalogue.body[0].phaseCount, 2);
+  assert.equal(catalogue.body[0].studentCount, 1);
+  assert.deepEqual(catalogue.body[0].progress, { total: 2, done: 1 });
+  const roadAfter = await stud(`/courses/${course.body.id}`);
+  assert.equal(roadAfter.body.enrolled, true);
+  // Phase 1's only mandatory task was approved above → phase 1 done, phase 2 reachable
+  assert.deepEqual(roadAfter.body.phases.map((p) => p.locked), [false, false]);
+  assert.equal(roadAfter.body.phases[0].lessons[0].completed, true);
+  assert.equal(roadAfter.body.phases[0].lessons[0].tasks[0].completed, true);
+  assert.equal(roadAfter.body.phases[1].lessons[0].tasks[0].is_new, true);
+  // Add a star gate on phase 2 that the student (10 stars) does not meet
+  const gate = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 500 } });
+  assert.equal(gate.status, 200);
+  const roadGated = await stud(`/courses/${course.body.id}`);
+  assert.deepEqual(roadGated.body.phases[1].lockReasons, ['stars']);
+  // Admin never sees locks and gets unviewed-submission counts instead of NEW badges
+  const adminRoad = await admin(`/courses/${course.body.id}`);
+  assert.deepEqual(adminRoad.body.phases.map((p) => p.locked), [false, false]);
+  assert.equal(typeof adminRoad.body.phases[0].lessons[0].tasks[0].unviewed_count, 'number');
+  const adminUsers = await admin('/admin/users');
+  assert.deepEqual(adminUsers.body.find((u) => u.id === student.id).courses, [{ id: course.body.id, name: 'QA Automation Engineer' }]);
+  // Users directory: everyone logged in, no emails
+  const dirAnon = await anon('/users/directory');
+  assert.equal(dirAnon.status, 401);
+  const dir = await stud('/users/directory');
+  assert.equal(dir.status, 200);
+  assert.equal(dir.body[0].role, 'admin');
+  assert.equal(dir.body[0].email, undefined);
+  // Leaving the course and deleting it leaves the phases in place (unassigned)
+  const leave = await stud(`/courses/${course.body.id}/enroll`, { method: 'DELETE' });
+  assert.equal(leave.status, 200);
+  const missingCourse = await admin('/courses/999999');
+  assert.equal(missingCourse.status, 404);
+  const course2 = await admin('/courses', { method: 'POST', json: { name: 'Temp' } });
+  const movePhase = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 0, course_id: course2.body.id, order_index: 1 } });
+  assert.equal(movePhase.status, 200);
+  const dropCourse = await admin(`/courses/${course2.body.id}`, { method: 'DELETE' });
+  assert.equal(dropCourse.status, 200);
+  const orphan = (await admin('/paths')).body.find((p) => p.id === String(phase2.body.id));
+  assert.equal(orphan.course_id, null);
+  const reattach = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 0, course_id: course.body.id, order_index: 2 } });
+  assert.equal(reattach.status, 200);
+
   // Chats: membership enforced, bulk insert + ON CONFLICT paths work
   const chat = await admin('/chats', { method: 'POST', json: { name: 'General', memberIds: [student.id, student.id, 9999] } });
   assert.equal(chat.status, 201, JSON.stringify(chat.body));
@@ -292,6 +373,8 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
     name: 'Agent Path',
     description: 'Created by an agent',
     stars_required: 0,
+    courseId: course.body.id,
+    requires_previous: false,
     lessons: [
       { title: 'L1', description: 'first', tasks: [{ title: 'T1', xp: 5 }, { title: 'T2', type: 'optional', deadline: '2031-05-01' }] },
       { title: 'L2', tasks: [{ title: 'T3' }] },
@@ -311,6 +394,12 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(imp.status, 201, JSON.stringify(impBody));
   assert.equal(impBody.counts.lessons, 3);
   assert.equal(impBody.counts.tasks, 3);
+  const importedPhase = (await admin('/paths')).body.find((p) => p.id === String(impBody.path.id));
+  assert.equal(importedPhase.course_id, course.body.id);
+  assert.equal(importedPhase.order_index, 3);
+  assert.equal(importedPhase.requires_previous, false);
+  const missingCourseImport = await fetch(`${BASE}/admin/paths/import`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'x', courseId: 999999, lessons: [{ title: 'L' }] }) });
+  assert.equal(missingCourseImport.status, 404);
   const importedDetails = await admin(`/paths/${impBody.path.id}/details`);
   assert.equal(importedDetails.body.length, 3);
   assert.equal(importedDetails.body[0].parent_id, null);
