@@ -316,10 +316,10 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
           if (p.stars_required > 0 && (caller?.stars || 0) < p.stars_required) lockReasons.push('stars');
         }
         previousPhaseDone = phaseLessons.every(lessonMandatoryDone);
-        // Locked phases are shown as an outline only: titles stay (the road needs them), the
-        // lesson and task descriptions are not sent until the student reaches the phase.
+        // Locked phases keep their lesson titles, summaries and task titles (so a student can see
+        // what is coming); only the task briefs are held back until the phase is reached.
         if (lockReasons.length > 0) {
-          phaseLessons.forEach((l) => { l.description = ''; l.tasks.forEach((t) => { t.description = ''; }); });
+          phaseLessons.forEach((l) => { l.tasks.forEach((t) => { t.description = ''; }); });
         }
         return {
           id: p.id, name: p.name, description: p.description || '', order_index: p.order_index,

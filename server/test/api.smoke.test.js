@@ -298,7 +298,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(leaderboard.body[0].stars, 10);
 
   // The course road: enrolment gates everything for a student, then the sequence gates phase 2
-  const phase2Lesson = await admin('/lessons', { method: 'POST', json: { pathId: phase2.body.id, title: 'P2 L1', order: 1 } });
+  const phase2Lesson = await admin('/lessons', { method: 'POST', json: { pathId: phase2.body.id, title: 'P2 L1', description: 'What phase 2 covers', order: 1 } });
   assert.equal(phase2Lesson.status, 201);
   const phase2Task = await admin('/tasks', { method: 'POST', json: { lessonId: phase2Lesson.body.id, title: 'P2 T1', type: 'mandatory', xp: 10, deadline: '2030-01-01' } });
   assert.equal(phase2Task.status, 201);
@@ -310,7 +310,9 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(roadBefore.status, 200);
   assert.equal(roadBefore.body.enrolled, false);
   assert.deepEqual(roadBefore.body.phases.map((p) => p.lockReasons), [['enroll'], ['enroll']]);
-  // Locked phases come back as an outline only (titles, no descriptions)
+  // Locked phases keep lesson titles + summaries and task titles; only task briefs are held back
+  assert.equal(roadBefore.body.phases[1].lessons[0].title, 'P2 L1');
+  assert.equal(roadBefore.body.phases[1].lessons[0].description, 'What phase 2 covers');
   assert.equal(roadBefore.body.phases[1].lessons[0].tasks[0].title, 'P2 T1');
   assert.equal(roadBefore.body.phases[1].lessons[0].tasks[0].description, '');
   // …and the server refuses submissions to a phase the student has not reached

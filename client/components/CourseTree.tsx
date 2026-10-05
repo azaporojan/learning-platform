@@ -132,7 +132,7 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
                       lessonNumber += 1;
                       const n = lessonNumber;
                       const lst = state.lessons.get(lesson.id) || 'open';
-                      const canOpen = isAdmin || lst !== 'locked';
+                      const canOpen = true; // a locked lesson can be read (summary + task titles); its tasks stay locked
                       return (
                         <li key={lesson.id}>
                           <div className={`group flex items-center gap-1.5 rounded-lg px-1.5 py-1 ${isSel('lesson', lesson.id) ? 'bg-primary/15' : 'hover:bg-gray-100 dark:hover:bg-gray-800'}`}>

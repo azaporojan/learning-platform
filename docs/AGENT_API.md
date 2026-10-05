@@ -43,9 +43,9 @@ Content is organised as **course → phases → lessons → tasks**. A *phase* i
 
 Students **enrol** in a course (`POST /api/courses/:id/enroll`); only enrolled students can start
 its road and they get notifications for new tasks in it. The gates are enforced by the server:
-`GET /api/courses/:id` returns locked phases as an outline (titles only, no lesson or task
-descriptions) and `POST /api/tasks/:id/submit` answers `403 {"lockReasons":[…]}` for a phase the
-student has not reached. Phases of a course are always numbered `1..n`: creating or importing a
+`GET /api/courses/:id` returns locked phases with their lesson titles, summaries and task titles
+but without the task briefs, and `POST /api/tasks/:id/submit` answers `403 {"lockReasons":[…]}` for
+a phase the student has not reached. Phases of a course are always numbered `1..n`: creating or importing a
 phase appends it, and `PUT /api/paths/:id` with `order_index` (or a new `course_id`) re-sequences
 the others.
 

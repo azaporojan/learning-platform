@@ -171,7 +171,12 @@ export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, is
               )}
 
               <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
-                <h4 className="text-sm font-bold text-gray-500 mb-4">TASKS ({lesson.tasks.length})</h4>
+                <h4 className="text-sm font-bold text-gray-500 mb-4">
+                  TASKS ({lesson.tasks.length})
+                  {!isAdmin && lesson.tasks.length > 0 && lesson.tasks.every((t) => taskStatus(t) === 'locked') && (
+                    <span className="ml-2 font-semibold normal-case text-gray-400">· not reached yet — the briefs open when you get here</span>
+                  )}
+                </h4>
                 <div className="space-y-3">
                   {lesson.tasks.length === 0 && <p className="text-sm text-gray-400 italic">No tasks assigned yet.</p>}
                   {lesson.tasks.map((task) => {

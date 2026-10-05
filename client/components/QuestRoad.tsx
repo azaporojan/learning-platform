@@ -189,11 +189,9 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                 <button
                   type="button"
                   data-road-node={`lesson-${lesson.id}`}
-                  onClick={() => (status !== 'locked' || isAdmin) && onOpenLesson(lesson, stop.phase)}
+                  onClick={() => onOpenLesson(lesson, stop.phase)}
                   title={lesson.title}
-                  className={`relative flex items-center justify-center rounded-full shadow-md border-[3px] transition-transform ${lessonClasses(status, isAdmin)} ${
-                    status === 'locked' && !isAdmin ? 'cursor-not-allowed' : 'hover:scale-110 cursor-pointer'
-                  } ${sel ? 'ring-4 ring-primary/50 scale-110' : ''}`}
+                  className={`relative flex items-center justify-center rounded-full shadow-md border-[3px] transition-transform hover:scale-110 cursor-pointer ${lessonClasses(status, isAdmin)} ${sel ? 'ring-4 ring-primary/50 scale-110' : ''}`}
                   style={{ width: LESSON_SIZE, height: LESSON_SIZE }}
                 >
                   {isAdmin ? <span className="font-extrabold text-sm">{stop.lessonNumber}</span>
