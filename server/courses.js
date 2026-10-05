@@ -22,36 +22,52 @@ const isAdminRole = (role) => role === 'admin';
 // Why a phase (path) is locked for a user: [] = accessible. Mirrors the per-phase logic of
 // GET /courses/:id and is what the submission route enforces. Paths outside any course keep
 // the legacy behaviour (no course gating). Admins are never locked.
+// The single definition of "why is this phase locked": used by GET /courses/:id (batched) and
+// by the per-request checks below, so the UI and the submit route can never disagree.
+//   previousDone — every mandatory task of the previous phase is approved. A phase without
+//   mandatory tasks (or the first phase) counts as done on purpose: there is nothing to gate on.
+function phaseLockReasonsFrom({ isAdmin, enrolled, isFirst, requiresPrevious, previousDone, stars, starsRequired }) {
+  if (isAdmin) return [];
+  const reasons = [];
+  if (!enrolled) reasons.push('enroll');
+  if (!isFirst && requiresPrevious && !previousDone) reasons.push('previous');
+  if (starsRequired > 0 && (stars || 0) < starsRequired) reasons.push('stars');
+  return reasons;
+}
+
+// Phases of a course in road order. order_index is kept unique by placePhase; id breaks ties.
+const PHASE_ORDER = 'ORDER BY order_index ASC, id ASC';
+
 async function phaseLockReasons(db, userId, pathId) {
-  const [users] = await db.query('SELECT role, stars FROM users WHERE id = ?', [userId]);
-  if (users.length === 0) return ['enroll'];
-  if (isAdminRole(users[0].role)) return [];
   const [paths] = await db.query('SELECT id, course_id, order_index, stars_required, requires_previous FROM paths WHERE id = ?', [pathId]);
   if (paths.length === 0) return [];
   const path = paths[0];
-  if (path.course_id === null) return [];
+  if (path.course_id === null) return []; // legacy: a path outside any course is not gated
 
-  const reasons = [];
+  const [users] = userId ? await db.query('SELECT role, stars FROM users WHERE id = ?', [userId]) : [[]];
+  if (users.length === 0) return ['enroll'];
+  if (isAdminRole(users[0].role)) return [];
+
   const [enrolled] = await db.query('SELECT 1 FROM course_enrollments WHERE user_id = ? AND course_id = ?', [userId, path.course_id]);
-  if (enrolled.length === 0) reasons.push('enroll');
-  if (path.requires_previous) {
-    const [previous] = await db.query(
-      `SELECT id FROM paths WHERE course_id = ? AND (order_index < ? OR (order_index = ? AND id < ?))
-       ORDER BY order_index DESC, id DESC LIMIT 1`,
-      [path.course_id, path.order_index, path.order_index, path.id]
+  const [previous] = await db.query(
+    `SELECT id FROM paths WHERE course_id = ? AND (order_index < ? OR (order_index = ? AND id < ?))
+     ORDER BY order_index DESC, id DESC LIMIT 1`,
+    [path.course_id, path.order_index, path.order_index, path.id]
+  );
+  let previousDone = true;
+  if (previous.length > 0 && path.requires_previous) {
+    const [pending] = await db.query(
+      `SELECT COUNT(*) AS n FROM tasks t INNER JOIN lessons l ON l.id = t.lesson_id
+       WHERE l.path_id = ? AND t.type = 'mandatory'
+         AND NOT EXISTS (SELECT 1 FROM user_progress up WHERE up.user_id = ? AND up.entity_type = 'task' AND up.entity_id = t.id)`,
+      [previous[0].id, userId]
     );
-    if (previous.length > 0) {
-      const [pending] = await db.query(
-        `SELECT COUNT(*) AS n FROM tasks t INNER JOIN lessons l ON l.id = t.lesson_id
-         WHERE l.path_id = ? AND t.type = 'mandatory'
-           AND NOT EXISTS (SELECT 1 FROM user_progress up WHERE up.user_id = ? AND up.entity_type = 'task' AND up.entity_id = t.id)`,
-        [previous[0].id, userId]
-      );
-      if (pending[0].n > 0) reasons.push('previous');
-    }
+    previousDone = pending[0].n === 0;
   }
-  if (path.stars_required > 0 && (users[0].stars || 0) < path.stars_required) reasons.push('stars');
-  return reasons;
+  return phaseLockReasonsFrom({
+    isAdmin: false, enrolled: enrolled.length > 0, isFirst: previous.length === 0,
+    requiresPrevious: path.requires_previous, previousDone, stars: users[0].stars, starsRequired: path.stars_required,
+  });
 }
 
 async function taskLockReasons(db, userId, taskId) {
@@ -250,7 +266,7 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
       const caller = await getCaller(optionalUserId(req));
       const admin = caller ? isAdminRole(caller.role) : false;
 
-      const [paths] = await db.query('SELECT * FROM paths WHERE course_id = ? ORDER BY order_index ASC, stars_required ASC, id ASC', [course.id]);
+      const [paths] = await db.query(`SELECT * FROM paths WHERE course_id = ? ${PHASE_ORDER}`, [course.id]);
       const pathIds = paths.map((p) => p.id);
       let lessons = [];
       let tasks = [];
@@ -309,12 +325,10 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
             tasks: lt, completed: lessonCompleted({ tasks: lt }),
           };
         });
-        const lockReasons = [];
-        if (!admin) {
-          if (!enrolled) lockReasons.push('enroll');
-          if (index > 0 && p.requires_previous && !previousPhaseDone) lockReasons.push('previous');
-          if (p.stars_required > 0 && (caller?.stars || 0) < p.stars_required) lockReasons.push('stars');
-        }
+        const lockReasons = phaseLockReasonsFrom({
+          isAdmin: admin, enrolled, isFirst: index === 0, requiresPrevious: p.requires_previous,
+          previousDone: previousPhaseDone, stars: caller?.stars, starsRequired: p.stars_required,
+        });
         previousPhaseDone = phaseLessons.every(lessonMandatoryDone);
         // Locked phases keep their lesson titles, summaries and task titles (so a student can see
         // what is coming); only the task briefs are held back until the phase is reached.

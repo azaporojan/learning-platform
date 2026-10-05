@@ -322,6 +322,16 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(lockedSubmit.status, 403, JSON.stringify(lockedSubmit.body));
   assert.deepEqual(lockedSubmit.body.lockReasons, ['enroll']);
   assert.equal(fs.readdirSync(uploadsDir).length, 1); // the rejected upload was removed
+  // The legacy read routes apply the same rule
+  const legacyDetails = await anon(`/paths/${phase2.body.id}/details`);
+  assert.equal(legacyDetails.status, 200);
+  assert.equal(legacyDetails.body[0].description, 'What phase 2 covers');
+  assert.equal(legacyDetails.body[0].tasks[0].description, '');
+  const legacyTask = await stud(`/tasks/${phase2Task.body.id}`);
+  assert.equal(legacyTask.status, 200);
+  assert.equal(legacyTask.body.description, '');
+  const adminLegacyTask = await admin(`/tasks/${phase2Task.body.id}`);
+  assert.equal(adminLegacyTask.body.description, 'secret brief');
   const enrol = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' });
   assert.equal(enrol.status, 200);
   const enrolAgain = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' }); // idempotent
@@ -339,6 +349,27 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(roadAfter.body.phases[0].lessons[0].tasks[0].completed, true);
   assert.equal(roadAfter.body.phases[1].lessons[0].tasks[0].is_new, true);
   assert.equal(roadAfter.body.phases[1].lessons[0].tasks[0].description, 'secret brief'); // reached → full content
+  assert.equal((await stud(`/tasks/${phase2Task.body.id}`)).body.description, 'secret brief');
+  // A third phase behind the unfinished phase 2 is locked for the 'previous' reason
+  const phase3 = await admin('/paths', { method: 'POST', json: { name: 'Phase 3', course_id: course.body.id } });
+  assert.equal(phase3.body.order_index, 3);
+  const phase3Lesson = await admin('/lessons', { method: 'POST', json: { pathId: phase3.body.id, title: 'P3 L1', order: 1 } });
+  const phase3Task = await admin('/tasks', { method: 'POST', json: { lessonId: phase3Lesson.body.id, title: 'P3 T1', type: 'mandatory', xp: 10, deadline: '2030-01-01' } });
+  const roadThree = await stud(`/courses/${course.body.id}`);
+  assert.deepEqual(roadThree.body.phases.map((p) => p.lockReasons), [[], [], ['previous']]);
+  const previousForm = new FormData();
+  previousForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'early.txt');
+  const previousSubmit = await stud(`/tasks/${phase3Task.body.id}/submit`, { method: 'POST', body: previousForm });
+  assert.equal(previousSubmit.status, 403);
+  assert.deepEqual(previousSubmit.body.lockReasons, ['previous']);
+  // Untick "requires previous" on phase 3 → reachable without finishing phase 2
+  const freePhase = await admin(`/paths/${phase3.body.id}`, { method: 'PUT', json: { name: 'Phase 3', requires_previous: false } });
+  assert.equal(freePhase.status, 200);
+  assert.deepEqual((await stud(`/courses/${course.body.id}`)).body.phases[2].lockReasons, []);
+  // Deleting the phase closes the gap in the numbering
+  const dropPhase3 = await admin(`/paths/${phase3.body.id}`, { method: 'DELETE' });
+  assert.equal(dropPhase3.status, 200);
+  assert.equal((await admin('/paths/999999', { method: 'DELETE' })).status, 404);
   // Add a star gate on phase 2 that the student (10 stars) does not meet
   const gate = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 500 } });
   assert.equal(gate.status, 200);
@@ -375,6 +406,9 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const course2 = await admin('/courses', { method: 'POST', json: { name: 'Temp' } });
   const movePhase = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 0, course_id: course2.body.id, order_index: 1 } });
   assert.equal(movePhase.status, 200);
+  // Both courses are renumbered 1..n after a move
+  assert.deepEqual((await admin(`/courses/${course.body.id}`)).body.phases.map((p) => [p.name, p.order_index]), [['Phase 1', 1]]);
+  assert.deepEqual((await admin(`/courses/${course2.body.id}`)).body.phases.map((p) => [p.name, p.order_index]), [['Phase 2', 1]]);
   const dropCourse = await admin(`/courses/${course2.body.id}`, { method: 'DELETE' });
   assert.equal(dropCourse.status, 200);
   const orphan = (await admin('/paths')).body.find((p) => p.id === String(phase2.body.id));

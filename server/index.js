@@ -1176,15 +1176,9 @@ api.get('/paths', async (req, res) => {
 });
 
 // Create new path (admin only)
-api.post('/paths', authenticateToken, async (req, res) => {
+api.post('/paths', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { name, description, stars_required, course_id, requires_previous } = req.body;
-
-    // Check if user is admin
-    const [userRows] = await db.query('SELECT role FROM users WHERE id = ?', [req.user.id]);
-    if (userRows.length === 0 || userRows[0].role !== 'admin') {
-      return res.status(403).json({ error: 'Admin access required' });
-    }
     const phaseErrors = validatePhaseFields({ name, course_id, requires_previous });
     if (phaseErrors.length > 0) return res.status(400).json({ error: phaseErrors.join('; ') });
 
@@ -1228,16 +1222,10 @@ function validatePhaseFields({ name, course_id, order_index, requires_previous }
 }
 
 // Update path (admin only)
-api.put('/paths/:id', authenticateToken, async (req, res) => {
+api.put('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, description, stars_required, course_id, order_index, requires_previous } = req.body;
-
-    // Check if user is admin
-    const [userRows] = await db.query('SELECT role FROM users WHERE id = ?', [req.user.id]);
-    if (userRows.length === 0 || userRows[0].role !== 'admin') {
-      return res.status(403).json({ error: 'Admin access required' });
-    }
     const phaseErrors = validatePhaseFields({ name, course_id, order_index, requires_previous });
     if (phaseErrors.length > 0) return res.status(400).json({ error: phaseErrors.join('; ') });
 
@@ -1274,19 +1262,22 @@ api.put('/paths/:id', authenticateToken, async (req, res) => {
 });
 
 // Delete path (admin only)
-api.delete('/paths/:id', authenticateToken, async (req, res) => {
+api.delete('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check if user is admin
-    const [userRows] = await db.query('SELECT role FROM users WHERE id = ?', [req.user.id]);
-    if (userRows.length === 0 || userRows[0].role !== 'admin') {
-      return res.status(403).json({ error: 'Admin access required' });
-    }
-
-    await db.query('DELETE FROM paths WHERE id = ?', [id]);
+    // Deleting a phase closes the gap in its course's numbering and refreshes open course pages.
+    const courseId = await db.transaction(async (tx) => {
+      const [rows] = await tx.query('SELECT course_id FROM paths WHERE id = ? FOR UPDATE', [id]);
+      if (rows.length === 0) { const err = new Error('Path not found'); err.status = 404; throw err; }
+      await tx.query('DELETE FROM paths WHERE id = ?', [id]);
+      if (rows[0].course_id !== null) await courseRoutes.renumberCourse(tx, rows[0].course_id);
+      return rows[0].course_id;
+    });
+    if (courseId !== null) io.emit('course:updated', { courseId });
     res.json({ success: true });
   } catch (error) {
+    if (error.status === 404) return res.status(404).json({ error: error.message });
     console.error('[DELETE /paths/:id] Error:', error);
     res.status(500).json({ error: 'Failed to delete path' });
   }
@@ -1348,7 +1339,7 @@ api.get('/paths/:pathId/details', async (req, res) => {
     const lessonIds = lessons.map(l => l.id);
     let tasks = [];
     if (lessonIds.length > 0) {
-      const [rows] = await db.query(`SELECT * FROM tasks WHERE lesson_id IN (${lessonIds.join(',')})`);
+      const [rows] = await db.query('SELECT * FROM tasks WHERE lesson_id = ANY(?)', [lessonIds]);
       tasks = rows;
 
       // Calculate unviewed submissions for admin
@@ -1358,11 +1349,11 @@ api.get('/paths/:pathId/details', async (req, res) => {
           const [unviewedCounts] = await db.query(`
              SELECT task_id, COUNT(*) as count 
              FROM task_submissions 
-             WHERE task_id IN (${tasks.map(t => t.id).join(',')}) 
+             WHERE task_id = ANY(?)
              AND status != 'rejected'
              AND (is_viewed = FALSE OR is_viewed IS NULL)
              GROUP BY task_id
-           `);
+           `, [tasks.map(t => t.id)]);
 
           unviewedCounts.forEach(c => {
             const t = tasks.find(task => task.id === c.task_id);
@@ -1373,8 +1364,8 @@ api.get('/paths/:pathId/details', async (req, res) => {
           const [taskViews] = await db.query(`
             SELECT task_id, viewed_at
             FROM user_task_views
-            WHERE user_id = ? AND task_id IN (${tasks.map(t => t.id).join(',')})
-          `, [userId]);
+            WHERE user_id = ? AND task_id = ANY(?)
+          `, [userId, tasks.map(t => t.id)]);
 
           // Create a map of task_id -> viewed_at
           const viewMap = new Map();
@@ -1396,6 +1387,10 @@ api.get('/paths/:pathId/details', async (req, res) => {
       progress.forEach(p => completedEntityIds.add(`${p.entity_type}_${p.entity_id}`));
     }
 
+    // Same visibility rule as GET /courses/:id: in a phase the caller has not reached, task
+    // briefs are withheld (titles and lesson summaries stay visible).
+    const phaseLocked = (await courseRoutes.phaseLockReasons(userId, pathId)).length > 0;
+
     // Construct the response tree
     const result = lessons.map(lesson => {
       const lessonTasks = tasks.filter(t => t.lesson_id === lesson.id);
@@ -1410,6 +1405,7 @@ api.get('/paths/:pathId/details', async (req, res) => {
         completed: isLessonCompleted,
         tasks: lessonTasks.map(t => ({
           ...t,
+          description: phaseLocked ? '' : t.description,
           completed: completedEntityIds.has(`task_${t.id}`)
         }))
       };
@@ -1685,7 +1681,9 @@ api.get('/tasks/:id', authenticateToken, async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Task not found' });
     }
-    res.json(rows[0]);
+    // The brief of a task in a phase the caller has not reached is withheld (see GET /courses/:id)
+    const locked = (await courseRoutes.taskLockReasons(req.user.id, id)).length > 0;
+    res.json(locked ? { ...rows[0], description: '' } : rows[0]);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to fetch task' });
