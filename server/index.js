@@ -1859,10 +1859,16 @@ api.get('/tasks/:id/submissions', authenticateToken, async (req, res) => {
 
 // All submissions across courses (Admin only): who submitted what, where it sits in the course,
 // and its review status — the review inbox. ?status=pending|approved|rejected|all (default pending).
+// Newest first, paged by cursor: pass `before=<next_cursor>` from the previous page to get older rows.
 api.get('/admin/submissions', authenticateToken, requireAdmin, async (req, res) => {
   const status = ['pending', 'approved', 'rejected', 'all'].includes(req.query.status) ? req.query.status : 'pending';
-  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  const before = /^\d{1,9}$/.test(String(req.query.before || '')) ? Number(req.query.before) : null;
   try {
+    const where = [];
+    const params = [];
+    if (status !== 'all') { where.push("COALESCE(s.status, 'pending') = ?"); params.push(status); }
+    if (before !== null) { where.push('s.id < ?'); params.push(before); }
     const [rows] = await db.query(
       `SELECT s.id, s.status, s.submitted_at, s.is_viewed, s.file_name, s.file_size,
               LEFT(COALESCE(s.comment, ''), 300) AS comment,
@@ -1877,16 +1883,17 @@ api.get('/admin/submissions', authenticateToken, requireAdmin, async (req, res) 
        INNER JOIN lessons l ON l.id = t.lesson_id
        INNER JOIN paths p ON p.id = l.path_id
        LEFT JOIN courses c ON c.id = p.course_id
-       ${status === 'all' ? '' : "WHERE COALESCE(s.status, 'pending') = ?"}
-       ORDER BY s.submitted_at DESC
+       ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
+       ORDER BY s.id DESC
        LIMIT ${limit}`,
-      status === 'all' ? [] : [status]
+      params
     );
     const [counts] = await db.query(`SELECT COALESCE(status, 'pending') AS status, COUNT(*)::int AS n FROM task_submissions GROUP BY 1`);
     const summary = { pending: 0, approved: 0, rejected: 0 };
     counts.forEach((c) => { summary[c.status] = c.n; });
-    // The list is a window of the newest `limit` rows; `truncated` tells the client when older ones exist.
-    res.json({ submissions: rows, counts: summary, limit, truncated: rows.length >= limit });
+    // A page of `limit` rows; `next_cursor` (when `has_more`) is the id to pass as `before` for the next page.
+    const hasMore = rows.length >= limit;
+    res.json({ submissions: rows, counts: summary, limit, has_more: hasMore, next_cursor: hasMore ? rows[rows.length - 1].id : null });
   } catch (err) {
     console.error('[GET /admin/submissions] Error:', err);
     res.status(500).json({ error: 'Failed to fetch submissions' });

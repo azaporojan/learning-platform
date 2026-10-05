@@ -383,8 +383,30 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal((await admin('/admin/submissions?status=rejected')).body.submissions.length, 0);
   assert.equal((await admin('/admin/submissions?status=all')).body.submissions.length, 1);
   assert.strictEqual(inbox.body.counts.pending, 1); // numeric, not a bigint string
-  assert.equal(inbox.body.truncated, false);
-  assert.equal((await admin('/admin/submissions?limit=1')).body.truncated, true);
+  assert.equal(inbox.body.has_more, false);
+  assert.equal(inbox.body.next_cursor, null);
+  // Cursor paging: newest first, `before=next_cursor` walks to older rows without gaps or repeats
+  for (const n of [1, 2, 3]) {
+    const f = new FormData();
+    f.append('comment', `page test ${n}`);
+    assert.equal((await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: f })).status, 201);
+  }
+  const seen = [];
+  let cursor = null;
+  for (let guard = 0; guard < 10; guard++) {
+    const page = await admin(`/admin/submissions?status=all&limit=2${cursor ? `&before=${cursor}` : ''}`);
+    assert.equal(page.status, 200);
+    page.body.submissions.forEach((s) => seen.push(s.id));
+    if (!page.body.has_more) break;
+    assert.equal(page.body.next_cursor, page.body.submissions[page.body.submissions.length - 1].id);
+    cursor = page.body.next_cursor;
+  }
+  assert.equal(seen.length, 4);
+  assert.deepEqual([...seen].sort((a, b) => b - a), seen); // strictly newest → oldest
+  assert.equal(new Set(seen).size, 4);
+  assert.equal((await admin('/admin/submissions?before=abc')).status, 200); // malformed cursor → ignored
+  const extra = (await admin('/admin/submissions?status=all')).body.submissions.filter((s) => (s.comment || '').startsWith('page test'));
+  for (const s of extra) assert.equal((await stud(`/submissions/${s.id}`, { method: 'DELETE' })).status, 200);
   assert.equal((await admin('/admin/submissions?status=bogus&limit=99999')).status, 200); // falls back to pending, clamps limit
   assert.equal((await admin('/admin/submissions?limit=abc')).body.submissions.length, 1);
 

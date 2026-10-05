@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { User } from '../types';
 import { apiUrl, getFileUrl } from '../config';
@@ -50,17 +50,23 @@ export const SubmissionsPage: React.FC<SubmissionsPageProps> = ({ currentUser })
   const [filter, setFilter] = useState<Filter>('pending');
   const [rows, setRows] = useState<InboxRow[]>([]);
   const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
-  const [truncated, setTruncated] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const PAGE = 50;
 
+  // First page (also used to refresh after live events); older pages are appended by loadMore().
   const fetchInbox = useCallback(async () => {
     try {
-      const res = await fetch(apiUrl(`/admin/submissions?status=${filter}`), { credentials: 'include' });
+      const res = await fetch(apiUrl(`/admin/submissions?status=${filter}&limit=${PAGE}`), { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setRows(data.submissions);
         setCounts(data.counts);
-        setTruncated(!!data.truncated);
+        setHasMore(!!data.has_more);
+        setNextCursor(data.next_cursor ?? null);
       }
     } catch (err) {
       console.error('Failed to fetch submissions', err);
@@ -69,7 +75,37 @@ export const SubmissionsPage: React.FC<SubmissionsPageProps> = ({ currentUser })
     }
   }, [filter]);
 
-  useEffect(() => { fetchInbox(); }, [fetchInbox]);
+  const loadMore = useCallback(async () => {
+    if (!hasMore || nextCursor === null || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetch(apiUrl(`/admin/submissions?status=${filter}&limit=${PAGE}&before=${nextCursor}`), { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        setRows((prev) => {
+          const known = new Set(prev.map((r) => r.id));
+          return [...prev, ...data.submissions.filter((r: InboxRow) => !known.has(r.id))];
+        });
+        setHasMore(!!data.has_more);
+        setNextCursor(data.next_cursor ?? null);
+      }
+    } catch (err) {
+      console.error('Failed to load more submissions', err);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [filter, hasMore, nextCursor, loadingMore]);
+
+  useEffect(() => { setLoaded(false); fetchInbox(); }, [fetchInbox]);
+
+  // Infinite scroll: when the sentinel below the list becomes visible, fetch the next page
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore) return;
+    const io = new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) loadMore(); }, { rootMargin: '400px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, loadMore]);
 
   useEffect(() => {
     if (!socket) return;
@@ -131,11 +167,6 @@ export const SubmissionsPage: React.FC<SubmissionsPageProps> = ({ currentUser })
           </div>
         )}
 
-        {truncated && (
-          <p className="mb-3 text-xs font-semibold text-gray-500 dark:text-gray-400 flex items-center gap-1">
-            <span className="material-icons text-sm">info</span>Showing the newest {rows.length} submissions; older ones are not listed. Use the status filters to narrow down.
-          </p>
-        )}
         <div className="space-y-2">
           {rows.map((row) => {
             const link = submissionDeepLink(row);
@@ -193,6 +224,22 @@ export const SubmissionsPage: React.FC<SubmissionsPageProps> = ({ currentUser })
             );
           })}
         </div>
+
+        {/* Infinite scroll sentinel / end marker */}
+        <div ref={sentinelRef} className="h-1" />
+        {loadingMore && (
+          <div className="py-4 flex items-center justify-center gap-2 text-sm text-gray-400">
+            <span className="material-icons animate-spin text-base">refresh</span>Loading more…
+          </div>
+        )}
+        {!hasMore && loaded && rows.length > 0 && (
+          <p className="py-4 text-center text-xs text-gray-400">That's all · {rows.length} shown</p>
+        )}
+        {hasMore && !loadingMore && (
+          <div className="py-3 text-center">
+            <button onClick={loadMore} className="text-sm font-bold text-primary-dark dark:text-primary hover:underline">Load older</button>
+          </div>
+        )}
       </div>
     </div>
   );
