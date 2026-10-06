@@ -89,3 +89,18 @@
 .animate-scale-in {
   animation: scale-in 0.2s ease-out;
 }
+
+/* Rendered Markdown (lesson script): no decorative backticks around inline code */
+.prose code::before,
+.prose code::after {
+  content: none;
+}
+.prose :where(code):not(:where(pre code)) {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.3rem;
+  font-weight: 500;
+}
+.dark .prose :where(code):not(:where(pre code)) {
+  background: rgba(255, 255, 255, 0.1);
+}

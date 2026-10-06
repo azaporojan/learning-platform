@@ -110,6 +110,8 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
   const donePoints = currentIndex >= 0 ? layout.points.slice(0, currentIndex + 1).map((p) => `${p.x},${p.y}`).join(' ') : '';
   const isSelected = (type: string, id: number) => selected !== null && selected.type === type && selected.id === id;
   const lastRow = (index: number) => Math.floor(index / layout.cols) === layout.rows - 1;
+  // A centred tooltip on an edge node would be clipped by the scroll container: align it inward.
+  const tipAlign = (x: number): 'left' | 'center' | 'right' => (x < 150 ? 'left' : x > layout.width - 150 ? 'right' : 'center');
   const hasSelection = (stop: Stop) =>
     selected !== null && stop.kind === 'lesson' && (
       (selected.type === 'lesson' && selected.id === stop.lesson!.id) ||
@@ -165,7 +167,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                   </span>
                   {status === 'current' && <span className="absolute inset-0 rounded-2xl bg-primary/40 animate-ping" />}
                 </button>
-                <Tooltip text={phase.name} sub={reason || `${phase.lessons.length} lessons`} above={lastRow(i)} />
+                <Tooltip text={phase.name} sub={reason || `${phase.lessons.length} lessons`} above={lastRow(i)} align={tipAlign(p.x)} />
               </div>
             );
           }
@@ -216,7 +218,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                     </span>
                   )}
                 </button>
-                <Tooltip text={lesson.title} sub={`${shortPhaseName(stop.phase)} · ${lesson.tasks.length} task${lesson.tasks.length === 1 ? '' : 's'}`} above={lastRow(i)} />
+                <Tooltip text={lesson.title} sub={`${shortPhaseName(stop.phase)} · ${lesson.tasks.length} task${lesson.tasks.length === 1 ? '' : 's'}`} above={lastRow(i)} align={tipAlign(p.x)} />
               </div>
 
               {/* Task chain below the lesson */}
@@ -246,7 +248,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                         </span>
                       )}
                     </button>
-                    <Tooltip text={task.title} sub={`${task.type === 'mandatory' ? 'Mandatory' : 'Optional'} · ${task.xp_reward} ★${task.deadline ? ` · due ${new Date(task.deadline).toLocaleDateString()}` : ''}`} above={lastRow(i)} />
+                    <Tooltip text={task.title} sub={`${task.type === 'mandatory' ? 'Mandatory' : 'Optional'} · ${task.xp_reward} ★${task.deadline ? ` · due ${new Date(task.deadline).toLocaleDateString()}` : ''}`} above={lastRow(i)} align={tipAlign(p.x)} />
                   </div>
                 );
               })}
@@ -264,8 +266,10 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
   );
 };
 
-const Tooltip: React.FC<{ text: string; sub?: string; above?: boolean }> = ({ text, sub, above }) => (
-  <div className={`absolute left-1/2 -translate-x-1/2 w-max max-w-[240px] px-3 py-2 rounded-lg bg-gray-900 text-white text-xs shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 ${above ? 'bottom-full mb-2' : 'top-full mt-2'}`}>
+const Tooltip: React.FC<{ text: string; sub?: string; above?: boolean; align?: 'left' | 'center' | 'right' }> = ({ text, sub, above, align = 'center' }) => (
+  <div className={`absolute w-max max-w-[240px] px-3 py-2 rounded-lg bg-gray-900 text-white text-xs shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 ${above ? 'bottom-full mb-2' : 'top-full mt-2'} ${
+    align === 'left' ? 'left-0' : align === 'right' ? 'right-0' : 'left-1/2 -translate-x-1/2'
+  }`}>
     <div className="font-bold leading-snug">{text}</div>
     {sub && <div className="text-gray-300 mt-0.5">{sub}</div>}
   </div>

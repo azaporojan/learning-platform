@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Course, CourseDetail, Path, Phase, RoadLesson, RoadTask, User } from '../types';
 import { apiUrl } from '../config';
 import { useSocket } from '../contexts/SocketContext';
@@ -12,6 +12,7 @@ import { AddLessonModal } from '../components/AddLessonModal';
 import { AddTaskModal } from '../components/AddTaskModal';
 import { AddPathModal } from '../components/AddPathModal';
 import { EditPathModal } from '../components/EditPathModal';
+import { PhaseModal } from '../components/PhaseModal';
 import { AlertDialog } from '../components/AlertDialog';
 import { useDialog } from '../hooks/useDialog';
 
@@ -27,6 +28,7 @@ const LAYOUT = { firstX: 80, centerY: 250, lessonSpacingX: 250, firstTaskOffset:
 export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { socket } = useSocket();
   const { alertState, showAlert, hideAlert } = useDialog();
   const isAdmin = currentUser.role === 'admin';
@@ -43,10 +45,12 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
   // Modals
   const [lessonModal, setLessonModal] = useState<RoadLesson | null>(null);
   const [taskModal, setTaskModal] = useState<RoadTask | null>(null);
+  const [taskModalMode, setTaskModalMode] = useState<'view' | 'submissions'>('view');
   const [addLesson, setAddLesson] = useState<Phase | null>(null);
   const [addTask, setAddTask] = useState<{ lesson: RoadLesson; phase: Phase } | null>(null);
   const [addPhaseOpen, setAddPhaseOpen] = useState(false);
   const [editPhase, setEditPhase] = useState<Path | null>(null);
+  const [phaseInfo, setPhaseInfo] = useState<Phase | null>(null);
 
   const fetchCourse = useCallback(async () => {
     if (!id) return;
@@ -58,6 +62,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
         setCourse(data);
         // Keep the open lesson modal in sync with fresh data
         setLessonModal((prev) => (prev ? data.phases.flatMap((p) => p.lessons).find((l) => l.id === prev.id) || null : prev));
+        setPhaseInfo((prev) => (prev ? data.phases.find((p) => p.id === prev.id) || null : prev));
       }
     } catch (err) {
       console.error('Failed to fetch course', err);
@@ -93,6 +98,21 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
   }, [socket, fetchCourse, currentUser.id]);
 
   const state = useMemo(() => (course ? computeRoadState(course, isAdmin) : null), [course, isAdmin]);
+
+  // Deep link from the submissions inbox (and notifications): /courses/:id?lesson=<id>&task=<id>
+  // selects the node on the road and opens the task (or the lesson), then clears the query.
+  useEffect(() => {
+    if (!course) return;
+    const lessonParam = searchParams.get('lesson');
+    const taskParam = searchParams.get('task');
+    if (!lessonParam && !taskParam) return;
+    const lessons = course.phases.flatMap((p) => p.lessons);
+    const lesson = lessons.find((l) => String(l.id) === lessonParam) || lessons.find((l) => l.tasks.some((t) => String(t.id) === taskParam));
+    const task = lesson?.tasks.find((t) => String(t.id) === taskParam) || null;
+    if (task) { setSelected({ type: 'task', id: task.id }); setTaskModalMode(isAdmin ? 'submissions' : 'view'); setTaskModal(task); }
+    else if (lesson) { setSelected({ type: 'lesson', id: lesson.id }); setLessonModal(lesson); }
+    setSearchParams({}, { replace: true });
+  }, [course, searchParams, setSearchParams]);
 
   const toggleCollapsed = () => {
     setCollapsed((c) => {
@@ -152,9 +172,10 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
   const openPhase = (phase: Phase) => {
     setSelected({ type: 'phase', id: phase.id });
     if (isAdmin) setEditPhase(phaseToPath(phase));
+    else setPhaseInfo(phase);
   };
   const openLesson = (lesson: RoadLesson) => { setSelected({ type: 'lesson', id: lesson.id }); setLessonModal(lesson); };
-  const openTask = (task: RoadTask) => { setSelected({ type: 'task', id: task.id }); setTaskModal(task); };
+  const openTask = (task: RoadTask) => { setSelected({ type: 'task', id: task.id }); setTaskModalMode('view'); setTaskModal(task); };
 
   if (notFound) {
     return (
@@ -196,10 +217,12 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
         onSelectTask={(task) => setSelected({ type: 'task', id: task.id })}
         onOpenLesson={openLesson}
         onOpenTask={openTask}
+        onOpenPhase={openPhase}
         onAddPhase={isAdmin ? () => setAddPhaseOpen(true) : undefined}
         onEditPhase={isAdmin ? (phase) => setEditPhase(phaseToPath(phase)) : undefined}
         onAddLesson={isAdmin ? (phase) => setAddLesson(phase) : undefined}
         onAddTask={isAdmin ? (lesson, phase) => setAddTask({ lesson, phase }) : undefined}
+        onOpenScript={isAdmin ? (lesson) => navigate(`/courses/${course.id}/lessons/${lesson.id}/script`) : undefined}
       />
 
       <section className="flex-1 min-w-0 h-full flex flex-col bg-white dark:bg-gray-900 rounded-3xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
@@ -264,6 +287,13 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
       </section>
 
       {/* Modals */}
+      <PhaseModal
+        phase={phaseInfo}
+        previous={phaseInfo ? course.phases[course.phases.indexOf(phaseInfo) - 1] || null : null}
+        status={phaseInfo ? state.phases.get(phaseInfo.id) || 'open' : 'open'}
+        onClose={() => setPhaseInfo(null)}
+        onJumpToFirstLesson={phaseInfo && phaseInfo.lessons.length > 0 ? () => { setSelected({ type: 'lesson', id: phaseInfo.lessons[0].id }); setPhaseInfo(null); } : undefined}
+      />
       <LessonModal
         lesson={lessonModal}
         taskStatus={(task) => state.tasks.get(task.id) || 'open'}
@@ -271,6 +301,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
         onClose={() => setLessonModal(null)}
         onChanged={fetchCourse}
         onOpenTask={(task) => { setLessonModal(null); openTask(task); }}
+        onOpenScript={isAdmin && lessonModal ? () => navigate(`/courses/${course.id}/lessons/${lessonModal.id}/script`) : undefined}
       />
       {taskModal && (
         <TaskModal
@@ -281,6 +312,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
           currentUserId={currentUser.id}
           currentUser={currentUser}
           onUpdate={fetchCourse}
+          initialMode={taskModalMode}
         />
       )}
       {isAdmin && (

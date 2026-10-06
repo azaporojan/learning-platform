@@ -289,7 +289,11 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
       let lessons = [];
       let tasks = [];
       if (pathIds.length > 0) {
-        [lessons] = await db.query('SELECT * FROM lessons WHERE path_id = ANY(?) ORDER BY order_index ASC, id ASC', [pathIds]);
+        // Explicit columns: `script` (admin-only teaching notes) is never loaded for the road.
+        [lessons] = await db.query(
+          'SELECT id, path_id, title, description, position_x, position_y, order_index, parent_id, created_at, updated_at FROM lessons WHERE path_id = ANY(?) ORDER BY order_index ASC, id ASC',
+          [pathIds]
+        );
         const lessonIds = lessons.map((l) => l.id);
         if (lessonIds.length > 0) {
           [tasks] = await db.query('SELECT * FROM tasks WHERE lesson_id = ANY(?) ORDER BY order_index ASC, id ASC', [lessonIds]);
@@ -340,6 +344,7 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
           return {
             id: l.id, path_id: l.path_id, title: l.title, description: l.description,
             order_index: l.order_index, position_x: l.position_x, position_y: l.position_y,
+            created_at: l.created_at, updated_at: l.updated_at,
             tasks: lt, completed: lessonCompleted({ tasks: lt }),
           };
         });

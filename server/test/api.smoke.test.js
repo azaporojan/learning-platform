@@ -239,6 +239,10 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const details = await admin(`/paths/${paths.body[0].id}/details`);
   assert.equal(details.status, 200);
   assert.equal(details.body[0].tasks.length, 1);
+  // Response shape of the legacy route stays stable (explicit column list)
+  for (const key of ['id', 'path_id', 'title', 'description', 'position_x', 'position_y', 'order_index', 'parent_id', 'created_at', 'updated_at', 'completed', 'tasks']) {
+    assert.ok(key in details.body[0], `details lesson is missing ${key}`);
+  }
 
   // Moving nodes: PUT accepts optional order / position / parent so a path can be restructured
   // without deleting lessons (which would cascade to tasks and submissions).
@@ -263,6 +267,39 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(selfParent.status, 400);
   const missing = await admin('/lessons/999999', { method: 'PUT', json: { title: 'nope' } });
   assert.equal(missing.status, 404);
+  // Lesson script (admin-only Markdown notes): saved/read by admins, invisible everywhere else
+  const badScript = await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 42 } });
+  assert.equal(badScript.status, 400);
+  const saveScript = await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Plan\n\n| step | min |\n|---|---|\n| intro | 10 |' } });
+  assert.equal(saveScript.status, 200, JSON.stringify(saveScript.body));
+  const readScript = await admin(`/lessons/${lesson.body.id}/script`);
+  assert.equal(readScript.status, 200);
+  assert.match(readScript.body.script, /^# Plan/);
+  // Editing the lesson's title/summary keeps the script
+  assert.equal((await admin(`/lessons/${lesson.body.id}`, { method: 'PUT', json: { title: 'Intro', description: '' } })).status, 200);
+  assert.match((await admin(`/lessons/${lesson.body.id}/script`)).body.script, /^# Plan/);
+  // Optimistic concurrency on the script's own stamp: stale → 409, current → 200, and a title edit
+  // in between does not count as a conflict (lessons.updated_at moves, script_updated_at does not)
+  const stale = await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Older', expected_script_updated_at: '2000-01-01T00:00:00.000Z' } });
+  assert.equal(stale.status, 409);
+  assert.ok(stale.body.script_updated_at);
+  const stamp = (await admin(`/lessons/${lesson.body.id}/script`)).body.script_updated_at;
+  assert.equal((await admin(`/lessons/${lesson.body.id}`, { method: 'PUT', json: { title: 'Intro', description: 'edited meanwhile' } })).status, 200);
+  const fresh = await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Plan v2', expected_script_updated_at: stamp } });
+  assert.equal(fresh.status, 200, JSON.stringify(fresh.body));
+  assert.ok(fresh.body.script_updated_at);
+  assert.equal((await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 'x', expected_script_updated_at: 'yesterday' } })).status, 400);
+  // The check and the write are one statement: two saves racing with the same stamp → exactly one wins
+  const racers = await Promise.all(['# A', '# B'].map((s) => admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: s, expected_script_updated_at: fresh.body.script_updated_at } })));
+  assert.deepEqual(racers.map((r) => r.status).sort(), [200, 409]);
+  // A lesson that never had a script: the expectation "null" is accepted once, then conflicts
+  const neverSaved = await admin(`/lessons/${second.body.id}/script`);
+  assert.equal(neverSaved.body.script_updated_at, null);
+  assert.equal((await admin(`/lessons/${second.body.id}/script`, { method: 'PUT', json: { script: 'first', expected_script_updated_at: null } })).status, 200);
+  assert.equal((await admin(`/lessons/${second.body.id}/script`, { method: 'PUT', json: { script: 'second', expected_script_updated_at: null } })).status, 409);
+  assert.equal((await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: '# Plan\n\n| step | min |\n|---|---|\n| intro | 10 |' } })).status, 200);
+  assert.equal((await admin('/lessons/999999/script')).status, 404);
+  assert.equal((await admin(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 'x'.repeat(200001) } })).status, 400);
   const gone = await admin(`/lessons/${second.body.id}`, { method: 'DELETE' });
   assert.equal(gone.status, 200);
 
@@ -273,6 +310,22 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const addStars = await stud(`/admin/users/${student.id}/add-stars`, { method: 'POST', json: { stars: 100 } });
   assert.equal(addStars.status, 403);
 
+  assert.equal((await stud(`/lessons/${lesson.body.id}/script`)).status, 403);
+  assert.equal((await stud(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 'x' } })).status, 403);
+  const detailsNoScript = await stud(`/paths/${paths.body[0].id}/details`);
+  assert.equal(detailsNoScript.body[0].script, undefined);
+  assert.equal(JSON.stringify(detailsNoScript.body).includes('# Plan'), false);
+  // …nor through the course road, for anyone (admins read it only via the dedicated endpoint)
+  for (const who of [stud, admin, anon]) {
+    const road = await who(`/courses/${course.body.id}`);
+    assert.equal(road.status, 200);
+    assert.equal(JSON.stringify(road.body).includes('# Plan'), false);
+    assert.equal(road.body.phases[0].lessons[0].script, undefined);
+    for (const key of ['id', 'path_id', 'title', 'description', 'order_index', 'position_x', 'position_y', 'created_at', 'updated_at', 'completed', 'tasks']) {
+      assert.ok(key in road.body.phases[0].lessons[0], `road lesson is missing ${key}`);
+    }
+  }
+  assert.equal((await admin('/lessons/abc/script')).status, 404);
   const viewed = await stud(`/tasks/${task.body.id}/mark-viewed`, { method: 'POST' });
   assert.equal(viewed.status, 200);
   const viewedAgain = await stud(`/tasks/${task.body.id}/mark-viewed`, { method: 'POST' }); // upsert path
@@ -332,6 +385,70 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   for (const sid of [commentOnly.body.id, both.body.id]) assert.equal((await stud(`/submissions/${sid}`, { method: 'DELETE' })).status, 200);
   assert.equal(fs.readdirSync(uploadsDir).length, 1);
 
+  // Admin review inbox: every submission with its place in the course and a deep-link target
+  assert.equal((await stud('/admin/submissions')).status, 403);
+  assert.equal((await anon('/admin/submissions')).status, 401);
+  assert.equal((await anon(`/lessons/${lesson.body.id}/script`)).status, 401);
+  assert.equal((await anon(`/lessons/${lesson.body.id}/script`, { method: 'PUT', json: { script: 'x' } })).status, 401);
+  const inbox = await admin('/admin/submissions');
+  assert.equal(inbox.status, 200, JSON.stringify(inbox.body));
+  assert.equal(inbox.body.counts.pending, 1);
+  assert.equal(inbox.body.submissions.length, 1);
+  const row = inbox.body.submissions[0];
+  assert.equal(row.user_name, 'Student');
+  assert.equal(row.task_id, task.body.id);
+  assert.equal(row.lesson_id, lesson.body.id);
+  assert.equal(row.course_id, course.body.id);
+  assert.equal(row.path_name, 'Phase 1');
+  assert.equal(row.status, 'pending');
+  assert.equal((await admin('/admin/submissions?status=approved')).body.submissions.length, 0);
+  assert.equal((await admin('/admin/submissions?status=rejected')).body.submissions.length, 0);
+  assert.equal((await admin('/admin/submissions?status=all')).body.submissions.length, 1);
+  assert.strictEqual(inbox.body.counts.pending, 1); // numeric, not a bigint string
+  assert.equal(inbox.body.has_more, false);
+  assert.equal(inbox.body.next_cursor, null);
+  assert.equal((await admin('/admin/submissions?limit=1')).body.has_more, false); // exactly one row, page of one → no extra empty page
+  // Cursor paging: newest first, `before=next_cursor` walks to older rows without gaps or repeats
+  for (const n of [1, 2, 3]) {
+    const f = new FormData();
+    f.append('comment', `page test ${n}`);
+    assert.equal((await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: f })).status, 201);
+  }
+  const seen = [];
+  let cursor = null;
+  for (let guard = 0; guard < 10; guard++) {
+    const page = await admin(`/admin/submissions?status=all&limit=2${cursor ? `&before=${cursor}` : ''}`);
+    assert.equal(page.status, 200);
+    page.body.submissions.forEach((s) => seen.push(s.id));
+    if (!page.body.has_more) break;
+    assert.equal(page.body.next_cursor, page.body.submissions[page.body.submissions.length - 1].id);
+    cursor = page.body.next_cursor;
+  }
+  assert.equal(seen.length, 4);
+  assert.deepEqual([...seen].sort((a, b) => b - a), seen); // strictly newest → oldest
+  assert.equal(new Set(seen).size, 4);
+  // Status filter combined with the cursor: the pending page walks the same ids, counts stay global
+  const pendingFirst = await admin('/admin/submissions?status=pending&limit=3');
+  assert.equal(pendingFirst.body.submissions.length, 3);
+  assert.equal(pendingFirst.body.has_more, true);
+  assert.deepEqual(pendingFirst.body.submissions.map((s) => s.id), seen.slice(0, 3));
+  const pendingRest = await admin(`/admin/submissions?status=pending&limit=3&before=${pendingFirst.body.next_cursor}`);
+  assert.deepEqual(pendingRest.body.submissions.map((s) => s.id), seen.slice(3));
+  assert.equal(pendingRest.body.has_more, false);
+  assert.strictEqual(pendingFirst.body.counts.pending, 4);
+  assert.equal(pendingRest.body.counts, null);
+  const exact = await admin('/admin/submissions?status=all&limit=4'); // total is an exact multiple of the page size
+  assert.equal(exact.body.submissions.length, 4);
+  assert.equal(exact.body.has_more, false);
+  assert.equal(exact.body.next_cursor, null);
+  assert.equal((await admin('/admin/submissions?before=abc')).status, 400); // malformed cursor → error, never "start over"
+  assert.equal((await admin('/admin/submissions?before=12345678901')).status, 400);
+  assert.equal((await admin(`/admin/submissions?status=all&limit=2&before=${seen[1]}`)).body.counts, null); // totals only on the first page
+  const extra = (await admin('/admin/submissions?status=all')).body.submissions.filter((s) => (s.comment || '').startsWith('page test'));
+  for (const s of extra) assert.equal((await stud(`/submissions/${s.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await admin('/admin/submissions?status=bogus&limit=99999')).status, 200); // falls back to pending, clamps limit
+  assert.equal((await admin('/admin/submissions?limit=abc')).body.submissions.length, 1);
+
   // HTML uploads are served as downloads, never rendered inline
   const raw = await fetch(`${BASE}/uploads/${stored[0]}`);
   assert.equal(raw.status, 200);
@@ -351,6 +468,11 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(approveAll.status, 200, JSON.stringify(approveAll.body));
   const leaderboard = await anon('/users');
   assert.equal(leaderboard.body[0].stars, 10);
+  const inboxAfter = await admin('/admin/submissions?status=approved');
+  assert.equal(inboxAfter.body.submissions.length, 1);
+  assert.equal(inboxAfter.body.submissions[0].status, 'approved');
+  assert.strictEqual(inboxAfter.body.counts.approved, 1);
+  assert.strictEqual(inboxAfter.body.counts.pending, 0);
 
   // The course road: enrolment gates everything for a student, then the sequence gates phase 2
   const phase2Lesson = await admin('/lessons', { method: 'POST', json: { pathId: phase2.body.id, title: 'P2 L1', description: 'What phase 2 covers', order: 1 } });

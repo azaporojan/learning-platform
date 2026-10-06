@@ -1310,7 +1310,11 @@ api.get('/paths/:pathId/details', async (req, res) => {
 
   try {
     // 1. Get Lessons
-    const [lessons] = await db.query('SELECT * FROM lessons WHERE path_id = ? ORDER BY order_index ASC', [pathId]);
+    // Explicit columns: `script` (the admin-only teaching notes) must never travel with lesson rows.
+    const [lessons] = await db.query(
+      'SELECT id, path_id, title, description, position_x, position_y, order_index, parent_id, created_at, updated_at FROM lessons WHERE path_id = ? ORDER BY order_index ASC',
+      [pathId]
+    );
 
     // 2. Get Tasks for these lessons
     const lessonIds = lessons.map(l => l.id);
@@ -1461,6 +1465,52 @@ api.put('/lessons/:id', authenticateToken, requireAdmin, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to update lesson' });
+  }
+});
+
+// Lesson script (Admin only): the teacher's Markdown notes for a lesson. Never sent to students —
+// the course/road endpoints do not select this column, and /paths/:id/details strips it.
+const MAX_SCRIPT_CHARS = 200000;
+api.get('/lessons/:id/script', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT id, title, script, script_updated_at FROM lessons WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Lesson not found' });
+    res.json({ id: rows[0].id, title: rows[0].title, script: rows[0].script || '', script_updated_at: rows[0].script_updated_at });
+  } catch (err) {
+    console.error('[GET /lessons/:id/script] Error:', err);
+    res.status(500).json({ error: 'Failed to fetch lesson script' });
+  }
+});
+
+api.put('/lessons/:id/script', authenticateToken, requireAdmin, async (req, res) => {
+  const { script, expected_script_updated_at: expected } = req.body || {};
+  if (typeof script !== 'string') return res.status(400).json({ error: 'script must be a string' });
+  if (script.length > MAX_SCRIPT_CHARS) return res.status(400).json({ error: `script is too long (max ${MAX_SCRIPT_CHARS} characters)` });
+  if (expected !== undefined && expected !== null && (typeof expected !== 'string' || Number.isNaN(Date.parse(expected)))) {
+    return res.status(400).json({ error: 'expected_script_updated_at must be an ISO timestamp or null' });
+  }
+  try {
+    // Optimistic concurrency in one statement: the write only happens if the script's own save
+    // stamp still equals what the caller last read (null = "never saved" is a valid expectation).
+    // Keep the date_trunc + IS NOT DISTINCT FROM: the column holds microseconds but the stamp the
+    // client echoes back went through JSON/Date (milliseconds), so a plain `=` would never match;
+    // IS NOT DISTINCT FROM is what lets `null` (never saved) compare as equal.
+    const checked = expected !== undefined;
+    const [updated] = await db.query(
+      `UPDATE lessons SET script = ?, script_updated_at = NOW()
+       WHERE id = ? ${checked ? "AND date_trunc('milliseconds', script_updated_at) IS NOT DISTINCT FROM ?::timestamptz" : ''}
+       RETURNING script_updated_at`,
+      checked ? [script, req.params.id, expected] : [script, req.params.id]
+    );
+    if (updated.length === 0) {
+      const [current] = await db.query('SELECT script_updated_at FROM lessons WHERE id = ?', [req.params.id]);
+      if (current.length === 0) return res.status(404).json({ error: 'Lesson not found' });
+      return res.status(409).json({ error: 'This lesson script was changed elsewhere. Reload to see the latest version.', script_updated_at: current[0].script_updated_at });
+    }
+    res.json({ success: true, script_updated_at: updated[0].script_updated_at });
+  } catch (err) {
+    console.error('[PUT /lessons/:id/script] Error:', err);
+    res.status(500).json({ error: 'Failed to save lesson script' });
   }
 });
 
@@ -1811,6 +1861,63 @@ api.get('/tasks/:id/submissions', authenticateToken, async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: 'Failed to fetch submissions' });
+  }
+});
+
+// All submissions across courses (Admin only): who submitted what, where it sits in the course,
+// and its review status — the review inbox. ?status=pending|approved|rejected|all (default pending).
+// Newest first, paged by cursor: pass `before=<next_cursor>` from the previous page to get older rows.
+api.get('/admin/submissions', authenticateToken, requireAdmin, async (req, res) => {
+  const status = ['pending', 'approved', 'rejected', 'all'].includes(req.query.status) ? req.query.status : 'pending';
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  // A malformed cursor is an error, not "start over": restarting would repeat rows in an infinite scroll.
+  if (req.query.before !== undefined && !/^\d{1,9}$/.test(String(req.query.before))) {
+    return res.status(400).json({ error: 'before must be a submission id' });
+  }
+  const before = req.query.before !== undefined ? Number(req.query.before) : null;
+  try {
+    // task_submissions.status is NOT NULL DEFAULT 'pending' (001), so plain comparisons keep the
+    // (status) index usable.
+    const where = [];
+    const params = [];
+    if (status !== 'all') { where.push('s.status = ?'); params.push(status); }
+    if (before !== null) { where.push('s.id < ?'); params.push(before); }
+    const [rows] = await db.query(
+      `SELECT s.id, s.status, s.submitted_at, s.is_viewed, s.file_name, s.file_size,
+              LEFT(COALESCE(s.comment, ''), 300) AS comment,
+              u.id AS user_id, u.name AS user_name, u.avatar_url AS user_avatar,
+              t.id AS task_id, t.title AS task_title, t.type AS task_type, t.xp_reward,
+              l.id AS lesson_id, l.title AS lesson_title,
+              p.id AS path_id, p.name AS path_name, p.order_index AS phase_order,
+              c.id AS course_id, c.name AS course_name
+       FROM task_submissions s
+       INNER JOIN users u ON u.id = s.user_id
+       INNER JOIN tasks t ON t.id = s.task_id
+       INNER JOIN lessons l ON l.id = t.lesson_id
+       INNER JOIN paths p ON p.id = l.path_id
+       LEFT JOIN courses c ON c.id = p.course_id
+       ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
+       ORDER BY s.id DESC
+       LIMIT ${limit + 1}`,
+      params
+    );
+    // One extra row is fetched only to know whether an older page exists (no false "has_more"
+    // when the total is an exact multiple of the page size).
+    const hasMore = rows.length > limit;
+    if (hasMore) rows.pop();
+    // Per-status totals are computed for the first page only (an infinite scroll re-reads them
+    // when it reloads the first page, not on every older page).
+    let summary = null;
+    if (before === null) {
+      const [counts] = await db.query('SELECT status, COUNT(*)::int AS n FROM task_submissions GROUP BY status');
+      summary = { pending: 0, approved: 0, rejected: 0 };
+      counts.forEach((c) => { summary[c.status] = c.n; });
+    }
+    // A page of `limit` rows; `next_cursor` (when `has_more`) is the id to pass as `before` for the next page.
+    res.json({ submissions: rows, counts: summary, limit, has_more: hasMore, next_cursor: hasMore ? rows[rows.length - 1].id : null });
+  } catch (err) {
+    console.error('[GET /admin/submissions] Error:', err);
     res.status(500).json({ error: 'Failed to fetch submissions' });
   }
 });

@@ -55,6 +55,24 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
 
   const { alertState, showAlert, hideAlert } = useDialog();
   const { socket } = useSocket();
+  const [pendingSubmissions, setPendingSubmissions] = useState(0);
+
+  // Admin: number of submissions waiting for review (badge on the Submissions link), kept live
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'admin') { setPendingSubmissions(0); return; }
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const res = await fetch(apiUrl('/admin/submissions?status=pending&limit=1'), { credentials: 'include' });
+        if (res.ok && !cancelled) setPendingSubmissions((await res.json()).counts.pending || 0);
+      } catch { /* ignore */ }
+    };
+    refresh();
+    if (!socket) return () => { cancelled = true; };
+    const events = ['task:submission_uploaded', 'task:completed', 'task:deleted', 'lesson:deleted', 'course:updated'];
+    events.forEach((e) => socket.on(e, refresh));
+    return () => { cancelled = true; events.forEach((e) => socket.off(e, refresh)); };
+  }, [socket, currentUser?.id, currentUser?.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for live updates to current user (e.g. stars granted)
   useEffect(() => {
@@ -211,6 +229,15 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
                 <span className="material-icons text-lg mr-1.5">group</span>
                 Users
               </NavLink>
+              {currentUser.role === 'admin' && (
+                <NavLink to="/submissions" className={navLinkClass}>
+                  <span className="material-icons text-lg mr-1.5">inbox</span>
+                  Submissions
+                  {pendingSubmissions > 0 && (
+                    <span className="ml-2 min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-[11px] font-bold flex items-center justify-center">{pendingSubmissions}</span>
+                  )}
+                </NavLink>
+              )}
             </div>
           )}
         </div>
@@ -335,6 +362,12 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
                         <span className="material-icons text-gray-600 dark:text-gray-400">group</span>
                         <span className="text-sm text-gray-700 dark:text-gray-300">Users</span>
                       </Link>
+                      {currentUser.role === 'admin' && (
+                        <Link to="/submissions" onClick={() => setShowUserMenu(false)} className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+                          <span className="material-icons text-gray-600 dark:text-gray-400">inbox</span>
+                          <span className="text-sm text-gray-700 dark:text-gray-300">Submissions{pendingSubmissions > 0 ? ` (${pendingSubmissions})` : ''}</span>
+                        </Link>
+                      )}
                     </div>
 
                     {currentUser?.role === 'admin' && (
