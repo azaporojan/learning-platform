@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Navigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -31,6 +31,41 @@ const writeDraft = (userId: number, lessonId: string, draft: Draft | null) => {
     else localStorage.removeItem(DRAFT_KEY(userId, lessonId));
   } catch { /* ignore */ }
 };
+
+// Table of contents: ATX headings (# … ###) outside fenced code blocks. Each heading is keyed by
+// its 1-based source line, which is also how the rendered heading gets its id (via the hast
+// node's position), so the two always agree.
+interface TocItem { id: string; level: number; text: string }
+const headingId = (line: number) => `script-h-${line}`;
+const stripInline = (s: string) => s
+  .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+  .replace(/[*_`~]/g, '')
+  .replace(/\s+#+\s*$/, '')
+  .trim();
+const buildToc = (md: string): TocItem[] => {
+  const items: TocItem[] = [];
+  let fence: string | null = null;
+  md.split('\n').forEach((raw, i) => {
+    const f = raw.match(/^\s{0,3}(`{3,}|~{3,})/);
+    if (f) {
+      if (!fence) fence = f[1][0].repeat(f[1].length);
+      else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+      return;
+    }
+    if (fence) return;
+    const h = raw.match(/^\s{0,3}(#{1,3})\s+(.+)$/);
+    if (h) { const text = stripInline(h[2]); if (text) items.push({ id: headingId(i + 1), level: h[1].length, text }); }
+  });
+  // A lone top-level title is the page heading, not a section: leave it out
+  if (items.filter((t) => t.level === 1).length === 1 && items.length > 1) return items.filter((t) => t.level !== 1);
+  return items;
+};
+
+const withId = (Tag: 'h1' | 'h2' | 'h3') => ({ node, ...props }: any) => {
+  const line = node?.position?.start?.line;
+  return <Tag id={line ? headingId(line) : undefined} {...props} />;
+};
+const markdownComponents = { h1: withId('h1'), h2: withId('h2'), h3: withId('h3') };
 
 // Admin only: the teacher's Markdown script for a lesson. "Edit" shows the source next to a live
 // preview; "Follow" is the clean rendered view to keep open during the session, with prev/next
@@ -158,6 +193,39 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
     navigate(`/courses/${courseId}/lessons/${target.lesson.id}/script`);
   };
 
+  const toc = useMemo(() => buildToc(script), [script]);
+  const minLevel = toc.reduce((m, t) => Math.min(m, t.level), 3);
+  const followRef = useRef<HTMLDivElement>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  // Scroll-spy: the active section is the last heading scrolled past the top of the view
+  useEffect(() => {
+    const el = followRef.current;
+    if (mode !== 'follow' || !el || toc.length === 0) { setActiveId(null); return; }
+    const onScroll = () => {
+      const top = el.getBoundingClientRect().top + 96;
+      let current: string | null = toc[0].id;
+      for (const t of toc) {
+        const h = document.getElementById(t.id);
+        if (h && h.getBoundingClientRect().top <= top) current = t.id;
+      }
+      // At the very bottom, the last heading may never reach the top: mark it active
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) {
+        const last = [...toc].reverse().find((t) => { const h = document.getElementById(t.id); return h && h.getBoundingClientRect().top < el.getBoundingClientRect().bottom; });
+        if (last) current = last.id;
+      }
+      setActiveId(current);
+    };
+    onScroll();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [mode, toc, loaded, loadedLessonId]);
+
+  const jumpTo = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setActiveId(id);
+  };
+
   if (!isAdmin) return <Navigate to={`/courses/${courseId}`} replace />;
 
   if (notFound) {
@@ -178,7 +246,7 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
   const rendered = (
     <div className="prose prose-lg dark:prose-invert max-w-none prose-headings:scroll-mt-20 prose-table:text-base prose-th:bg-gray-100 dark:prose-th:bg-gray-800 prose-th:px-3 prose-td:px-3 prose-pre:bg-gray-900">
       {script.trim() ? (
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{script}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{script}</ReactMarkdown>
       ) : (
         <p className="text-gray-400 italic">No script yet. Switch to Edit and write the plan for this lesson in Markdown: headings, bullet lists, tables, code blocks.</p>
       )}
@@ -276,15 +344,42 @@ export const LessonScriptPage: React.FC<LessonScriptPageProps> = ({ currentUser 
           </div>
         </div>
       ) : (
-        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
-          <div className="max-w-4xl mx-auto px-8 py-8">{rendered}</div>
-          <div className="max-w-4xl mx-auto px-8 pb-10 flex items-center justify-between text-sm">
-            <button onClick={() => goTo(prev)} disabled={!prev} className="flex items-center gap-1 font-bold text-gray-500 hover:text-primary-dark disabled:opacity-30">
-              <span className="material-icons text-base">chevron_left</span>{prev ? prev.lesson.title : 'First lesson'}
-            </button>
-            <button onClick={() => goTo(next)} disabled={!next} className="flex items-center gap-1 font-bold text-gray-500 hover:text-primary-dark disabled:opacity-30 text-right">
-              {next ? next.lesson.title : 'Last lesson'}<span className="material-icons text-base">chevron_right</span>
-            </button>
+        <div ref={followRef} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+          <div className="flex justify-center gap-10 px-8">
+            {toc.length > 0 && (
+              <nav aria-label="Table of contents" className="hidden xl:block w-64 shrink-0">
+                <div className="sticky top-0 pt-8 pb-8 max-h-full">
+                  <div className="max-h-[calc(100vh-14rem)] overflow-y-auto custom-scrollbar pr-2">
+                    <div className="px-3 mb-2 text-[11px] font-bold uppercase tracking-wide text-gray-400">Contents</div>
+                    <ul className="border-l border-gray-200 dark:border-gray-700">
+                      {toc.map((t) => (
+                        <li key={t.id}>
+                          <a
+                            href={`#${t.id}`}
+                            onClick={(e) => { e.preventDefault(); jumpTo(t.id); }}
+                            style={{ paddingLeft: `${0.75 + (t.level - minLevel) * 0.875}rem` }}
+                            className={`-ml-px block border-l-2 pr-2 py-1 leading-snug transition-colors ${activeId === t.id ? 'border-primary text-primary-dark dark:text-primary font-bold' : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:border-gray-300'} ${t.level > minLevel ? 'text-[13px]' : 'text-sm'}`}
+                          >
+                            {t.text}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </nav>
+            )}
+            <div className="min-w-0 flex-1 max-w-4xl">
+              <div className="py-8">{rendered}</div>
+              <div className="pb-10 flex items-center justify-between text-sm">
+                <button onClick={() => goTo(prev)} disabled={!prev} className="flex items-center gap-1 font-bold text-gray-500 hover:text-primary-dark disabled:opacity-30">
+                  <span className="material-icons text-base">chevron_left</span>{prev ? prev.lesson.title : 'First lesson'}
+                </button>
+                <button onClick={() => goTo(next)} disabled={!next} className="flex items-center gap-1 font-bold text-gray-500 hover:text-primary-dark disabled:opacity-30 text-right">
+                  {next ? next.lesson.title : 'Last lesson'}<span className="material-icons text-base">chevron_right</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
