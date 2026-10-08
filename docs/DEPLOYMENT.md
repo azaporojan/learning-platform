@@ -92,7 +92,11 @@ comment submissions, approvals, stars, a chat, a lesson script and an API key:
 1. **Set `PASSWORD_PEPPER` first** (Environment tab; `openssl rand -base64 32`; copy it to your
    password manager). Without it the new container exits before touching the database
    (`[FATAL] PASSWORD_PEPPER must be set unless NODE_ENV is development or test`) and the site is down until it is set.
-2. Optional but recommended: take a database backup (`pg_dump`) right before merging.
+2. Optional but recommended: take a database backup (`pg_dump`) right before merging, and check
+   for accounts whose emails differ only by letter case (they would not be able to log in after
+   migration 010 lowercases emails):
+   `SELECT lower(trim(email)) AS email, array_agg(id) FROM users GROUP BY 1 HAVING count(*) > 1;`
+   No rows = nothing to do. Otherwise merge or rename those accounts first.
 3. Merge. CI builds the image and Dokploy redeploys it.
 4. Check the log: `Applying migration 006…010`, `Sealed N password hash(es) with key …`,
    `Server listening`, and no `[DB] WARNING: migration 010 …` lines (if there are, see

@@ -495,15 +495,16 @@ api.post('/login', authLimiter, async (req, res) => {
     if (user.failed_login_attempts > 0 || user.locked_until) {
       await db.query('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?', [user.id]);
     }
-    // Hashes from before the cost increase are upgraded transparently
-    if (needsRehash) {
-      // Only if the hash is still the one just verified: a password changed meanwhile must win
-      await db.query('UPDATE users SET password = ? WHERE id = ? AND password = ?', [await passwords.hashPassword(password), user.id, user.password]);
-    }
-
     // Verifică dacă contul e aprobat
     if (!user.is_approved && user.role !== 'admin') { // Adminii trec direct, de obicei, dar poți schimba
       return res.status(403).json({ error: 'Your account has not been approved by an administrator yet.' });
+    }
+
+    // Legacy / older hashes are upgraded transparently (after the approval check: no scrypt work
+    // for an account that cannot log in anyway)
+    if (needsRehash) {
+      // Only if the hash is still the one just verified: a password changed meanwhile must win
+      await db.query('UPDATE users SET password = ? WHERE id = ? AND password = ?', [await passwords.hashPassword(password), user.id, user.password]);
     }
 
     // Generează cod 6 cifre (CSPRNG)
@@ -3212,8 +3213,9 @@ if (fs.existsSync(path.join(publicDir, 'index.html'))) {
   // Encrypt any hash not yet sealed with the current key (first start after this release,
   // or after rotating PASSWORD_PEPPER)
   const { failed } = await passwords.sealAllPasswords(db);
-  if (failed > 0 && isProduction) {
-    // Every login would fail (and count toward lockouts): stop loudly instead
+  // Same rule as the key itself (passwords.js): only an explicit development/test setup may carry on
+  if (failed > 0 && !['development', 'test'].includes(process.env.NODE_ENV)) {
+    // Every login would be refused: stop loudly instead
     console.error('[FATAL] Some password hashes are sealed with a key this server does not have. Restore the previous PASSWORD_PEPPER, or add it to PASSWORD_PEPPER_PREVIOUS.');
     process.exit(1);
   }
