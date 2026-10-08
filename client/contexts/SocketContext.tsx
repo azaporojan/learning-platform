@@ -51,8 +51,11 @@ export const SocketProvider = ({ children, userId }: SocketProviderProps) => {
       socket.emit('request_online_users');
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
       setIsConnected(false);
+      // The server drops every socket of a user whose password just changed. This device holds
+      // the fresh cookie, so it reconnects; other devices fail the handshake and stay offline.
+      if (reason === 'io server disconnect') socket.connect();
     });
 
     socket.on('connect_error', (error) => {

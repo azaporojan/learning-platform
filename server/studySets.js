@@ -217,6 +217,10 @@ function registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, 
       params.push(set.id);
       const [rows] = await db.query(`UPDATE study_sets SET ${sets.join(', ')} WHERE id = ? RETURNING *`, params);
       if (rows.length === 0) return res.status(404).json({ error: 'Study set not found' });
+      // New content = new results: a best score earned on the old questions no longer counts
+      if (items !== undefined && JSON.stringify(items) !== JSON.stringify(set.items)) {
+        await db.query('DELETE FROM study_set_progress WHERE study_set_id = ?', [set.id]);
+      }
       io.emit('study_set:updated', { studySetId: set.id, lessonId: set.lesson_id });
       res.json(serialize(rows[0], true, null));
     } catch (err) {

@@ -233,7 +233,7 @@ items as `{question, options, multiple}`: `correct` and `explanation` stay on th
 `{score, total, results: [{correct, selected, correct_options, explanation}], progress}`. A flashcard
 run posts `{"known": n}`, the number of cards known on first sight. `progress` is
 `{best_score, last_score, total, attempts}`. A set counts as mastered (✓ on the road) when
-`best_score` equals the current number of items. When an edit changes the number of items, the old best score stops counting and the next run starts a new one.
+`best_score` equals the current number of items. Changing a set's `items` deletes the students' results on it (they were earned on the old questions); renaming or reordering the set keeps them.
 
 `GET /api/courses/:id` lists each lesson's `study_sets` as `{id, lesson_id, kind, title, description,
 order_index, item_count, progress}`, without items. Read a set with `GET /api/study-sets/:id`

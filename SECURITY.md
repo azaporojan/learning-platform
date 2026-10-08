@@ -28,16 +28,16 @@ The pre-deployment review found and fixed the following (all in `server/index.js
 
 | # | Finding | Severity | Fix (`server/passwords.js`, `server/index.js`, migration `008`) |
 |---|---|---|---|
-| 18 | Password guessing was limited per IP only: an attacker rotating IPs could keep testing one account. A correct password is confirmed before the email-code step, so a guessed password could then be tried on the student's other sites | High | Per-account lock: 10 wrong passwords lock the account for 15 minutes (on top of the per-IP limit) |
+| 18 | Password guessing was limited per IP only: an attacker rotating IPs could keep testing one account. A correct password is confirmed before the email-code step, so a guessed password could then be tried on the student's other sites | High | Per-account lock: 10 wrong passwords lock the account for 15 minutes (on top of the per-IP limit). While locked, every attempt — even the right password — gets the same 401 as an unknown email, in the same time, so the lock reveals neither the account nor a correct guess; the owner is emailed when the lock starts. Wrong "current password" attempts on `PUT /me/password` count toward the same lock (a stolen session cannot brute-force it), and locking voids any login code already sent. Trade-off: anyone who knows an email can trigger the lock |
 | 19 | Login timing revealed which emails have an account (unknown email answered without running bcrypt) | Medium | Unknown emails are checked against a dummy bcrypt hash; both cases return the same 401 body in the same time |
 | 20 | bcrypt reads only the first 72 bytes: passwords of up to 128 characters were accepted and silently truncated | Medium | Superseded by #27: scrypt has no input limit (passwords up to 256 characters) |
 | 21 | bcrypt cost 10 | Low | Superseded by #27 |
 | 22 | Any 8+ character password was accepted (`password123`, `12345678`, the user's own name) | High | Common passwords and name/email-based passwords are refused, and new passwords are checked against Have I Been Pwned (k-anonymity: only 5 hex characters of the SHA-1 leave the server; fails open; `PASSWORD_BREACH_CHECK=false` disables it) |
 | 23 | Users could not change their password, and a stolen session cookie stayed valid for its full 24 h | High | `PUT /api/me/password` (needs the current password): bumps `users.session_version`, which every session cookie and socket carries, so all other devices are signed out at once; the user is emailed |
 | 24 | The emailed login code was stored in clear in `users.login_code` | Low | Stored as HMAC-SHA256 under `PASSWORD_PEPPER` (a bare hash of a 6-digit code is reversed instantly); compared in constant time |
-| 25 | Login matched the email case-sensitively, and the admin editor stored emails as typed | Low | Emails are trimmed and lowercased everywhere |
+| 25 | Login matched the email case-sensitively, and the admin editor stored emails as typed | Low | Emails are trimmed and lowercased everywhere; migration `010` lowercases existing rows (skipping any that would collide) |
 | 26 | JWT verification did not pin the algorithm | Low | `HS256` only |
-| 27 | A stolen database (dump, backup, SQL injection) exposed bcrypt hashes to unlimited offline guessing, so weak or reused passwords could be recovered and tried elsewhere | High | Hashes are **sealed**: scrypt (N=2^16, r=8, p=2 — 64 MiB per guess) then AES-256-GCM-encrypted with `PASSWORD_PEPPER`, a key held only in the server environment (migration `009`, `server/passwords.js`). The database alone holds nothing to attack. Existing bcrypt hashes are sealed at startup without needing the password, and become scrypt at the user's next login. Production refuses to start without the key; it rotates via `PASSWORD_PEPPER_PREVIOUS` |
+| 27 | A stolen database (dump, backup, SQL injection) exposed bcrypt hashes to unlimited offline guessing, so weak or reused passwords could be recovered and tried elsewhere | High | Hashes are **sealed**: scrypt (N=2^16, r=8, p=2 — 64 MiB per guess) then AES-256-GCM-encrypted with `PASSWORD_PEPPER`, a key held only in the server environment (migration `009`, `server/passwords.js`). The database alone holds nothing to attack. Existing bcrypt hashes are sealed at startup without needing the password, and become scrypt at the user's next login. Production refuses to start without the key, and also when stored hashes are sealed with a key it does not have (instead of failing every login and locking everyone out); it rotates via `PASSWORD_PEPPER_PREVIOUS` |
 
 ### What a stolen database does and does not give
 
@@ -64,8 +64,9 @@ and keep a copy in a password manager: without it, no existing password can be v
   approval state stay admin-only (`/api/admin/users`).
 - Passwords: scrypt + AES-256-GCM sealing under `PASSWORD_PEPPER`, 8–256 characters, no
   common/breached/name-based passwords (`server/passwords.js`). Password hashes are never selected into an API response (every user
-  listing names its columns), and nothing logs request bodies. Without SMTP outside production
-  the server prints login codes to its log so you can still sign in; in production it never does.
+  listing names its columns), and nothing logs request bodies. Without SMTP, a dev/CI server
+  prints login codes to its log only with `LOG_LOGIN_CODES=true` (never in production, never by
+  default).
 - Secrets live only in the Dokploy **Environment** tab (never in git): `JWT_SECRET` (≥ 32 random
   chars), `DB_PASSWORD`, `EMAIL_PASS`. `.env` files are git-ignored.
 - The database role `learning_platform` is not a superuser and owns only its own database

@@ -92,7 +92,7 @@ stored on the application (Provider tab); if the package is made **public** thos
 
 ```bash
 docker compose up -d                 # PostgreSQL 16 on localhost:5432 (learning/learning)
-cd server && cp .env.example .env    # set JWT_SECRET (>= 32 chars); PASSWORD_PEPPER is optional in dev; email can stay empty (codes are logged)
+cd server && cp .env.example .env    # set JWT_SECRET (>= 32 chars); PASSWORD_PEPPER is optional in dev; email can stay empty with LOG_LOGIN_CODES=true (codes are logged)
 npm install && npm run dev           # API on http://localhost:3001/api
 cd ../client && cp .env.example .env # VITE_API_URL=http://localhost:3001/api
 npm install && npm run dev           # client on http://localhost:3000
@@ -112,6 +112,6 @@ use a scratch database such as `learning_test`).
 | Container exits: `PASSWORD_PEPPER must be set in production` | Generate one with `openssl rand -base64 32` and add it in the Environment tab. On the first start with it, the log shows `Sealed N password hash(es)`. |
 | Log: `password hash(es) are sealed with an unknown key` | `PASSWORD_PEPPER` was changed without keeping the old one: put the previous value in `PASSWORD_PEPPER_PREVIOUS` and restart. |
 | Container exits: `Database migration failed` / `password authentication failed` | `DB_PASSWORD` differs from the one used in `create-database.sql` (`ALTER ROLE learning_platform PASSWORD ...`), or the DB was not created. |
-| Login says "Code sent" but no email arrives | `EMAIL_USER`/`EMAIL_PASS` unset (codes are only logged) or the Gmail app password is wrong — see container logs. |
+| Login says "Code sent" but no email arrives | `EMAIL_USER`/`EMAIL_PASS` unset (nothing is sent; in dev, `LOG_LOGIN_CODES=true` prints the codes) or the Gmail app password is wrong — see container logs. |
 | Uploads disappear after a redeploy | The `learning-platform-uploads` volume mount is missing (Advanced → Volumes). |
 | Certificate not issued | Cloudflare proxy must allow the HTTP-01 challenge (same setup as the other `*.bsf.md` apps); check Traefik logs in Dokploy. |

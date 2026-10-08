@@ -77,7 +77,8 @@ function startServer(uploadsDir) {
       EMAIL_USER: '',
       EMAIL_PASS: '',
       PASSWORD_PEPPER: 'dGVzdC1vbmx5LXBlcHBlci10aGF0LWlzLTMyLWJ5dGVzLWxvbmch', // test-only, 37 bytes
-      PASSWORD_BREACH_CHECK: 'false', // no network in CI; covered by test/passwords.test.js
+      PASSWORD_BREACH_CHECK: 'false',
+      LOG_LOGIN_CODES: 'true',        // no SMTP here: read codes from the log (never on by default) // no network in CI; covered by test/passwords.test.js
       AUTH_RATE_LIMIT: '1000',        // the suite logs in far more than a real user would
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -128,6 +129,15 @@ async function waitForOutput(child, pattern) {
     await new Promise((r) => setTimeout(r, 50));
   }
   assert.fail(`server output never matched ${pattern}:\n${child.getOutput().slice(-2000)}`);
+}
+
+// The server removes a rejected upload asynchronously: give the unlink a moment to land
+async function eventually(check, message) {
+  for (let i = 0; i < 40; i++) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.fail(message);
 }
 
 async function loginAs(email, password) {
@@ -366,7 +376,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const early = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: earlyForm });
   assert.equal(early.status, 403, JSON.stringify(early.body));
   assert.deepEqual(early.body.lockReasons, ['enroll']);
-  assert.equal(fs.readdirSync(uploadsDir).length, 0);
+  await eventually(() => fs.readdirSync(uploadsDir).length === 0, 'the refused upload was not removed');
   const firstEnrol = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' });
   assert.equal(firstEnrol.status, 200);
 
@@ -412,7 +422,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   blank.append('comment', '   \n\t ');
   assert.equal((await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: blank })).status, 400);
   for (const sid of [commentOnly.body.id, both.body.id]) assert.equal((await stud(`/submissions/${sid}`, { method: 'DELETE' })).status, 200);
-  assert.equal(fs.readdirSync(uploadsDir).length, 1);
+  await eventually(() => fs.readdirSync(uploadsDir).length === 1, 'deleted submission files were not removed');
 
   // Admin review inbox: every submission with its place in the course and a deep-link target
   assert.equal((await stud('/admin/submissions')).status, 403);
@@ -554,7 +564,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const lockedSubmit = await stud(`/tasks/${phase2Task.body.id}/submit`, { method: 'POST', body: lockedForm });
   assert.equal(lockedSubmit.status, 403, JSON.stringify(lockedSubmit.body));
   assert.deepEqual(lockedSubmit.body.lockReasons, ['enroll']);
-  assert.equal(fs.readdirSync(uploadsDir).length, 1); // the rejected upload was removed
+  await eventually(() => fs.readdirSync(uploadsDir).length === 1, 'the rejected upload was not removed');
   // The legacy read routes apply the same rule
   const legacyDetails = await anon(`/paths/${phase2.body.id}/details`);
   assert.equal(legacyDetails.status, 200);
@@ -638,6 +648,12 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const edited = await admin(`/study-sets/${deck.body.id}`, { method: 'PUT', json: { title: 'Key terms', items: [{ front: 'QA', back: 'Quality assurance' }] } });
   assert.equal(edited.status, 200, JSON.stringify(edited.body));
   assert.equal(edited.body.item_count, 1);
+  // New questions = new results: the student's best score on the old deck is gone
+  assert.equal((await stud(`/study-sets/${deck.body.id}`)).body.progress, null);
+  // Renaming alone keeps results
+  await stud(`/study-sets/${deck.body.id}/attempts`, { method: 'POST', json: { known: 1 } });
+  await admin(`/study-sets/${deck.body.id}`, { method: 'PUT', json: { title: 'Key terms (v2)' } });
+  assert.equal((await stud(`/study-sets/${deck.body.id}`)).body.progress.best_score, 1);
   // A third phase behind the unfinished phase 2 is locked for the 'previous' reason
   const phase3 = await admin('/paths', { method: 'POST', json: { name: 'Phase 3', course_id: course.body.id } });
   assert.equal(phase3.body.order_index, 3);
@@ -678,7 +694,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   ghostForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'ghost.txt');
   const ghostSubmit = await stud('/tasks/999999/submit', { method: 'POST', body: ghostForm });
   assert.equal(ghostSubmit.status, 404);
-  assert.ok(!fs.readdirSync(uploadsDir).some((f) => f.endsWith('ghost.txt')));
+  await eventually(() => !fs.readdirSync(uploadsDir).some((f) => f.endsWith('ghost.txt')), 'the ghost upload was not removed');
   assert.equal((await admin('/paths/999999', { method: 'DELETE' })).status, 404);
   // Add a star gate on phase 2 that the student (10 stars) does not meet
   const gate = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 500 } });
@@ -899,8 +915,11 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   for (let i = 0; i < 10; i++) {
     assert.equal((await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: `Wrong-guess-${i}` } })).status, 401);
   }
+  // …and the lock answers exactly like a wrong password / unknown email (no account or guess is
+  // revealed); the owner is told by email
   const locked = await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });
-  assert.equal(locked.status, 429);
+  assert.deepEqual([locked.status, locked.body], [unknown.status, unknown.body]);
+  await waitForOutput(child, /to=pwtest@example\.test subject="Your account was locked for 15 minutes 🔒"/);
   await dbQuery('UPDATE users SET locked_until = NOW() - INTERVAL \'1 second\' WHERE id = $1', [pwReg.body.userId]);
   // A legacy bcrypt hash (as left by older releases) still logs in and is upgraded to sealed scrypt
   const bcrypt = require('bcrypt');
@@ -910,6 +929,21 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.match(rehashed.password, /^\$sealed\$v1\$/);
   assert.equal(rehashed.failed_login_attempts, 0);
   assert.equal(rehashed.locked_until, null);
+  // Guessing the current password through "change password" (e.g. with a stolen session) counts
+  // toward the same lock, and a login code sent before the lock stops working
+  const pending2fa = session();
+  const started = await pending2fa('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });
+  assert.equal(started.status, 200);
+  const earlyCode = await readLoginCode('pwtest@example.test');
+  for (let i = 0; i < 9; i++) {
+    assert.equal((await pw1('/me/password', { method: 'PUT', json: { current_password: `nope-${i}-wrong`, new_password: 'Red-Clock-Night-99' } })).status, 400);
+  }
+  assert.equal((await pw1('/me/password', { method: 'PUT', json: { current_password: 'nope-9-wrong', new_password: 'Red-Clock-Night-99' } })).status, 429);
+  assert.equal((await pw1('/me/password', { method: 'PUT', json: { current_password: 'Green-Lamp-Evening-8', new_password: 'Red-Clock-Night-99' } })).status, 429);
+  assert.equal((await pending2fa('/verify-code', { method: 'POST', json: { userId: started.body.userId, code: earlyCode } })).status, 400);
+  assert.equal((await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } })).status, 401);
+  await dbQuery('UPDATE users SET locked_until = NULL, failed_login_attempts = 0 WHERE id = $1', [pwReg.body.userId]);
+
   // No API response ever carries a password hash
   for (const r of [await admin('/admin/users'), await admin('/users/directory'), await anon('/users'), await pw1('/me')]) {
     assert.equal(/\$2b\$|\$sealed\$|scrypt/.test(JSON.stringify(r.body)), false);

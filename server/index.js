@@ -218,7 +218,7 @@ const uploadImage = multer({
 // ---------------------------------------------------------------------------
 const emailEnabled = Boolean(process.env.EMAIL_USER && process.env.EMAIL_PASS);
 if (!emailEnabled) {
-  console.warn('[Email] EMAIL_USER/EMAIL_PASS not set — outgoing emails (login codes, notifications) are disabled and logged instead.');
+  console.warn('[Email] EMAIL_USER/EMAIL_PASS not set — outgoing emails (login codes, notifications) are disabled (set LOG_LOGIN_CODES=true in dev to print login codes).');
 }
 const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -255,9 +255,10 @@ async function sessionFromToken(token) {
   if (!token) return null;
   let decoded;
   try { decoded = verifySessionToken(token); } catch (e) { return null; }
-  const [rows] = await db.query('SELECT session_version FROM users WHERE id = ?', [decoded.id]);
+  const [rows] = await db.query('SELECT role, session_version FROM users WHERE id = ?', [decoded.id]);
   if (rows.length === 0 || rows[0].session_version !== (decoded.sv || 0)) return null;
-  return decoded;
+  // The role is read fresh here (not trusted from the token), so requireAdmin can reuse it
+  return { ...decoded, role: rows[0].role, roleFromDb: true };
 }
 
 const SESSION_MS = 24 * 60 * 60 * 1000;
@@ -337,7 +338,8 @@ const authenticateToken = async (req, res, next) => {
 // demoted/deleted admin loses access immediately, not when their token expires.
 const requireAdmin = async (req, res, next) => {
   try {
-    const [rows] = await db.query('SELECT role FROM users WHERE id = ?', [req.user.id]);
+    // Session requests already carry the role read by sessionFromToken in this request
+    const [rows] = req.user.roleFromDb ? [[{ role: req.user.role }]] : await db.query('SELECT role FROM users WHERE id = ?', [req.user.id]);
     if (rows.length === 0 || rows[0].role !== 'admin') {
       return res.status(403).json({ error: 'Admin access required' });
     }
@@ -367,8 +369,9 @@ function escapeHtml(value) {
 
 // Helper function to send email
 const sendLoginCode = async (email, code) => {
-  // Without SMTP (local dev, CI) the code is printed so you can still log in. Never in production.
-  if (!emailEnabled && !isProduction) console.log(`[Email] (disabled) login code for ${email}: ${code}`);
+  // Without SMTP, local dev / CI can opt in to printing the code (LOG_LOGIN_CODES=true) so you can
+  // still log in. Never in production, and never by default (a staging box must not log codes).
+  if (!emailEnabled && !isProduction && process.env.LOG_LOGIN_CODES === 'true') console.log(`[Email] (disabled) login code for ${email}: ${code}`);
   try {
     await deliverMail({
       from: `"Learning App" <${process.env.EMAIL_USER}>`,
@@ -434,6 +437,33 @@ api.get('/health', async (req, res) => {
   }
 });
 
+// One wrong password (at login, or as the "current password" of a password change). The 10th in
+// a row locks the account for 15 minutes, voids any login code already sent, and tells the owner.
+async function recordFailedPassword(user) {
+  const [after] = await db.query(
+    `UPDATE users SET
+       failed_login_attempts = CASE WHEN failed_login_attempts + 1 >= 10 THEN 0 ELSE failed_login_attempts + 1 END,
+       locked_until = CASE WHEN failed_login_attempts + 1 >= 10 THEN NOW() + INTERVAL '15 minutes' ELSE locked_until END,
+       login_code = CASE WHEN failed_login_attempts + 1 >= 10 THEN NULL ELSE login_code END,
+       login_code_expires = CASE WHEN failed_login_attempts + 1 >= 10 THEN NULL ELSE login_code_expires END
+     WHERE id = ? RETURNING locked_until`,
+    [user.id]
+  );
+  const lockedNow = after[0] && after[0].locked_until && new Date(after[0].locked_until) > new Date() && !(user.locked_until && new Date(user.locked_until) > new Date());
+  if (lockedNow) {
+    sendNotificationEmail(
+      user.email,
+      'Your account was locked for 15 minutes 🔒',
+      `There were 10 failed password attempts on your Learning Platform account, so logging in is paused for 15 minutes.<br><br>
+       If this was you, wait and try again. If not, someone may be guessing your password: once you can log in,
+       change it from your profile (or ask an administrator for help).`,
+      '/courses',
+      'Open the Learning Platform'
+    );
+  }
+  return lockedNow;
+}
+
 api.post('/login', authLimiter, async (req, res) => {
   const { password } = req.body || {};
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : null;
@@ -448,23 +478,16 @@ api.post('/login', authLimiter, async (req, res) => {
     );
     const user = users[0] || null;
 
-    // Per-account lock (10 wrong passwords → 15 minutes), on top of the per-IP rate limit
-    if (user && user.locked_until && new Date(user.locked_until) > new Date()) {
-      return res.status(429).json({ error: 'Too many failed attempts. Please try again in 15 minutes.' });
-    }
+    // Per-account lock (10 wrong passwords → 15 minutes), on top of the per-IP rate limit.
+    // While locked, even the right password is refused — with the same answer, in the same time,
+    // as a wrong password or an unknown email, so the lock reveals neither the account nor a
+    // correct guess. The owner learns about the lock by email instead.
+    const locked = Boolean(user && user.locked_until && new Date(user.locked_until) > new Date());
 
-    // Unknown emails are checked against a dummy hash, so both cases take the same time
-    const { ok, needsRehash } = await passwords.verifyPassword(password, user ? user.password : null);
+    // Unknown emails are checked against a dummy hash, so every case takes the same time
+    const { ok, needsRehash, unreadable } = await passwords.verifyPassword(password, user && !locked ? user.password : null);
     if (!ok) {
-      if (user) {
-        await db.query(
-          `UPDATE users SET
-             failed_login_attempts = CASE WHEN failed_login_attempts + 1 >= 10 THEN 0 ELSE failed_login_attempts + 1 END,
-             locked_until = CASE WHEN failed_login_attempts + 1 >= 10 THEN NOW() + INTERVAL '15 minutes' ELSE locked_until END
-           WHERE id = ?`,
-          [user.id]
-        );
-      }
+      if (user && !locked && !unreadable) await recordFailedPassword(user);
       return res.status(401).json({ error: 'Incorrect email or password.' });
     }
     if (user.failed_login_attempts > 0 || user.locked_until) {
@@ -509,16 +532,16 @@ api.post('/verify-code', authLimiter, async (req, res) => {
 
   try {
     const [users] = await db.query(
-      'SELECT id, name, email, role, stars, avatar_url, session_version, login_code, login_code_expires, login_code_attempts FROM users WHERE id = ?',
+      'SELECT id, name, email, role, stars, avatar_url, session_version, login_code, login_code_expires, login_code_attempts, locked_until FROM users WHERE id = ?',
       [userId]
     );
     if (users.length === 0) return res.status(404).json({ error: 'User not found.' });
 
     const user = users[0];
 
-    // Verifică expirarea (și că există un cod activ)
+    // Verifică expirarea (și că există un cod activ); un cont blocat nu poate termina login-ul
     const now = new Date();
-    if (!user.login_code || !user.login_code_expires || new Date(user.login_code_expires) < now) {
+    if ((user.locked_until && new Date(user.locked_until) > now) || !user.login_code || !user.login_code_expires || new Date(user.login_code_expires) < now) {
       return res.status(400).json({ error: 'Code expired. Please try again.' });
     }
 
@@ -616,10 +639,18 @@ api.put('/me/password', authLimiter, authenticateToken, async (req, res) => {
     return res.status(400).json({ error: 'current_password and new_password are required.' });
   }
   try {
-    const [rows] = await db.query('SELECT id, name, email, role, password FROM users WHERE id = ?', [req.user.id]);
+    const [rows] = await db.query('SELECT id, name, email, role, password, locked_until FROM users WHERE id = ?', [req.user.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
     const user = rows[0];
-    if (!(await passwords.verifyPassword(current, user.password)).ok) {
+    // Guessing the current password from a stolen session counts like guessing it at login
+    if (user.locked_until && new Date(user.locked_until) > new Date()) {
+      return res.status(429).json({ error: 'Too many wrong passwords. Please try again in 15 minutes.' });
+    }
+    const check = await passwords.verifyPassword(current, user.password);
+    if (!check.ok) {
+      if (!check.unreadable && await recordFailedPassword(user)) {
+        return res.status(429).json({ error: 'Too many wrong passwords. Please try again in 15 minutes.' });
+      }
       return res.status(400).json({ error: 'Your current password is incorrect.' });
     }
     if (current === next) return res.status(400).json({ error: 'The new password must be different from the current one.' });
@@ -633,7 +664,8 @@ api.put('/me/password', authLimiter, authenticateToken, async (req, res) => {
       [await passwords.hashPassword(next), user.id]
     );
     issueSession(res, updated[0]);
-    // Close this user's live sockets on other devices too
+    // Close every live socket of this user. Other devices cannot reconnect (their cookie is now
+    // stale); this device reconnects at once with its fresh cookie (SocketContext).
     io.in(userRoom(user.id)).disconnectSockets(true);
     sendNotificationEmail(
       user.email,
@@ -3146,7 +3178,12 @@ if (fs.existsSync(path.join(publicDir, 'index.html'))) {
   }
   // Encrypt any hash not yet sealed with the current key (first start after this release,
   // or after rotating PASSWORD_PEPPER)
-  await passwords.sealAllPasswords(db);
+  const { failed } = await passwords.sealAllPasswords(db);
+  if (failed > 0 && isProduction) {
+    // Every login would fail (and count toward lockouts): stop loudly instead
+    console.error('[FATAL] Some password hashes are sealed with a key this server does not have. Restore the previous PASSWORD_PEPPER, or add it to PASSWORD_PEPPER_PREVIOUS.');
+    process.exit(1);
+  }
   server.listen(PORT, () => {
     console.log(`Server listening on port ${PORT} (${NODE_ENV})`);
   });

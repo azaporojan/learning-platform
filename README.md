@@ -98,7 +98,7 @@ DB_USER=learning
 DB_PASSWORD=learning
 JWT_SECRET=generate_with_openssl_rand_base64_48   # minim 32 caractere
 BOOTSTRAP_ADMIN_EMAIL=you@example.com             # primul cont înregistrat cu acest email devine admin
-EMAIL_USER=your_email@gmail.com                   # opțional local: fără email, codurile de login apar în consolă
+EMAIL_USER=your_email@gmail.com                   # opțional local: fără email, cu LOG_LOGIN_CODES=true codurile de login apar în consolă
 EMAIL_PASS=your_app_password
 PORT=3001
 NODE_ENV=development

@@ -194,7 +194,11 @@ async function verifyPassword(password, stored) {
   const inner = stored ? (isSealed(stored) ? unseal(stored) : stored) : null;
   if (typeof password !== 'string' || password.length > MAX_LENGTH || !inner) {
     await scryptVerify('x', await dummyInner());
-    if (stored && !inner) console.error('[Passwords] A stored hash could not be unsealed: is PASSWORD_PEPPER (or _PREVIOUS) missing?');
+    if (stored && !inner) {
+      console.error('[Passwords] A stored hash could not be unsealed: is PASSWORD_PEPPER (or _PREVIOUS) missing?');
+      // Not the user's fault: callers must not count this as a wrong password
+      return { ok: false, needsRehash: false, unreadable: true };
+    }
     return { ok: false, needsRehash: false };
   }
   let ok = false;

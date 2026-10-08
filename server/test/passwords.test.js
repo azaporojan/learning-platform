@@ -63,7 +63,8 @@ test('stored hashes are sealed scrypt: a database copy alone holds nothing to cr
   // Without the key (an attacker holding only the database) the value cannot even be opened
   passwords.configure({ PASSWORD_PEPPER: KEY_B });
   assert.equal(passwords._internals.unseal(stored), null);
-  assert.equal((await passwords.verifyPassword('Blue-Kettle-Morning-7', stored)).ok, false);
+  // …and the server knows it is a key problem, not a wrong password (no lockout counting)
+  assert.deepEqual(await passwords.verifyPassword('Blue-Kettle-Morning-7', stored), { ok: false, needsRehash: false, unreadable: true });
 
   // Key rotation: the old key in PASSWORD_PEPPER_PREVIOUS still opens it, and asks for a re-seal
   passwords.configure({ PASSWORD_PEPPER: KEY_B, PASSWORD_PEPPER_PREVIOUS: KEY_A });
