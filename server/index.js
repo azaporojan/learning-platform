@@ -495,7 +495,8 @@ api.post('/login', authLimiter, async (req, res) => {
     }
     // Hashes from before the cost increase are upgraded transparently
     if (needsRehash) {
-      await db.query('UPDATE users SET password = ? WHERE id = ?', [await passwords.hashPassword(password), user.id]);
+      // Only if the hash is still the one just verified: a password changed meanwhile must win
+      await db.query('UPDATE users SET password = ? WHERE id = ? AND password = ?', [await passwords.hashPassword(password), user.id, user.password]);
     }
 
     // Verifică dacă contul e aprobat
@@ -647,7 +648,17 @@ api.put('/me', async (req, res) => {
 
 // Change own password: needs the current one. Every other session is signed out (session version
 // bump), this one gets a fresh cookie, and the user is told by email in case it was not them.
-api.put('/me/password', authLimiter, authenticateToken, async (req, res) => {
+// Per user, not per IP: a classroom behind one NAT shares an IP (and the login limiter), and
+// wrong current passwords already count toward the account lock
+const passwordChangeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20, // above the 10-wrong-passwords account lock, so the lock decides first
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => `user:${req.user.id}`,
+  message: { error: 'Too many attempts. Please try again later.' },
+});
+api.put('/me/password', authenticateToken, passwordChangeLimiter, async (req, res) => {
   const { current_password: current, new_password: next } = req.body || {};
   if (typeof current !== 'string' || typeof next !== 'string') {
     return res.status(400).json({ error: 'current_password and new_password are required.' });

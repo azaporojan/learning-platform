@@ -215,12 +215,20 @@ function registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, 
       if (items !== undefined) { sets.push('items = ?::jsonb'); params.push(JSON.stringify(items)); }
       if (sets.length === 0) return res.status(400).json({ error: 'Nothing to update' });
       params.push(set.id);
-      const [rows] = await db.query(`UPDATE study_sets SET ${sets.join(', ')} WHERE id = ? RETURNING *`, params);
+      // One transaction with the row locked: an attempt (which holds a share lock while grading)
+      // either finishes before the edit — and its result is then reset with the others — or is
+      // graded against the new items afterwards
+      const rows = await db.transaction(async (tx) => {
+        const [current] = await tx.query('SELECT items FROM study_sets WHERE id = ? FOR UPDATE', [set.id]);
+        if (current.length === 0) return [];
+        const [updated] = await tx.query(`UPDATE study_sets SET ${sets.join(', ')} WHERE id = ? RETURNING *`, params);
+        // New content = new results: a best score earned on the old questions no longer counts
+        if (items !== undefined && JSON.stringify(items) !== JSON.stringify(current[0].items)) {
+          await tx.query('DELETE FROM study_set_progress WHERE study_set_id = ?', [set.id]);
+        }
+        return updated;
+      });
       if (rows.length === 0) return res.status(404).json({ error: 'Study set not found' });
-      // New content = new results: a best score earned on the old questions no longer counts
-      if (items !== undefined && JSON.stringify(items) !== JSON.stringify(set.items)) {
-        await db.query('DELETE FROM study_set_progress WHERE study_set_id = ?', [set.id]);
-      }
       io.emit('study_set:updated', { studySetId: set.id, lessonId: set.lesson_id });
       res.json(serialize(rows[0], true, null));
     } catch (err) {
@@ -249,42 +257,52 @@ function registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, 
       const reasons = (await lessonLockReasons(req.user.id, set.lesson_id)) || [];
       if (reasons.length > 0) return res.status(403).json({ error: 'This lesson is locked', lockReasons: reasons });
       const b = req.body || {};
-      const total = set.items.length;
-      if (total === 0) return res.status(400).json({ error: 'This study set has no items yet' });
+      const outcome = await db.transaction(async (tx) => {
+        // Share lock: an edit of this set waits until this attempt is graded and stored
+        const [locked] = await tx.query('SELECT * FROM study_sets WHERE id = ? FOR SHARE', [set.id]);
+        if (locked.length === 0) return { status: 404, body: { error: 'Study set not found' } };
+        const current = locked[0];
+        const total = current.items.length;
+        if (total === 0) return { status: 400, body: { error: 'This study set has no items yet' } };
 
-      let score;
-      let results;
-      if (set.kind === 'quiz') {
-        if (!Array.isArray(b.answers) || b.answers.length !== total) {
-          return res.status(400).json({ error: `answers must be an array with one entry per question (${total})` });
+        let score;
+        let results;
+        if (current.kind === 'quiz') {
+          if (!Array.isArray(b.answers) || b.answers.length !== total) {
+            return { status: 400, body: { error: `answers must be an array with one entry per question (${total})` } };
+          }
+          const answers = b.answers.map((a) => (a === null || a === undefined ? [] : Array.isArray(a) ? a : [a]));
+          // Each answer: distinct option indexes of that question, at most one per option
+          const valid = answers.every((a, i) => a.length <= current.items[i].options.length
+            && a.every((v) => Number.isInteger(v) && v >= 0 && v < current.items[i].options.length));
+          if (!valid) return { status: 400, body: { error: 'each answer must be an option index of its question, an array of them, or null' } };
+          results = current.items.map((q, i) => ({
+            correct: sameAnswer(answers[i], q.correct),
+            selected: answers[i],
+            correct_options: q.correct,
+            explanation: q.explanation || '',
+          }));
+          score = results.filter((r) => r.correct).length;
+        } else {
+          if (!Number.isInteger(b.known) || b.known < 0 || b.known > total) return { status: 400, body: { error: `known must be an integer between 0 and ${total}` } };
+          score = b.known;
         }
-        const answers = b.answers.map((a) => (a === null || a === undefined ? [] : Array.isArray(a) ? a : [a]));
-        if (!answers.every((a) => a.every((v) => Number.isInteger(v)))) return res.status(400).json({ error: 'each answer must be an option index, an array of indexes, or null' });
-        results = set.items.map((q, i) => ({
-          correct: sameAnswer(answers[i], q.correct),
-          selected: answers[i],
-          correct_options: q.correct,
-          explanation: q.explanation || '',
-        }));
-        score = results.filter((r) => r.correct).length;
-      } else {
-        if (!Number.isInteger(b.known) || b.known < 0 || b.known > total) return res.status(400).json({ error: `known must be an integer between 0 and ${total}` });
-        score = b.known;
-      }
 
-      const [rows] = await db.query(
-        `INSERT INTO study_set_progress (user_id, study_set_id, best_score, last_score, total, attempts, updated_at)
-         VALUES (?, ?, ?, ?, ?, 1, NOW())
-         ON CONFLICT (user_id, study_set_id) DO UPDATE SET
-           best_score = CASE WHEN study_set_progress.total = EXCLUDED.total
-                             THEN GREATEST(study_set_progress.best_score, EXCLUDED.best_score)
-                             ELSE EXCLUDED.best_score END,
-           last_score = EXCLUDED.last_score, total = EXCLUDED.total,
-           attempts = study_set_progress.attempts + 1, updated_at = NOW()
-         RETURNING *`,
-        [req.user.id, set.id, score, score, total]
-      );
-      res.json({ score, total, results, progress: progressOf(rows[0]) });
+        const [rows] = await tx.query(
+          `INSERT INTO study_set_progress (user_id, study_set_id, best_score, last_score, total, attempts, updated_at)
+           VALUES (?, ?, ?, ?, ?, 1, NOW())
+           ON CONFLICT (user_id, study_set_id) DO UPDATE SET
+             best_score = CASE WHEN study_set_progress.total = EXCLUDED.total
+                               THEN GREATEST(study_set_progress.best_score, EXCLUDED.best_score)
+                               ELSE EXCLUDED.best_score END,
+             last_score = EXCLUDED.last_score, total = EXCLUDED.total,
+             attempts = study_set_progress.attempts + 1, updated_at = NOW()
+           RETURNING *`,
+          [req.user.id, set.id, score, score, total]
+        );
+        return { status: 200, body: { score, total, results, progress: progressOf(rows[0]) } };
+      });
+      res.status(outcome.status).json(outcome.body);
     } catch (err) {
       console.error('[POST /study-sets/:id/attempts] Error:', err);
       res.status(500).json({ error: 'Failed to record attempt' });

@@ -629,6 +629,10 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   // Grading happens on the server
   const badAttempt = await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [1] } });
   assert.equal(badAttempt.status, 400);
+  // Answers must be option indexes of their question, at most one per option
+  for (const answers of [[7, [0]], [1, [-1]], [1, [0, 1, 2, 0, 1, 2]], [1, ['0']]]) {
+    assert.equal((await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers } })).status, 400, JSON.stringify(answers));
+  }
   const attempt1 = await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [1, [0]] } });
   assert.equal(attempt1.status, 200, JSON.stringify(attempt1.body));
   assert.equal(attempt1.body.score, 1);
