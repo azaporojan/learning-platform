@@ -10,8 +10,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "check": "node --check index.js && node --check courses.js && node --check studySets.js && node --check db.js && node --check db/migrate.js",
+    "check": "node --check index.js && node --check courses.js && node --check studySets.js && node --check passwords.js && node --check scripts/unseal-passwords.js && node --check db.js && node --check db/migrate.js",
     "promote-admin": "node scripts/promote_admin.js",
+    "passwords:unseal": "node scripts/unseal-passwords.js",
     "test": "node --test test/*.test.js"
   },
   "license": "ISC",

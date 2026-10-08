@@ -70,6 +70,42 @@ stored on the application (Provider tab); if the package is made **public** thos
 5. **Verify:** `curl -s https://learning.bsf.md/api/health` → `{"status":"ok"}`; open the site,
    register with the bootstrap admin email, log in with the emailed code.
 
+## Upgrading to the study-sets / password-sealing release (migrations 006–010)
+
+Rehearsed against a copy of the previous release with users, a course, lessons, tasks, file and
+comment submissions, approvals, stars, a chat, a lesson script and an API key:
+
+- **Nothing is lost.** Every row of `courses`, `paths`, `lessons`, `tasks`, `task_submissions`,
+  `user_progress`, `course_enrollments`, chats/messages and `api_keys` is byte-for-byte unchanged,
+  and the uploaded files (the `learning-platform-uploads` volume) are untouched. The migrations
+  only add tables and columns, fill in notification links, lowercase emails and seal password
+  hashes.
+- **Nobody is logged out.** Session cookies issued by the previous release stay valid (until their
+  normal 24 h expiry), and so do API keys. Existing passwords keep working — including ones the new
+  policy would refuse — and each is upgraded to scrypt at its owner's next login.
+- The only visible effects: a login started in the last 10 minutes before the deploy needs its
+  emailed code requested again (migration 008 voids codes stored in clear), and the container
+  restart itself (a few seconds; the image has a HEALTHCHECK).
+
+**Steps**
+
+1. **Set `PASSWORD_PEPPER` first** (Environment tab; `openssl rand -base64 32`; copy it to your
+   password manager). Without it the new container exits before touching the database
+   (`[FATAL] PASSWORD_PEPPER must be set in production`) and the site is down until it is set.
+2. Optional but recommended: take a database backup (`pg_dump`) right before merging.
+3. Merge. CI builds the image and Dokploy redeploys it.
+4. Check the log: `Applying migration 006…010`, `Sealed N password hash(es) with key …`,
+   `Server listening`, and no `[DB] WARNING: migration 010 …` lines (if there are, see
+   Troubleshooting). Then `curl -s https://learning.bsf.md/api/health`.
+
+**Rolling back** (only if really needed — fixing forward is safer): the database stays on the new
+schema, which the previous release runs on fine, but the previous release cannot read sealed
+password hashes, so nobody could log in with a password (open sessions keep working). Before
+deploying the old image, run inside the current container:
+`npm run passwords:unseal` (dry run) then `npm run passwords:unseal -- --apply`. Accounts that have
+not logged in since the upgrade get their bcrypt hash back; accounts that did (scrypt) are listed
+and can log in again once a current release is redeployed, which re-seals everything at startup.
+
 ## Day-2 operations
 
 - **Redeploy the current `:latest` manually:** Dokploy → *Learning Platform* → **Deploy**, or

@@ -19,8 +19,9 @@ async function runMigrations(pool) {
   `);
 
   const client = await pool.connect();
-  // Migrations report things an operator must act on with RAISE WARNING / NOTICE
-  const onNotice = (msg) => console.warn(`[DB] ${msg.severity || 'NOTICE'}: ${msg.message}`);
+  // Migrations report things an operator must act on with RAISE WARNING (routine NOTICEs such
+  // as "trigger ... does not exist, skipping" are not logged)
+  const onNotice = (msg) => { if (msg.severity === 'WARNING') console.warn(`[DB] WARNING: ${msg.message}`); };
   client.on('notice', onNotice);
   try {
     // Serialize concurrent starts (e.g. two replicas) with an advisory lock.
