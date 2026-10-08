@@ -973,6 +973,15 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal((await dbQuery('SELECT failed_login_attempts FROM users WHERE id = $1', [pwReg.body.userId]))[0].failed_login_attempts, 0);
   await dbQuery('UPDATE users SET password = $1 WHERE id = $2', [beforeKeyMix.password, pwReg.body.userId]);
 
+  // Un-approved between /login and /verify-code: no session
+  const unapproving = session();
+  const startedLogin = await unapproving('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });
+  assert.equal(startedLogin.status, 200);
+  const pendingCode = await readLoginCode('pwtest@example.test');
+  await dbQuery('UPDATE users SET is_approved = FALSE WHERE id = $1', [pwReg.body.userId]);
+  assert.equal((await unapproving('/verify-code', { method: 'POST', json: { userId: startedLogin.body.userId, code: pendingCode } })).status, 403);
+  await dbQuery('UPDATE users SET is_approved = TRUE WHERE id = $1', [pwReg.body.userId]);
+
   // Parallel wrong codes cannot exceed the 5 tries per code, and the code is then void
   const racer = session();
   const raceLogin = await racer('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });

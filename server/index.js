@@ -536,12 +536,17 @@ api.post('/verify-code', authLimiter, async (req, res) => {
 
   try {
     const [users] = await db.query(
-      'SELECT id, name, email, role, stars, avatar_url, session_version, login_code, login_code_expires, login_code_attempts, locked_until FROM users WHERE id = ?',
+      'SELECT id, name, email, role, stars, avatar_url, is_approved, session_version, login_code, login_code_expires, login_code_attempts, locked_until FROM users WHERE id = ?',
       [userId]
     );
     if (users.length === 0) return res.status(404).json({ error: 'User not found.' });
 
     const user = users[0];
+
+    // Approval is re-checked here too: an account un-approved after /login must not get a session
+    if (!user.is_approved && user.role !== 'admin') {
+      return res.status(403).json({ error: 'Your account has not been approved by an administrator yet.' });
+    }
 
     // Verifică expirarea (și că există un cod activ); un cont blocat nu poate termina login-ul
     const now = new Date();
