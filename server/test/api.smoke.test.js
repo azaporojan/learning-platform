@@ -40,12 +40,23 @@ async function resetDb() {
   await c.end();
 }
 
+// The database only holds a hash of the emailed login code; without SMTP (tests, dev) the
+// server prints the code itself, so the latest one is read from its output.
+let serverOutput = () => '';
 async function readLoginCode(email) {
+  const re = new RegExp(`login code for ${email.toLowerCase().replace(/[.]/g, '\\.')}: (\\d{6})`, 'g');
+  for (let i = 0; i < 40; i++) {
+    const all = [...serverOutput().matchAll(re)];
+    if (all.length > 0) return all[all.length - 1][1];
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`no login code logged for ${email}`);
+}
+
+async function dbQuery(sql, params) {
   const c = new Client(dbConfig);
   await c.connect();
-  const { rows } = await c.query('SELECT login_code FROM users WHERE email = $1', [email]);
-  await c.end();
-  return rows[0].login_code;
+  try { return (await c.query(sql, params)).rows; } finally { await c.end(); }
 }
 
 function startServer(uploadsDir) {
@@ -65,6 +76,8 @@ function startServer(uploadsDir) {
       UPLOADS_DIR: uploadsDir,
       EMAIL_USER: '',
       EMAIL_PASS: '',
+      PASSWORD_BREACH_CHECK: 'false', // no network in CI; covered by test/passwords.test.js
+      AUTH_RATE_LIMIT: '1000',        // the suite logs in far more than a real user would
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -134,6 +147,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   await resetDb();
   const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-uploads-'));
   const child = startServer(uploadsDir);
+  serverOutput = child.getOutput;
   t.after(() => { child.kill('SIGTERM'); fs.rmSync(uploadsDir, { recursive: true, force: true }); });
   await waitForHealth(child);
 
@@ -840,6 +854,62 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(revoke.status, 200);
   const afterRevoke = await fetch(`${BASE}/admin/api-keys`, { headers: bearer });
   assert.equal(afterRevoke.status, 401);
+
+  // ---- Password security ----------------------------------------------------
+  // Weak, common, name-based and over-long (bcrypt reads only 72 bytes) passwords are refused
+  for (const [password, re] of [['Password123', /too common/], ['Pwtest2024', /based on your (name|email)/], ['a'.repeat(73), /too long/], ['ă'.repeat(37), /too long/], ['zzzzzzzzzz', /too easy/]]) {
+    const r = await anon('/register', { method: 'POST', json: { name: 'Pwtest', email: 'pwtest@example.test', password } });
+    assert.equal(r.status, 400, password);
+    assert.match(r.body.error, re);
+  }
+  const pwReg = await anon('/register', { method: 'POST', json: { name: 'Pwtest', email: 'pwtest@example.test', password: 'Blue-Kettle-Morning-7' } });
+  assert.equal(pwReg.status, 201, JSON.stringify(pwReg.body));
+  assert.equal((await admin(`/users/${pwReg.body.userId}/approve`, { method: 'POST' })).status, 200);
+  // Stored as bcrypt cost 12; the emailed login code is stored only as a SHA-256
+  const [pwRow] = await dbQuery('SELECT password, login_code FROM users WHERE id = $1', [pwReg.body.userId]);
+  assert.match(pwRow.password, /^\$2b\$12\$/);
+  const pw1 = await loginAs('PWTEST@Example.test', 'Blue-Kettle-Morning-7'); // email is case-insensitive
+  const pwOther = await loginAs('pwtest@example.test', 'Blue-Kettle-Morning-7'); // a second device
+  await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Blue-Kettle-Morning-7' } });
+  const [codeRow] = await dbQuery('SELECT login_code FROM users WHERE id = $1', [pwReg.body.userId]);
+  assert.match(codeRow.login_code, /^[0-9a-f]{64}$/);
+  assert.notEqual(codeRow.login_code, await readLoginCode('pwtest@example.test'));
+  // Unknown email and wrong password answer the same way
+  const unknown = await anon('/login', { method: 'POST', json: { email: 'nobody@example.test', password: 'Whatever-123' } });
+  const wrong = await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Whatever-123' } });
+  assert.deepEqual([unknown.status, unknown.body], [wrong.status, wrong.body]);
+  // Changing the password: needs the current one, applies the policy, signs out other devices
+  const badCurrent = await pw1('/me/password', { method: 'PUT', json: { current_password: 'nope-nope-1', new_password: 'Green-Lamp-Evening-8' } });
+  assert.equal(badCurrent.status, 400);
+  const weakNew = await pw1('/me/password', { method: 'PUT', json: { current_password: 'Blue-Kettle-Morning-7', new_password: 'password1' } });
+  assert.equal(weakNew.status, 400);
+  const changed = await pw1('/me/password', { method: 'PUT', json: { current_password: 'Blue-Kettle-Morning-7', new_password: 'Green-Lamp-Evening-8' } });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  assert.equal((await pw1('/me')).status, 200);           // this device got a fresh cookie
+  assert.equal((await pwOther('/me')).status, 401);       // the other device is signed out
+  assert.equal((await pwOther('/notifications')).status, 401);
+  await waitForOutput(child, /to=pwtest@example\.test subject="Your password was changed 🔐"/);
+  assert.equal((await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Blue-Kettle-Morning-7' } })).status, 401);
+  await loginAs('pwtest@example.test', 'Green-Lamp-Evening-8');
+  // 10 wrong passwords lock the account for 15 minutes, even for the right password
+  for (let i = 0; i < 10; i++) {
+    assert.equal((await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: `Wrong-guess-${i}` } })).status, 401);
+  }
+  const locked = await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });
+  assert.equal(locked.status, 429);
+  await dbQuery('UPDATE users SET locked_until = NOW() - INTERVAL \'1 second\' WHERE id = $1', [pwReg.body.userId]);
+  // Hashes from before the cost increase (10) are upgraded on the next successful login
+  const bcrypt = require('bcrypt');
+  await dbQuery('UPDATE users SET password = $1 WHERE id = $2', [bcrypt.hashSync('Green-Lamp-Evening-8', 10), pwReg.body.userId]);
+  await loginAs('pwtest@example.test', 'Green-Lamp-Evening-8');
+  const [rehashed] = await dbQuery('SELECT password, failed_login_attempts, locked_until FROM users WHERE id = $1', [pwReg.body.userId]);
+  assert.match(rehashed.password, /^\$2b\$12\$/);
+  assert.equal(rehashed.failed_login_attempts, 0);
+  assert.equal(rehashed.locked_until, null);
+  // No API response ever carries a password hash
+  for (const r of [await admin('/admin/users'), await admin('/users/directory'), await anon('/users'), await pw1('/me')]) {
+    assert.equal(JSON.stringify(r.body).includes('$2b$'), false);
+  }
 
   // Logout clears the session
   await stud('/logout', { method: 'POST' });

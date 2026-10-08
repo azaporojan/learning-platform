@@ -159,7 +159,7 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
   // ---- catalogue -----------------------------------------------------------
   api.get('/courses', async (req, res) => {
     try {
-      const caller = await getCaller(optionalUserId(req));
+      const caller = await getCaller(await optionalUserId(req));
       const [courses] = await db.query('SELECT * FROM courses ORDER BY id ASC');
       const [phaseCounts] = await db.query(`
         SELECT p.course_id, COUNT(DISTINCT p.id) AS phases, COUNT(l.id) AS lessons
@@ -281,7 +281,7 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
       const [courses] = await db.query('SELECT * FROM courses WHERE id = ?', [req.params.id]);
       if (courses.length === 0) return res.status(404).json({ error: 'Course not found' });
       const course = courses[0];
-      const caller = await getCaller(optionalUserId(req));
+      const caller = await getCaller(await optionalUserId(req));
       const admin = caller ? isAdminRole(caller.role) : false;
 
       const [paths] = await db.query(`SELECT * FROM paths WHERE course_id = ? ${PHASE_ORDER}`, [course.id]);

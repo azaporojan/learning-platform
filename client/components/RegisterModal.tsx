@@ -151,6 +151,9 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({ isOpen, onClose, o
                   </span>
                 </button>
               </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                At least 8 characters; a few unrelated words make a strong passphrase. Common passwords and passwords found in data breaches are refused.
+              </p>
             </div>
 
             <div>

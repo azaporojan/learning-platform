@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { ChangePasswordForm } from './ChangePasswordForm';
 import { NavLink, Link } from 'react-router-dom';
 import { useDialog } from '../hooks/useDialog';
 import { useOnlineUsers } from '../hooks/useOnlineUsers';
@@ -404,7 +405,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
       {/* Edit Profile Modal */}
       {currentUser && showProfileModal && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => !savingProfile && setShowProfileModal(false)}>
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-[560px] p-8 border border-gray-200 dark:border-gray-700" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-[560px] max-w-[95vw] max-h-[90vh] overflow-y-auto p-8 border border-gray-200 dark:border-gray-700" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Edit Profile</h3>
               <button className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300" onClick={() => !savingProfile && setShowProfileModal(false)}>
@@ -473,6 +474,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
                 <div className="text-xs text-red-500 mt-2">Name must be at least 2 characters.</div>
               )}
             </div>
+
+            <ChangePasswordForm />
 
             <div className="flex justify-end space-x-3">
               <button

@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const bcrypt = require('bcrypt');
+const passwords = require('./passwords');
 const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
@@ -106,7 +106,7 @@ const apiLimiter = rateLimit({
 });
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 20,
+  limit: Math.max(1, parseInt(process.env.AUTH_RATE_LIMIT || '20', 10)),
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'Too many attempts. Please try again later.' },
@@ -237,7 +237,29 @@ async function deliverMail(message) {
 // Auth helpers
 // ---------------------------------------------------------------------------
 function verifySessionToken(token) {
-  return jwt.verify(token, jwtSecret); // { id, role }
+  return jwt.verify(token, jwtSecret, { algorithms: ['HS256'] }); // { id, role, sv }
+}
+
+// A session cookie is valid only while its session version matches the user's: changing the
+// password bumps the version, which signs out every other device at once.
+async function sessionFromToken(token) {
+  if (!token) return null;
+  let decoded;
+  try { decoded = verifySessionToken(token); } catch (e) { return null; }
+  const [rows] = await db.query('SELECT session_version FROM users WHERE id = ?', [decoded.id]);
+  if (rows.length === 0 || rows[0].session_version !== (decoded.sv || 0)) return null;
+  return decoded;
+}
+
+const SESSION_MS = 24 * 60 * 60 * 1000;
+function issueSession(res, user) {
+  const token = jwt.sign({ id: user.id, role: user.role, sv: user.session_version || 0 }, jwtSecret, { algorithm: 'HS256', expiresIn: '24h' });
+  res.cookie('token', token, {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'strict' : 'lax',
+    maxAge: SESSION_MS,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -292,10 +314,13 @@ const authenticateToken = async (req, res, next) => {
   }
 
   try {
-    req.user = verifySessionToken(token); // { id, role }
+    const session = await sessionFromToken(token); // { id, role, sv }
+    if (!session) return res.status(401).json({ error: 'Invalid token' });
+    req.user = session;
     next();
   } catch (err) {
-    return res.status(401).json({ error: 'Invalid token' });
+    console.error('[Auth] Session check failed:', err);
+    return res.status(500).json({ error: 'Server error.' });
   }
 };
 
@@ -316,14 +341,9 @@ const requireAdmin = async (req, res, next) => {
 };
 
 // Read the session from the cookie without rejecting anonymous requests.
-function optionalUserId(req) {
-  const token = req.cookies.token;
-  if (!token) return null;
-  try {
-    return verifySessionToken(token).id;
-  } catch (e) {
-    return null;
-  }
+async function optionalUserId(req) {
+  const session = await sessionFromToken(req.cookies.token);
+  return session ? session.id : null;
 }
 
 // Escape user-provided text before interpolating it into HTML emails.
@@ -338,6 +358,8 @@ function escapeHtml(value) {
 
 // Helper function to send email
 const sendLoginCode = async (email, code) => {
+  // Without SMTP (local dev, CI) the code is printed so you can still log in. Never in production.
+  if (!emailEnabled && !isProduction) console.log(`[Email] (disabled) login code for ${email}: ${code}`);
   try {
     await deliverMail({
       from: `"Learning App" <${process.env.EMAIL_USER}>`,
@@ -404,24 +426,44 @@ api.get('/health', async (req, res) => {
 });
 
 api.post('/login', authLimiter, async (req, res) => {
-  const { email, password } = req.body || {};
-  if (typeof email !== 'string' || typeof password !== 'string') {
+  const { password } = req.body || {};
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : null;
+  if (!email || typeof password !== 'string') {
     return res.status(400).json({ error: 'Email and password are required.' });
   }
 
   try {
-    const [users] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
+    const [users] = await db.query(
+      'SELECT id, email, password, role, is_approved, failed_login_attempts, locked_until FROM users WHERE email = ?',
+      [email]
+    );
+    const user = users[0] || null;
 
-    if (users.length === 0) {
-      return res.status(401).json({ error: 'Incorrect email or password.' });
+    // Per-account lock (10 wrong passwords → 15 minutes), on top of the per-IP rate limit
+    if (user && user.locked_until && new Date(user.locked_until) > new Date()) {
+      return res.status(429).json({ error: 'Too many failed attempts. Please try again in 15 minutes.' });
     }
 
-    const user = users[0];
-
-    // Verifică parola
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
+    // Unknown emails are checked against a dummy hash, so both cases take the same time
+    const { ok, needsRehash } = await passwords.verifyPassword(password, user ? user.password : null);
+    if (!ok) {
+      if (user) {
+        await db.query(
+          `UPDATE users SET
+             failed_login_attempts = CASE WHEN failed_login_attempts + 1 >= 10 THEN 0 ELSE failed_login_attempts + 1 END,
+             locked_until = CASE WHEN failed_login_attempts + 1 >= 10 THEN NOW() + INTERVAL '15 minutes' ELSE locked_until END
+           WHERE id = ?`,
+          [user.id]
+        );
+      }
       return res.status(401).json({ error: 'Incorrect email or password.' });
+    }
+    if (user.failed_login_attempts > 0 || user.locked_until) {
+      await db.query('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?', [user.id]);
+    }
+    // Hashes from before the cost increase are upgraded transparently
+    if (needsRehash) {
+      await db.query('UPDATE users SET password = ? WHERE id = ?', [await passwords.hashPassword(password), user.id]);
     }
 
     // Verifică dacă contul e aprobat
@@ -432,10 +474,10 @@ api.post('/login', authLimiter, async (req, res) => {
     // Generează cod 6 cifre (CSPRNG)
     const code = crypto.randomInt(100000, 1000000).toString();
 
-    // Salvează codul în DB (expiră în 10 min)
+    // Salvează doar hash-ul codului în DB (expiră în 10 min)
     await db.query(
       "UPDATE users SET login_code = ?, login_code_expires = NOW() + INTERVAL '10 minutes', login_code_attempts = 0 WHERE id = ?",
-      [code, user.id]
+      [passwords.hashLoginCode(code), user.id]
     );
 
     // Trimite email (sau loghează în consolă)
@@ -457,7 +499,10 @@ api.post('/verify-code', authLimiter, async (req, res) => {
   }
 
   try {
-    const [users] = await db.query('SELECT * FROM users WHERE id = ?', [userId]);
+    const [users] = await db.query(
+      'SELECT id, name, email, role, stars, avatar_url, session_version, login_code, login_code_expires, login_code_attempts FROM users WHERE id = ?',
+      [userId]
+    );
     if (users.length === 0) return res.status(404).json({ error: 'User not found.' });
 
     const user = users[0];
@@ -469,10 +514,7 @@ api.post('/verify-code', authLimiter, async (req, res) => {
     }
 
     // Verifică codul — max 5 încercări per cod, apoi codul este invalidat (anti brute-force)
-    const expected = Buffer.from(String(user.login_code));
-    const provided = Buffer.from(code);
-    const codeMatches = expected.length === provided.length && crypto.timingSafeEqual(expected, provided);
-    if (!codeMatches) {
+    if (!passwords.loginCodeMatches(code, user.login_code)) {
       const attempts = (user.login_code_attempts || 0) + 1;
       if (attempts >= 5) {
         await db.query('UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ?', [userId]);
@@ -485,21 +527,8 @@ api.post('/verify-code', authLimiter, async (req, res) => {
     // Login cu succes -> Șterge codul folosit
     await db.query('UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ?', [userId]);
 
-    // Generare Token JWT
-    const token = jwt.sign(
-      { id: user.id, role: user.role },
-      jwtSecret,
-      { expiresIn: '24h' }
-    );
-
-    // Setare Cookie HTTP-Only
-    const isProduction = NODE_ENV === 'production';
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'strict' : 'lax',
-      maxAge: 24 * 60 * 60 * 1000 // 24 hours
-    });
+    // Cookie HTTP-only cu JWT (poartă versiunea sesiunii)
+    issueSession(res, user);
 
     res.json({
       message: 'Authentication successful!',
@@ -525,9 +554,10 @@ api.get('/me', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    const decoded = verifySessionToken(token);
+    const decoded = await sessionFromToken(token);
+    if (!decoded) return res.status(401).json({ error: 'Invalid token' });
 
-    const [users] = await db.query('SELECT id, name, email, role, stars, avatar_url FROM users WHERE id = ?', [decoded.id]);
+    const [users] = await db.query('SELECT id, name, email, role, stars, avatar_url, password_changed_at FROM users WHERE id = ?', [decoded.id]);
     if (users.length === 0) return res.status(404).json({ error: 'User not found' });
 
     res.json({ user: users[0] });
@@ -542,7 +572,8 @@ api.put('/me', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    const decoded = verifySessionToken(token);
+    const decoded = await sessionFromToken(token);
+    if (!decoded) return res.status(401).json({ error: 'Invalid token' });
     const { name, avatar_url } = req.body || {};
 
     if (typeof name !== 'string' || name.trim().length < 2 || name.trim().length > 255) {
@@ -565,6 +596,48 @@ api.put('/me', async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(401).json({ error: 'Invalid token' });
+  }
+});
+
+// Change own password: needs the current one. Every other session is signed out (session version
+// bump), this one gets a fresh cookie, and the user is told by email in case it was not them.
+api.put('/me/password', authLimiter, authenticateToken, async (req, res) => {
+  const { current_password: current, new_password: next } = req.body || {};
+  if (typeof current !== 'string' || typeof next !== 'string') {
+    return res.status(400).json({ error: 'current_password and new_password are required.' });
+  }
+  try {
+    const [rows] = await db.query('SELECT id, name, email, role, password FROM users WHERE id = ?', [req.user.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const user = rows[0];
+    if (!(await passwords.verifyPassword(current, user.password)).ok) {
+      return res.status(400).json({ error: 'Your current password is incorrect.' });
+    }
+    if (current === next) return res.status(400).json({ error: 'The new password must be different from the current one.' });
+    const problem = await passwords.validateNewPassword(next, { email: user.email, name: user.name });
+    if (problem) return res.status(400).json({ error: problem });
+
+    const [updated] = await db.query(
+      `UPDATE users SET password = ?, password_changed_at = NOW(), session_version = session_version + 1,
+         failed_login_attempts = 0, locked_until = NULL, login_code = NULL, login_code_expires = NULL
+       WHERE id = ? RETURNING id, role, session_version, password_changed_at`,
+      [await passwords.hashPassword(next), user.id]
+    );
+    issueSession(res, updated[0]);
+    // Close this user's live sockets on other devices too
+    io.in(userRoom(user.id)).disconnectSockets(true);
+    sendNotificationEmail(
+      user.email,
+      'Your password was changed 🔐',
+      `Hello <strong>${escapeHtml(user.name)}</strong>,<br><br>The password of your Learning Platform account was just changed and every other device was signed out.<br><br>
+       <strong>If this was not you</strong>, contact an administrator right away.`,
+      '/courses',
+      'Open the Learning Platform'
+    );
+    res.json({ success: true, password_changed_at: updated[0].password_changed_at });
+  } catch (err) {
+    console.error('[PUT /me/password] Error:', err);
+    res.status(500).json({ error: 'Failed to change password' });
   }
 });
 
@@ -677,8 +750,10 @@ api.post('/register', authLimiter, async (req, res) => {
   if (name.length < 2 || name.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 255) {
     return res.status(400).json({ error: 'A valid name and email are required.' });
   }
-  if (password.length < 8 || password.length > 128) {
-    return res.status(400).json({ error: 'Password must be between 8 and 128 characters.' });
+  // Synchronous rules first (cheap); the breach lookup runs below, once the email is known to be free
+  const passwordError = passwords.passwordProblem(password, { email, name });
+  if (passwordError) {
+    return res.status(400).json({ error: passwordError });
   }
 
   // The configured bootstrap admin is created approved + admin so the first login works
@@ -686,16 +761,17 @@ api.post('/register', authLimiter, async (req, res) => {
   const isBootstrapAdmin = BOOTSTRAP_ADMIN_EMAIL && email === BOOTSTRAP_ADMIN_EMAIL;
 
   try {
-    const [existingUsers] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
+    const [existingUsers] = await db.query('SELECT id FROM users WHERE email = ?', [email]);
     if (existingUsers.length > 0) {
       return res.status(409).json({ error: 'This email is already registered.' });
     }
 
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    const breached = await passwords.validateNewPassword(password, { email, name });
+    if (breached) return res.status(400).json({ error: breached });
+    const hashedPassword = await passwords.hashPassword(password);
 
     const [result] = await db.query(
-      'INSERT INTO users (name, email, password, role, stars, is_approved) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO users (name, email, password, role, stars, is_approved, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, NOW())',
       [name, email, hashedPassword, isBootstrapAdmin ? 'admin' : 'student', 0, isBootstrapAdmin]
     );
 
@@ -869,8 +945,13 @@ api.put('/admin/users/:id', authenticateToken, requireAdmin, uploadImage.single(
     }
 
     if (email !== undefined) {
+      // Stored lowercase, like registration, so the login lookup keeps matching
+      const normalized = typeof email === 'string' ? email.trim().toLowerCase() : '';
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) || normalized.length > 255) {
+        return res.status(400).json({ error: 'A valid email is required.' });
+      }
       updates.push('email = ?');
-      values.push(email);
+      values.push(normalized);
     }
 
     if (role !== undefined) {
@@ -1151,7 +1232,7 @@ const studySets = require('./studySets');
 studySets.registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons });
 
 api.get('/paths', async (req, res) => {
-  const userId = optionalUserId(req);
+  const userId = await optionalUserId(req);
   let userRole = 'student';
 
   try {
@@ -1328,7 +1409,7 @@ api.delete('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
 // Get Lessons for a Path (including tasks and status for current user)
 api.get('/paths/:pathId/details', async (req, res) => {
   const { pathId } = req.params;
-  const userId = optionalUserId(req);
+  const userId = await optionalUserId(req);
 
   try {
     // 1. Get Lessons
@@ -2900,11 +2981,11 @@ api.delete('/chats/:chatId/messages/:messageId', authenticateToken, async (req, 
 // ==================== END CHAT ENDPOINTS ====================
 
 // Socket.IO - authenticate the handshake with the same session cookie as the REST API.
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   try {
     const cookies = cookie.parse(socket.handshake.headers.cookie || '');
-    if (!cookies.token) return next(new Error('unauthorized'));
-    const decoded = verifySessionToken(cookies.token);
+    const decoded = await sessionFromToken(cookies.token);
+    if (!decoded) return next(new Error('unauthorized'));
     socket.data.userId = decoded.id;
     next();
   } catch (e) {
