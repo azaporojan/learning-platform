@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Course, CourseDetail, Path, Phase, RoadLesson, RoadTask, User } from '../types';
+import { Course, CourseDetail, Path, Phase, RoadLesson, RoadStudySet, RoadTask, StudySetKind, User } from '../types';
 import { apiUrl } from '../config';
 import { useSocket } from '../contexts/SocketContext';
 import { computeRoadState, lockReasonText } from '../roadState';
@@ -13,6 +13,7 @@ import { AddTaskModal } from '../components/AddTaskModal';
 import { AddPathModal } from '../components/AddPathModal';
 import { EditPathModal } from '../components/EditPathModal';
 import { PhaseModal } from '../components/PhaseModal';
+import { StudySetModal, StudySetTarget } from '../components/StudySetModal';
 import { AlertDialog } from '../components/AlertDialog';
 import { useDialog } from '../hooks/useDialog';
 
@@ -51,6 +52,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
   const [addPhaseOpen, setAddPhaseOpen] = useState(false);
   const [editPhase, setEditPhase] = useState<Path | null>(null);
   const [phaseInfo, setPhaseInfo] = useState<Phase | null>(null);
+  const [studySet, setStudySet] = useState<StudySetTarget | null>(null);
 
   const fetchCourse = useCallback(async () => {
     if (!id) return;
@@ -86,7 +88,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
     if (!socket) return;
     const refresh = () => fetchCourse();
     const mine = (data: { userId: number }) => { if (Number(data.userId) === Number(currentUser.id)) fetchCourse(); };
-    const events = ['task:created', 'task:updated', 'task:deleted', 'task:submission_uploaded', 'lesson:created', 'lesson:updated', 'lesson:deleted', 'course:updated'];
+    const events = ['task:created', 'task:updated', 'task:deleted', 'task:submission_uploaded', 'lesson:created', 'lesson:updated', 'lesson:deleted', 'course:updated', 'study_set:created', 'study_set:updated', 'study_set:deleted'];
     events.forEach((e) => socket.on(e, refresh));
     socket.on('task:completed', mine);
     socket.on('task:viewed', mine);
@@ -176,6 +178,8 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
   };
   const openLesson = (lesson: RoadLesson) => { setSelected({ type: 'lesson', id: lesson.id }); setLessonModal(lesson); };
   const openTask = (task: RoadTask) => { setSelected({ type: 'task', id: task.id }); setTaskModalMode('view'); setTaskModal(task); };
+  const openStudySet = (set: RoadStudySet) => { setSelected({ type: 'study', id: set.id }); setStudySet({ mode: 'open', set }); };
+  const addStudySet = (lesson: RoadLesson, kind: StudySetKind) => setStudySet({ mode: 'create', lessonId: lesson.id, lessonTitle: lesson.title, kind });
 
   if (notFound) {
     return (
@@ -223,6 +227,9 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
         onAddLesson={isAdmin ? (phase) => setAddLesson(phase) : undefined}
         onAddTask={isAdmin ? (lesson, phase) => setAddTask({ lesson, phase }) : undefined}
         onOpenScript={isAdmin ? (lesson) => navigate(`/courses/${course.id}/lessons/${lesson.id}/script`) : undefined}
+        onSelectStudySet={(set) => setSelected({ type: 'study', id: set.id })}
+        onOpenStudySet={openStudySet}
+        onAddStudySet={isAdmin ? addStudySet : undefined}
       />
 
       <section className="flex-1 min-w-0 h-full flex flex-col bg-white dark:bg-gray-900 rounded-3xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
@@ -282,6 +289,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
             onOpenPhase={openPhase}
             onOpenLesson={openLesson}
             onOpenTask={openTask}
+            onOpenStudySet={openStudySet}
           />
         </div>
       </section>
@@ -302,7 +310,11 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
         onChanged={fetchCourse}
         onOpenTask={(task) => { setLessonModal(null); openTask(task); }}
         onOpenScript={isAdmin && lessonModal ? () => navigate(`/courses/${course.id}/lessons/${lessonModal.id}/script`) : undefined}
+        studySetStatus={(set) => state.studySets.get(set.id) || 'open'}
+        onOpenStudySet={(set) => { setLessonModal(null); openStudySet(set); }}
+        onAddStudySet={isAdmin && lessonModal ? (kind) => { const l = lessonModal; setLessonModal(null); addStudySet(l, kind); } : undefined}
       />
+      <StudySetModal target={studySet} isAdmin={isAdmin} onClose={() => setStudySet(null)} onChanged={fetchCourse} />
       {taskModal && (
         <TaskModal
           task={{ ...taskModal, deadline: taskModal.deadline || undefined }}

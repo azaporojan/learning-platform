@@ -7,8 +7,8 @@
 //   DELETE /courses/:id             admin: delete (its phases become unassigned)
 //   POST   /courses/:id/enroll      student: enrol ("My courses")
 //   DELETE /courses/:id/enroll      student: leave
-//   GET    /courses/:id             the whole road: phases → lessons → tasks with the
-//                                   caller's completion flags and per-phase gating
+//   GET    /courses/:id             the whole road: phases → lessons → tasks (+ study sets) with
+//                                   the caller's completion flags and per-phase gating
 //   GET    /users/directory         everyone (approved): name, role, stars, avatar
 //
 // Gating for a student, per phase (admin sees everything unlocked):
@@ -288,6 +288,7 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
       const pathIds = paths.map((p) => p.id);
       let lessons = [];
       let tasks = [];
+      let studySets = [];
       if (pathIds.length > 0) {
         // Explicit columns: `script` (admin-only teaching notes) is never loaded for the road.
         [lessons] = await db.query(
@@ -297,6 +298,12 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
         const lessonIds = lessons.map((l) => l.id);
         if (lessonIds.length > 0) {
           [tasks] = await db.query('SELECT * FROM tasks WHERE lesson_id = ANY(?) ORDER BY order_index ASC, id ASC', [lessonIds]);
+          // Quizzes / flashcards: titles and sizes only; the items come from GET /study-sets/:id
+          [studySets] = await db.query(
+            `SELECT id, lesson_id, kind, title, description, order_index, jsonb_array_length(items) AS item_count
+             FROM study_sets WHERE lesson_id = ANY(?) ORDER BY order_index ASC, id ASC`,
+            [lessonIds]
+          );
         }
       }
       const taskIds = tasks.map((t) => t.id);
@@ -325,6 +332,24 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
         }
       }
 
+      const studyProgress = new Map();
+      if (caller && studySets.length > 0) {
+        const [rows] = await db.query(
+          'SELECT study_set_id, best_score, last_score, total, attempts FROM study_set_progress WHERE user_id = ? AND study_set_id = ANY(?)',
+          [caller.id, studySets.map((s) => s.id)]
+        );
+        rows.forEach((r) => studyProgress.set(r.study_set_id, { best_score: r.best_score, last_score: r.last_score, total: r.total, attempts: r.attempts }));
+      }
+      const setsByLesson = new Map();
+      studySets.forEach((s) => {
+        const list = setsByLesson.get(s.lesson_id) || [];
+        list.push({
+          id: s.id, lesson_id: s.lesson_id, kind: s.kind, title: s.title, description: s.description || '',
+          order_index: s.order_index, item_count: s.item_count, progress: studyProgress.get(s.id) || null,
+        });
+        setsByLesson.set(s.lesson_id, list);
+      });
+
       const tasksByLesson = new Map();
       tasks.forEach((t) => {
         const list = tasksByLesson.get(t.lesson_id) || [];
@@ -345,7 +370,7 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
             id: l.id, path_id: l.path_id, title: l.title, description: l.description,
             order_index: l.order_index, position_x: l.position_x, position_y: l.position_y,
             created_at: l.created_at, updated_at: l.updated_at,
-            tasks: lt, completed: lessonCompleted({ tasks: lt }),
+            tasks: lt, study_sets: setsByLesson.get(l.id) || [], completed: lessonCompleted({ tasks: lt }),
           };
         });
         const lockReasons = phaseLockReasonsFrom({

@@ -23,6 +23,7 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 - 🗺️ Hartă tip quest: ✕ pentru lecțiile terminate, 🚩 unde ești acum, ? pentru ce urmează; cuprins pliabil în stânga care sare la lecție
 - 👥 Pagina „Users” cu rolurile admin/student (studenții văd clasamentul, adminii gestionează conturile)
 - 📝 Task-uri cu deadline-uri; predare ca și comentariu (link la PR / ticket Jira), fișier sau ambele
+- 🧠 Quiz-uri și flashcards sub fiecare lecție, pentru pregătire (corectate pe server, cel mai bun scor salvat; nu blochează drumul)
 - 🔔 Notificări în timp real pentru task-uri noi
 - 💬 Chat în timp real cu Socket.IO
 - 🖼️ Upload de imagini și fișiere în task-uri și chat
@@ -35,6 +36,7 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 - 📚 Management lecții și task-uri
 - ✅ Aprobare/respingere submisii studenți; pagina „Submissions” listează tot ce au predat studenții, cu link direct la lecție/task
 - 📜 Script de lecție (Markdown, doar pentru admin): pregătești planul lecției înainte și îl urmărești în timpul ei
+- 🧠 Quiz-uri și flashcards per lecție: editor în aplicație (formular sau JSON) și API complet (`/api/study-sets`, vezi `docs/AGENT_API.md`)
 - 🔄 Notificări live pentru submisii noi
 - 📊 Monitorizare progres studenți
 

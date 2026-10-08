@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CourseDetail, Phase, RoadLesson, RoadTask } from '../types';
+import { CourseDetail, Phase, RoadLesson, RoadStudySet, RoadTask, StudySetKind } from '../types';
 import { RoadState, NodeStatus, shortPhaseName, lockReasonText } from '../roadState';
 import { RoadSelection } from './QuestRoad';
 
@@ -16,12 +16,15 @@ interface CourseTreeProps {
   onOpenLesson: (lesson: RoadLesson, phase: Phase) => void;
   onOpenTask: (task: RoadTask, lesson: RoadLesson, phase: Phase) => void;
   onOpenPhase?: (phase: Phase) => void;
+  onSelectStudySet: (set: RoadStudySet) => void;
+  onOpenStudySet: (set: RoadStudySet) => void;
   // Admin only
   onAddPhase?: () => void;
   onEditPhase?: (phase: Phase) => void;
   onAddLesson?: (phase: Phase) => void;
   onAddTask?: (lesson: RoadLesson, phase: Phase) => void;
   onOpenScript?: (lesson: RoadLesson, phase: Phase) => void;
+  onAddStudySet?: (lesson: RoadLesson, kind: StudySetKind) => void;
 }
 
 // Left pane: the course as a bullet tree (course → phases → lessons → tasks). Clicking an item
@@ -29,7 +32,7 @@ interface CourseTreeProps {
 export const CourseTree: React.FC<CourseTreeProps> = ({
   course, state, isAdmin, selected, collapsed, onToggleCollapse,
   onSelectPhase, onSelectLesson, onSelectTask, onOpenLesson, onOpenTask, onOpenPhase,
-  onAddPhase, onEditPhase, onAddLesson, onAddTask, onOpenScript,
+  onAddPhase, onEditPhase, onAddLesson, onAddTask, onOpenScript, onSelectStudySet, onOpenStudySet, onAddStudySet,
 }) => {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [initialised, setInitialised] = useState(false);
@@ -47,7 +50,8 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
     if (!selected) return;
     const phase = course.phases.find((p) =>
       (selected.type === 'phase' && p.id === selected.id) ||
-      p.lessons.some((l) => (selected.type === 'lesson' && l.id === selected.id) || (selected.type === 'task' && l.tasks.some((t) => t.id === selected.id)))
+      p.lessons.some((l) => (selected.type === 'lesson' && l.id === selected.id) || (selected.type === 'task' && l.tasks.some((t) => t.id === selected.id))
+        || (selected.type === 'study' && (l.study_sets || []).some((t) => t.id === selected.id)))
     );
     if (phase && !expanded.has(phase.id)) setExpanded((prev) => new Set(prev).add(phase.id));
   }, [selected]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -154,6 +158,16 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
                                 <span className="material-icons text-base">description</span>
                               </button>
                             )}
+                            {isAdmin && onAddStudySet && (
+                              <>
+                                <button onClick={() => onAddStudySet(lesson, 'quiz')} title="Add quiz" className="w-6 h-6 rounded-full flex items-center justify-center text-gray-400 hover:text-purple-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <span className="material-icons text-base">quiz</span>
+                                </button>
+                                <button onClick={() => onAddStudySet(lesson, 'flashcards')} title="Add flashcards" className="w-6 h-6 rounded-full flex items-center justify-center text-gray-400 hover:text-pink-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <span className="material-icons text-base">style</span>
+                                </button>
+                              </>
+                            )}
                             {isAdmin && onAddTask && (
                               <button onClick={() => onAddTask(lesson, phase)} title="Add task" className="w-6 h-6 rounded-full flex items-center justify-center text-gray-400 hover:text-green-600 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <span className="material-icons text-base">add_task</span>
@@ -194,6 +208,35 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
                               })}
                             </ul>
                           )}
+                          {(lesson.study_sets || []).length > 0 && (
+                            <ul className="ml-6 space-y-0.5">
+                              {(lesson.study_sets || []).map((set) => {
+                                const sst = state.studySets.get(set.id) || 'open';
+                                const sCanOpen = isAdmin || sst !== 'locked';
+                                const quiz = set.kind === 'quiz';
+                                return (
+                                  <li key={set.id} className={`group flex items-center gap-1.5 rounded-md px-1.5 py-0.5 ${isSel('study', set.id) ? 'bg-primary/15' : 'hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
+                                    <span className={`flex-shrink-0 w-4 h-4 rounded-full border flex items-center justify-center ${
+                                      !isAdmin && sst === 'completed' ? 'bg-green-50 border-green-400 text-green-600'
+                                      : !isAdmin && sst === 'locked' ? 'bg-gray-100 border-gray-300 text-gray-400 dark:bg-gray-800 dark:border-gray-600'
+                                      : quiz ? 'bg-purple-50 border-purple-400 text-purple-600' : 'bg-pink-50 border-pink-400 text-pink-600'}`}>
+                                      <span className="material-icons text-[11px]">{!isAdmin && sst === 'completed' ? 'check' : quiz ? 'quiz' : 'style'}</span>
+                                    </span>
+                                    <button onClick={() => onSelectStudySet(set)} className="flex-1 min-w-0 text-left" title={`${quiz ? 'Quiz' : 'Flashcards'}: ${set.title}`}>
+                                      <span className={`block text-[12px] leading-tight truncate ${sst === 'locked' && !isAdmin ? 'text-gray-400' : 'text-gray-600 dark:text-gray-300'}`}>
+                                        {set.title} <span className="text-gray-400">· {set.item_count}</span>
+                                      </span>
+                                    </button>
+                                    {sCanOpen && (
+                                      <button onClick={() => onOpenStudySet(set)} title={isAdmin ? 'Edit' : quiz ? 'Take the quiz' : 'Practise'} className="w-5 h-5 rounded-full flex items-center justify-center text-gray-400 hover:text-primary-dark opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <span className="material-icons text-sm">open_in_new</span>
+                                      </button>
+                                    )}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          )}
                         </li>
                       );
                     })}
@@ -226,6 +269,8 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
           <>
             <span className="flex items-center gap-1"><span className="material-icons text-sm text-blue-500">assignment</span>Mandatory task</span>
             <span className="flex items-center gap-1"><span className="material-icons text-sm text-yellow-500">stars</span>Optional task</span>
+            <span className="flex items-center gap-1"><span className="material-icons text-sm text-purple-500">quiz</span>Quiz</span>
+            <span className="flex items-center gap-1"><span className="material-icons text-sm text-pink-500">style</span>Flashcards</span>
             <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-red-500 inline-block" />Submissions to review</span>
           </>
         ) : (
@@ -234,6 +279,8 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
             <span className="flex items-center gap-1"><span className="material-icons text-sm text-primary-dark">flag</span>You are here</span>
             <span className="flex items-center gap-1"><span className="font-extrabold text-gray-400 w-3.5 text-center">?</span>Not reached yet</span>
             <span className="flex items-center gap-1"><span className="material-icons text-sm text-gray-400">lock</span>Locked phase</span>
+            <span className="flex items-center gap-1"><span className="material-icons text-sm text-purple-500">quiz</span>Quiz</span>
+            <span className="flex items-center gap-1"><span className="material-icons text-sm text-pink-500">style</span>Flashcards</span>
           </>
         )}
       </div>

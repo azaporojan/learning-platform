@@ -1127,6 +1127,8 @@ api.post('/tasks/:taskId/mark-viewed', authenticateToken, async (req, res) => {
 // Courses (course → phases → lessons → tasks), enrolment and the users directory.
 const courseRoutes = require('./courses');
 courseRoutes.registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId });
+const studySets = require('./studySets');
+studySets.registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons });
 
 api.get('/paths', async (req, res) => {
   const userId = optionalUserId(req);
@@ -2335,6 +2337,7 @@ api.delete('/admin/api-keys/:id', authenticateToken, requireAdmin, async (req, r
 //   name, description?, stars_required?,          // new path  (or)
 //   pathId,                                        // append lessons to an existing path
 //   lessons: [{ title, description?, tasks?: [{ title, description?, type?, xp?, deadline? }] }]
+//            (each lesson may also carry study_sets?: [{ kind, title, description?, items }] — see studySets.js)
 // }
 const LAYOUT = {
   firstX: 80,            // x of the first lesson
@@ -2381,6 +2384,13 @@ function validateImportBody(body) {
         if (t && t.type !== undefined && !TASK_TYPES.has(t.type)) errors.push(`lessons[${i}].tasks[${j}].type must be "mandatory" or "optional"`);
         if (t && t.xp !== undefined && (!Number.isInteger(t.xp) || t.xp < 0)) errors.push(`lessons[${i}].tasks[${j}].xp must be a non-negative integer`);
         try { if (t) parseDeadline(t.deadline); } catch (e) { errors.push(`lessons[${i}].tasks[${j}]: ${e.message}`); }
+      });
+    }
+    if (l && l.study_sets !== undefined) {
+      if (!Array.isArray(l.study_sets)) errors.push(`lessons[${i}].study_sets must be an array`);
+      else if (l.study_sets.length > studySets.MAX_SETS_PER_LESSON) errors.push(`lessons[${i}]: at most ${studySets.MAX_SETS_PER_LESSON} study sets`);
+      else l.study_sets.forEach((set, k) => {
+        errors.push(...studySets.validateStudySet(set, { prefix: `lessons[${i}].study_sets[${k}]` }).errors);
       });
     }
   });
@@ -2463,7 +2473,17 @@ api.post('/admin/paths/import', authenticateToken, requireAdmin, async (req, res
           createdTasks.push({ id: tr.insertId, title: task.title.trim(), type: task.type || 'mandatory', order_index: task._order });
         }
 
-        lessons.push({ id: lessonId, title: lesson.title.trim(), order_index: order, tasks: createdTasks });
+        const createdSets = [];
+        for (const [index, set] of (lesson.study_sets || []).entries()) {
+          const { kind, items } = studySets.validateStudySet(set);
+          const [sr] = await tx.query(
+            'INSERT INTO study_sets (lesson_id, kind, title, description, order_index, items) VALUES (?, ?, ?, ?, ?, ?::jsonb)',
+            [lessonId, kind, set.title.trim(), (set.description || '').trim(), index + 1, JSON.stringify(items)]
+          );
+          createdSets.push({ id: sr.insertId, kind, title: set.title.trim(), item_count: items.length });
+        }
+
+        lessons.push({ id: lessonId, title: lesson.title.trim(), order_index: order, tasks: createdTasks, study_sets: createdSets });
         parentId = lessonId;
         x += LAYOUT.lessonSpacingX;
         order += 1;
@@ -2486,7 +2506,8 @@ api.post('/admin/paths/import', authenticateToken, requireAdmin, async (req, res
       lessons: created.lessons,
       counts: {
         lessons: created.lessons.length,
-        tasks: created.lessons.reduce((n, l) => n + l.tasks.length, 0)
+        tasks: created.lessons.reduce((n, l) => n + l.tasks.length, 0),
+        study_sets: created.lessons.reduce((n, l) => n + l.study_sets.length, 0)
       }
     });
   } catch (err) {

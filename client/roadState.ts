@@ -1,4 +1,4 @@
-import { CourseDetail, Phase, RoadLesson, RoadTask } from './types';
+import { CourseDetail, Phase, RoadLesson, RoadStudySet, RoadTask } from './types';
 
 // Per-node status on the course road, derived once from GET /courses/:id and shared by the
 // tree pane and the map.
@@ -11,11 +11,15 @@ export type NodeStatus = 'completed' | 'current' | 'open' | 'locked';
 export interface RoadState {
   lessons: Map<number, NodeStatus>;
   tasks: Map<number, NodeStatus>;
+  studySets: Map<number, NodeStatus>;
   phases: Map<number, NodeStatus>;
   currentPhaseId: number | null;
   currentLessonId: number | null;
   currentTaskId: number | null;
 }
+
+export const studySetMastered = (set: RoadStudySet) =>
+  set.progress !== null && set.item_count > 0 && set.progress.total === set.item_count && set.progress.best_score >= set.item_count;
 
 const mandatoryDone = (lesson: RoadLesson) => lesson.tasks.filter((t) => t.type === 'mandatory').every((t) => t.completed);
 
@@ -23,6 +27,7 @@ export function computeRoadState(course: CourseDetail, isAdmin: boolean): RoadSt
   const state: RoadState = {
     lessons: new Map(),
     tasks: new Map(),
+    studySets: new Map(),
     phases: new Map(),
     currentPhaseId: null,
     currentLessonId: null,
@@ -69,6 +74,17 @@ export function computeRoadState(course: CourseDetail, isAdmin: boolean): RoadSt
           taskStatus = 'open';
         }
         state.tasks.set(task.id, taskStatus);
+      });
+
+      // Quizzes / flashcards open with their lesson and never gate anything; "completed" = a
+      // perfect best result on the current version of the set.
+      (lesson.study_sets || []).forEach((set) => {
+        let st: NodeStatus;
+        if (isAdmin) st = 'open';
+        else if (studySetMastered(set)) st = 'completed';
+        else if (lessonLocked) st = 'locked';
+        else st = 'open';
+        state.studySets.set(set.id, st);
       });
 
       if (!mandatoryDone(lesson)) previousIncomplete = true;

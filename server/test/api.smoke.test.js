@@ -527,6 +527,61 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(roadAfter.body.phases[1].lessons[0].tasks[0].is_new, true);
   assert.equal(roadAfter.body.phases[1].lessons[0].tasks[0].description, 'secret brief'); // reached → full content
   assert.equal((await stud(`/tasks/${phase2Task.body.id}`)).body.description, 'secret brief');
+  // Study sets (quizzes + flashcards) under a lesson: admin-managed, students practise
+  const anonSet = await anon('/study-sets', { method: 'POST', json: {} });
+  assert.equal(anonSet.status, 401);
+  const studSet = await stud('/study-sets', { method: 'POST', json: { lessonId: phase2Lesson.body.id, kind: 'quiz', title: 'x', items: [] } });
+  assert.equal(studSet.status, 403);
+  const badSet = await admin('/study-sets', { method: 'POST', json: { lessonId: phase2Lesson.body.id, kind: 'quiz', title: 'Q', items: [{ question: 'q', options: ['a'], correct: 3 }] } });
+  assert.equal(badSet.status, 400);
+  assert.ok(badSet.body.details.some((d) => /options/.test(d)), JSON.stringify(badSet.body));
+  const ghostLessonSet = await admin('/study-sets', { method: 'POST', json: { lessonId: 999999, kind: 'flashcards', title: 'F', items: [] } });
+  assert.equal(ghostLessonSet.status, 404);
+  const quiz = await admin('/study-sets', { method: 'POST', json: {
+    lessonId: phase2Lesson.body.id, kind: 'quiz', title: 'Phase 2 check', items: [
+      { question: 'Which HTTP status means Not Found?', options: ['200', '404', '500'], correct: 1, explanation: '4xx = client error' },
+      { question: 'Pick the HTTP verbs', options: ['GET', 'FETCH', 'POST'], correct: [2, 0] },
+    ] } });
+  assert.equal(quiz.status, 201, JSON.stringify(quiz.body));
+  assert.deepEqual(quiz.body.items[1].correct, [0, 2]); // normalised
+  const deck = await admin('/study-sets', { method: 'POST', json: {
+    lessonId: phase2Lesson.body.id, kind: 'flashcards', title: 'Terms', items: [{ front: 'SUT', back: 'System under test' }, { front: 'CI', back: 'Continuous integration' }] } });
+  assert.equal(deck.status, 201, JSON.stringify(deck.body));
+  assert.equal(deck.body.order_index, 2);
+  // Students get the questions without the answers
+  const studQuiz = await stud(`/study-sets/${quiz.body.id}`);
+  assert.equal(studQuiz.status, 200);
+  assert.equal(studQuiz.body.items[0].correct, undefined);
+  assert.equal(studQuiz.body.items[0].explanation, undefined);
+  assert.equal(studQuiz.body.items[1].multiple, true);
+  assert.equal((await admin(`/study-sets/${quiz.body.id}`)).body.items[0].explanation, '4xx = client error');
+  const lessonSets = await stud(`/lessons/${phase2Lesson.body.id}/study-sets`);
+  assert.deepEqual(lessonSets.body.map((x) => x.kind), ['quiz', 'flashcards']);
+  // Grading happens on the server
+  const badAttempt = await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [1] } });
+  assert.equal(badAttempt.status, 400);
+  const attempt1 = await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [1, [0]] } });
+  assert.equal(attempt1.status, 200, JSON.stringify(attempt1.body));
+  assert.equal(attempt1.body.score, 1);
+  assert.deepEqual(attempt1.body.results.map((r) => r.correct), [true, false]);
+  assert.deepEqual(attempt1.body.results[1].correct_options, [0, 2]);
+  const attempt2 = await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [0, [2, 0]] } });
+  assert.deepEqual(attempt2.body.progress, { best_score: 1, last_score: 1, total: 2, attempts: 2 });
+  const cards = await stud(`/study-sets/${deck.body.id}/attempts`, { method: 'POST', json: { known: 2 } });
+  assert.equal(cards.status, 200);
+  assert.equal((await stud(`/study-sets/${deck.body.id}/attempts`, { method: 'POST', json: { known: 3 } })).status, 400);
+  // The road carries titles, sizes and the caller's progress (never the items)
+  const roadSets = await stud(`/courses/${course.body.id}`);
+  const p2Sets = roadSets.body.phases[1].lessons[0].study_sets;
+  assert.deepEqual(p2Sets.map((x) => [x.kind, x.item_count]), [['quiz', 2], ['flashcards', 2]]);
+  assert.equal(p2Sets[0].items, undefined);
+  assert.equal(p2Sets[1].progress.best_score, 2);
+  // Editing: items replace the list; kind is fixed
+  const editKind = await admin(`/study-sets/${deck.body.id}`, { method: 'PUT', json: { kind: 'quiz' } });
+  assert.equal(editKind.status, 400);
+  const edited = await admin(`/study-sets/${deck.body.id}`, { method: 'PUT', json: { title: 'Key terms', items: [{ front: 'QA', back: 'Quality assurance' }] } });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  assert.equal(edited.body.item_count, 1);
   // A third phase behind the unfinished phase 2 is locked for the 'previous' reason
   const phase3 = await admin('/paths', { method: 'POST', json: { name: 'Phase 3', course_id: course.body.id } });
   assert.equal(phase3.body.order_index, 3);
@@ -574,6 +629,12 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(gate.status, 200);
   const roadGated = await stud(`/courses/${course.body.id}`);
   assert.deepEqual(roadGated.body.phases[1].lockReasons, ['stars']);
+  // …and its study sets are closed too
+  const lockedSet = await stud(`/study-sets/${quiz.body.id}`);
+  assert.equal(lockedSet.status, 403);
+  assert.deepEqual(lockedSet.body.lockReasons, ['stars']);
+  assert.equal((await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [1, [0, 2]] } })).status, 403);
+  assert.equal((await admin(`/study-sets/${quiz.body.id}`)).status, 200);
   const starsForm = new FormData();
   starsForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'early.txt');
   const starsSubmit = await stud(`/tasks/${phase2Task.body.id}/submit`, { method: 'POST', body: starsForm });
@@ -679,7 +740,10 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
     requires_previous: false,
     lessons: [
       { title: 'L1', description: 'first', tasks: [{ title: 'T1', xp: 5 }, { title: 'T2', type: 'optional', deadline: '2031-05-01' }] },
-      { title: 'L2', tasks: [{ title: 'T3' }] },
+      { title: 'L2', tasks: [{ title: 'T3' }], study_sets: [
+        { kind: 'quiz', title: 'L2 quiz', items: [{ question: 'Q?', options: ['a', 'b'], correct: 0 }] },
+        { kind: 'flashcards', title: 'L2 cards', items: [{ front: 'f', back: 'b' }] },
+      ] },
       { title: 'L3' },
     ],
   };
@@ -696,6 +760,17 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(imp.status, 201, JSON.stringify(impBody));
   assert.equal(impBody.counts.lessons, 3);
   assert.equal(impBody.counts.tasks, 3);
+  assert.equal(impBody.counts.study_sets, 2);
+  const badSetImport = await fetch(`${BASE}/admin/paths/import`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'x', lessons: [{ title: 'L', study_sets: [{ kind: 'poll', title: 'x', items: [] }] }] }) });
+  assert.equal(badSetImport.status, 400);
+  // The API key manages study sets like an admin session
+  const keySet = await fetch(`${BASE}/study-sets`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify({ lessonId: impBody.lessons[0].id, kind: 'flashcards', title: 'Via key', items: [{ front: 'a', back: 'b' }] }) });
+  const keySetBody = await keySet.json();
+  assert.equal(keySet.status, 201, JSON.stringify(keySetBody));
+  const keyRead = await fetch(`${BASE}/lessons/${impBody.lessons[1].id}/study-sets`, { headers: bearer });
+  const keyReadBody = await keyRead.json();
+  assert.equal(keyReadBody[0].items[0].correct[0], 0); // admin view includes the answers
+  assert.equal((await fetch(`${BASE}/study-sets/${keySetBody.id}`, { method: 'DELETE', headers: bearer })).status, 200);
   const importedPhase = (await admin('/paths')).body.find((p) => p.id === String(impBody.path.id));
   assert.equal(importedPhase.course_id, course.body.id);
   assert.equal(importedPhase.order_index, 3);

@@ -3,7 +3,7 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import Link from '@tiptap/extension-link';
-import { RoadLesson, RoadTask } from '../types';
+import { RoadLesson, RoadStudySet, RoadTask, StudySetKind } from '../types';
 import { NodeStatus } from '../roadState';
 import { apiUrl } from '../config';
 
@@ -15,6 +15,9 @@ interface LessonModalProps {
   onChanged: () => void;
   onOpenTask: (task: RoadTask) => void;
   onOpenScript?: () => void; // admin: the teacher's Markdown script for this lesson
+  studySetStatus: (set: RoadStudySet) => NodeStatus;
+  onOpenStudySet: (set: RoadStudySet) => void;
+  onAddStudySet?: (kind: StudySetKind) => void; // admin
 }
 
 const isProbablyHtml = (value: string) => /<\s*[a-z][\s\S]*>/i.test(value);
@@ -29,7 +32,7 @@ const toHtml = (value: string) => {
 
 // View a lesson (summary + its tasks); admins can edit the title/summary with the rich-text
 // editor or delete the lesson.
-export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, isAdmin, onClose, onChanged, onOpenTask, onOpenScript }) => {
+export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, isAdmin, onClose, onChanged, onOpenTask, onOpenScript, studySetStatus, onOpenStudySet, onAddStudySet }) => {
   const [mode, setMode] = useState<'view' | 'edit' | 'delete'>('view');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -137,7 +140,7 @@ export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, is
             <div className="flex flex-col items-center text-center py-8">
               <span className="material-icons text-red-500 text-5xl mb-3">warning</span>
               <h4 className="text-xl font-bold text-gray-800 dark:text-white mb-2">Delete this lesson?</h4>
-              <p className="text-gray-600 dark:text-gray-300 max-w-md">All of its tasks and every student submission on them will be deleted. This cannot be undone.</p>
+              <p className="text-gray-600 dark:text-gray-300 max-w-md">All of its tasks, quizzes and flashcards — and every student submission and result on them — will be deleted. This cannot be undone.</p>
             </div>
           ) : mode === 'edit' ? (
             <div>
@@ -214,6 +217,50 @@ export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, is
                   })}
                 </div>
               </div>
+
+              {(isAdmin || (lesson.study_sets || []).length > 0) && (
+                <div className="border-t border-gray-200 dark:border-gray-700 pt-6 mt-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h4 className="text-sm font-bold text-gray-500">PRACTICE ({(lesson.study_sets || []).length})</h4>
+                    {isAdmin && onAddStudySet && (
+                      <div className="flex gap-2">
+                        <button onClick={() => onAddStudySet('quiz')} className="px-3 py-1.5 rounded-lg text-sm font-bold bg-purple-50 text-purple-700 hover:bg-purple-100 dark:bg-purple-900/30 dark:text-purple-300 flex items-center gap-1">
+                          <span className="material-icons text-base">quiz</span>Add quiz
+                        </button>
+                        <button onClick={() => onAddStudySet('flashcards')} className="px-3 py-1.5 rounded-lg text-sm font-bold bg-pink-50 text-pink-700 hover:bg-pink-100 dark:bg-pink-900/30 dark:text-pink-300 flex items-center gap-1">
+                          <span className="material-icons text-base">style</span>Add flashcards
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-3">
+                    {(lesson.study_sets || []).length === 0 && <p className="text-sm text-gray-400 italic">No quizzes or flashcards yet.</p>}
+                    {(lesson.study_sets || []).map((set) => {
+                      const st = studySetStatus(set);
+                      const openable = isAdmin || st !== 'locked';
+                      const quiz = set.kind === 'quiz';
+                      return (
+                        <button key={set.id} type="button" disabled={!openable} onClick={() => onOpenStudySet(set)}
+                          className={`w-full flex items-center justify-between p-4 rounded-xl text-left transition-colors bg-gray-50 dark:bg-gray-700 ${openable ? 'hover:bg-primary/10 cursor-pointer' : 'opacity-60 cursor-not-allowed'}`}>
+                          <div className="flex items-center min-w-0">
+                            <span className={`material-icons mr-2 text-base ${quiz ? 'text-purple-500' : 'text-pink-500'}`}>{quiz ? 'quiz' : 'style'}</span>
+                            <span className="font-bold text-gray-800 dark:text-gray-200 truncate">{set.title}</span>
+                            <span className="ml-3 text-xs text-gray-400 whitespace-nowrap">
+                              {quiz ? 'Quiz' : 'Flashcards'} · {set.item_count} {quiz ? 'question' : 'card'}{set.item_count === 1 ? '' : 's'}
+                              {!isAdmin && set.progress && set.progress.total === set.item_count ? ` · best ${set.progress.best_score}/${set.progress.total}` : ''}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+                            {!isAdmin && st === 'completed' && <span className="material-icons text-green-500">check_circle</span>}
+                            {!isAdmin && st === 'locked' && <span className="material-icons text-gray-400">lock</span>}
+                            <span className="material-icons text-gray-400">{isAdmin ? 'edit' : 'chevron_right'}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
