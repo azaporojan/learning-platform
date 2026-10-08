@@ -16,7 +16,8 @@ DO $$
 DECLARE
   r RECORD;
 BEGIN
-  FOR r IN SELECT id, email FROM users WHERE email <> lower(trim(email)) LOOP
-    RAISE WARNING 'migration 010: user % (%) collides with another account by case and cannot log in until an admin resolves it', r.id, r.email;
+  -- ids only: deploy logs must not carry email addresses
+  FOR r IN SELECT id FROM users WHERE email <> lower(trim(email)) LOOP
+    RAISE WARNING 'migration 010: user % collides with another account by email letter case and cannot log in until an admin resolves it', r.id;
   END LOOP;
 END $$;

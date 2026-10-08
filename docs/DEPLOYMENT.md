@@ -91,7 +91,7 @@ comment submissions, approvals, stars, a chat, a lesson script and an API key:
 
 1. **Set `PASSWORD_PEPPER` first** (Environment tab; `openssl rand -base64 32`; copy it to your
    password manager). Without it the new container exits before touching the database
-   (`[FATAL] PASSWORD_PEPPER must be set in production`) and the site is down until it is set.
+   (`[FATAL] PASSWORD_PEPPER must be set unless NODE_ENV is development or test`) and the site is down until it is set.
 2. Optional but recommended: take a database backup (`pg_dump`) right before merging.
 3. Merge. CI builds the image and Dokploy redeploys it.
 4. Check the log: `Applying migration 006…010`, `Sealed N password hash(es) with key …`,
@@ -128,7 +128,7 @@ and can log in again once a current release is redeployed, which re-seals everyt
 
 ```bash
 docker compose up -d                 # PostgreSQL 16 on localhost:5432 (learning/learning)
-cd server && cp .env.example .env    # set JWT_SECRET (>= 32 chars); PASSWORD_PEPPER is optional in dev; email can stay empty with LOG_LOGIN_CODES=true (codes are logged)
+cd server && cp .env.example .env    # set JWT_SECRET (>= 32 chars); PASSWORD_PEPPER is optional only with NODE_ENV=development (as in .env.example); email can stay empty with LOG_LOGIN_CODES=true (codes are logged)
 npm install && npm run dev           # API on http://localhost:3001/api
 cd ../client && cp .env.example .env # VITE_API_URL=http://localhost:3001/api
 npm install && npm run dev           # client on http://localhost:3000
@@ -145,8 +145,8 @@ use a scratch database such as `learning_test`).
 | `deploy` job red: "DOKPLOY_WEBHOOK_URL secret is not set" | Copy the Webhook URL from Dokploy → Deployments and add the repo secret; re-run the job. |
 | Dokploy deploy fails with `manifest unknown` / `denied` | No `:latest` tag yet (merge to `main` first) or the GHCR credentials on the Provider tab are invalid / the package is private. |
 | Container exits immediately: `JWT_SECRET must be set...` | Set a 32+ char `JWT_SECRET` in the Environment tab. |
-| Container exits: `PASSWORD_PEPPER must be set in production` | Generate one with `openssl rand -base64 32` and add it in the Environment tab. On the first start with it, the log shows `Sealed N password hash(es)`. |
-| Log: `migration 010: user N (...) collides with another account by case` | Two accounts had the same email in different letter case; only the lowercase one can log in. List every such account with `SELECT id, name, email FROM users WHERE email <> lower(trim(email));`, then for each: `SELECT id, name, email, created_at FROM users WHERE lower(email) = lower('<email>');` then delete the unused account, or give it a different address with `UPDATE users SET email = '<new lowercase email>' WHERE id = <N>;` |
+| Container exits: `PASSWORD_PEPPER must be set unless NODE_ENV is development or test` | Generate one with `openssl rand -base64 32` and add it in the Environment tab. On the first start with it, the log shows `Sealed N password hash(es)`. |
+| Log: `migration 010: user N collides with another account by email letter case` | Two accounts had the same email in different letter case; only the lowercase one can log in. List every such account with `SELECT id, name, email FROM users WHERE email <> lower(trim(email));`, then for each: `SELECT id, name, email, created_at FROM users WHERE lower(email) = lower('<email>');` then delete the unused account, or give it a different address with `UPDATE users SET email = '<new lowercase email>' WHERE id = <N>;` |
 | Log: `password hash(es) are sealed with an unknown key` | `PASSWORD_PEPPER` was changed without keeping the old one: put the previous value in `PASSWORD_PEPPER_PREVIOUS` and restart. |
 | Container exits: `Database migration failed` / `password authentication failed` | `DB_PASSWORD` differs from the one used in `create-database.sql` (`ALTER ROLE learning_platform PASSWORD ...`), or the DB was not created. |
 | Login says "Code sent" but no email arrives | `EMAIL_USER`/`EMAIL_PASS` unset (nothing is sent; in dev, `LOG_LOGIN_CODES=true` prints the codes) or the Gmail app password is wrong — see container logs. |

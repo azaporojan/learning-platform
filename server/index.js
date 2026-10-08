@@ -45,7 +45,7 @@ const jwtSecret = JWT_SECRET && JWT_SECRET.length >= 32 ? JWT_SECRET : 'insecure
 // PASSWORD_PEPPER encrypts every stored password hash (see passwords.js): a copy of the database
 // alone is useless for cracking. Like JWT_SECRET, production refuses to start without it.
 try {
-  console.log(`[Passwords] Hashes are sealed with key ${passwords.configure(process.env, { production: isProduction })}`);
+  console.log(`[Passwords] Hashes are sealed with key ${passwords.configure(process.env)}`);
 } catch (err) {
   console.error(`[FATAL] ${err.message}`);
   process.exit(1);

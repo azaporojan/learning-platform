@@ -47,13 +47,16 @@ function parseKey(raw) {
 let currentKey = null;
 const keysById = new Map();
 
-// Load PASSWORD_PEPPER (+ PASSWORD_PEPPER_PREVIOUS, comma-separated). Production refuses to run
-// without it; dev/test fall back to a fixed, publicly known key (no protection) with a warning.
-function configure(env = process.env, { production = env.NODE_ENV === 'production' } = {}) {
+// Load PASSWORD_PEPPER (+ PASSWORD_PEPPER_PREVIOUS, comma-separated). Only an explicit
+// NODE_ENV=development or test may fall back to a fixed, publicly known key (no protection) with a
+// warning; anything else — production, staging, an unset NODE_ENV — refuses to run without it,
+// so real hashes are never sealed with the public key.
+const allowsDevKey = (env) => env.NODE_ENV === 'development' || env.NODE_ENV === 'test';
+function configure(env = process.env, { production = !allowsDevKey(env) } = {}) {
   keysById.clear();
   let current = parseKey(env.PASSWORD_PEPPER);
   if (!current) {
-    if (production) throw new Error('PASSWORD_PEPPER must be set in production (generate one with: openssl rand -base64 32)');
+    if (production) throw new Error('PASSWORD_PEPPER must be set unless NODE_ENV is development or test (generate one with: openssl rand -base64 32)');
     console.warn('[Passwords] PASSWORD_PEPPER is not set — using an insecure development key. Never do this in production.');
     current = parseKey(Buffer.alloc(32, 7).toString('base64'));
   }

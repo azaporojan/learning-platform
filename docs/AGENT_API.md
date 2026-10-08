@@ -235,7 +235,9 @@ run posts `{"known": n}`, the number of cards known on first sight. `progress` i
 `{best_score, last_score, total, attempts}`. A set counts as mastered (✓ on the road) when
 `best_score` equals the current number of items. Attempts are unlimited and every graded
 attempt returns the correct options, so a quiz is a practice tool, not an exam: a perfect
-`best_score` after several tries says the student has seen the answers, not that they knew them. Changing a set's `items` deletes the students' results on it (they were earned on the old questions); renaming or reordering the set keeps them.
+`best_score` after several tries says the student has seen the answers, not that they knew them.
+Likewise a flashcard run's `known` is reported by the student's own browser. Neither is fit for
+ranking or grading. Changing a set's `items` deletes the students' results on it (they were earned on the old questions); renaming or reordering the set keeps them.
 
 `GET /api/courses/:id` lists each lesson's `study_sets` as `{id, lesson_id, kind, title, description,
 order_index, item_count, progress}`, without items. Read a set with `GET /api/study-sets/:id`

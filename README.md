@@ -192,7 +192,7 @@ docker run --rm -p 3001:3001 --env-file server/.env -e DB_HOST=host.docker.inter
 | `DB_PASSWORD` | PostgreSQL password | — |
 | `DB_SSL` | `true` dacă serverul cere TLS | nesetat |
 | `JWT_SECRET` | Secret pentru cookie-ul de sesiune (**minim 32 caractere**, altfel serverul nu pornește în producție) | `openssl rand -base64 48` |
-| `PASSWORD_PEPPER` | Cheia care criptează hash-urile parolelor (**obligatorie în producție**). Ține-o doar în Dokploy + manager de parole, niciodată în DB sau lângă backup-uri | `openssl rand -base64 32` |
+| `PASSWORD_PEPPER` | Cheia care criptează hash-urile parolelor (**obligatorie** peste tot în afară de `NODE_ENV=development`/`test`). Ține-o doar în Dokploy + manager de parole, niciodată în DB sau lângă backup-uri | `openssl rand -base64 32` |
 | `PASSWORD_PEPPER_PREVIOUS` | Doar la rotirea cheii: cheia veche (hash-urile sunt re-criptate la pornire) | — |
 | `BOOTSTRAP_ADMIN_EMAIL` | Primul cont înregistrat cu acest email devine admin aprobat | `you@example.com` |
 | `EMAIL_USER` | Gmail pentru coduri de login + notificări | `your@gmail.com` |

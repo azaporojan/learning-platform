@@ -96,6 +96,11 @@ test('legacy bcrypt hashes verify, are sealed in place, and upgrade to scrypt on
 test('production refuses to run without PASSWORD_PEPPER; weak keys are rejected', (t) => {
   t.after(() => passwords.configure({ PASSWORD_PEPPER: KEY_A }));
   assert.throws(() => passwords.configure({}, { production: true }), /PASSWORD_PEPPER must be set/);
+  // Fail closed: only an explicit development/test NODE_ENV may use the public dev key
+  assert.throws(() => passwords.configure({}), /PASSWORD_PEPPER must be set/);                       // NODE_ENV unset
+  assert.throws(() => passwords.configure({ NODE_ENV: 'staging' }), /PASSWORD_PEPPER must be set/);
+  assert.match(passwords.configure({ NODE_ENV: 'development' }), /^[0-9a-f]{8}$/);
+  assert.match(passwords.configure({ NODE_ENV: 'test' }), /^[0-9a-f]{8}$/);
   assert.throws(() => passwords.configure({ PASSWORD_PEPPER: 'short' }, { production: true }), /at least 32/);
   assert.match(passwords.configure({ PASSWORD_PEPPER: crypto.randomBytes(32).toString('hex') }, { production: true }), /^[0-9a-f]{8}$/);
 });

@@ -962,6 +962,17 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal((await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } })).status, 401);
   await dbQuery('UPDATE users SET locked_until = NULL, failed_login_attempts = 0 WHERE id = $1', [pwReg.body.userId]);
 
+  // A hash the server cannot open (sealed with another key) is a server problem: 503, not
+  // "your current password is incorrect", and it does not count toward the lock
+  const passwords = require('../passwords');
+  passwords.configure({ PASSWORD_PEPPER: require('node:crypto').randomBytes(32).toString('base64') });
+  const [beforeKeyMix] = await dbQuery('SELECT password FROM users WHERE id = $1', [pwReg.body.userId]);
+  await dbQuery('UPDATE users SET password = $1 WHERE id = $2', [await passwords.hashPassword('Green-Lamp-Evening-8'), pwReg.body.userId]);
+  const unreadable = await pw1('/me/password', { method: 'PUT', json: { current_password: 'Green-Lamp-Evening-8', new_password: 'Red-Clock-Night-99' } });
+  assert.equal(unreadable.status, 503, JSON.stringify(unreadable.body));
+  assert.equal((await dbQuery('SELECT failed_login_attempts FROM users WHERE id = $1', [pwReg.body.userId]))[0].failed_login_attempts, 0);
+  await dbQuery('UPDATE users SET password = $1 WHERE id = $2', [beforeKeyMix.password, pwReg.body.userId]);
+
   // Parallel wrong codes cannot exceed the 5 tries per code, and the code is then void
   const racer = session();
   const raceLogin = await racer('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });
