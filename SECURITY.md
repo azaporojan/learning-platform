@@ -30,13 +30,25 @@ The pre-deployment review found and fixed the following (all in `server/index.js
 |---|---|---|---|
 | 18 | Password guessing was limited per IP only: an attacker rotating IPs could keep testing one account. A correct password is confirmed before the email-code step, so a guessed password could then be tried on the student's other sites | High | Per-account lock: 10 wrong passwords lock the account for 15 minutes (on top of the per-IP limit) |
 | 19 | Login timing revealed which emails have an account (unknown email answered without running bcrypt) | Medium | Unknown emails are checked against a dummy bcrypt hash; both cases return the same 401 body in the same time |
-| 20 | bcrypt reads only the first 72 bytes: passwords of up to 128 characters were accepted and silently truncated | Medium | Passwords over 72 UTF-8 bytes are refused |
-| 21 | bcrypt cost 10 | Low | Cost 12; older hashes are upgraded on the next successful login |
+| 20 | bcrypt reads only the first 72 bytes: passwords of up to 128 characters were accepted and silently truncated | Medium | Superseded by #27: scrypt has no input limit (passwords up to 256 characters) |
+| 21 | bcrypt cost 10 | Low | Superseded by #27 |
 | 22 | Any 8+ character password was accepted (`password123`, `12345678`, the user's own name) | High | Common passwords and name/email-based passwords are refused, and new passwords are checked against Have I Been Pwned (k-anonymity: only 5 hex characters of the SHA-1 leave the server; fails open; `PASSWORD_BREACH_CHECK=false` disables it) |
 | 23 | Users could not change their password, and a stolen session cookie stayed valid for its full 24 h | High | `PUT /api/me/password` (needs the current password): bumps `users.session_version`, which every session cookie and socket carries, so all other devices are signed out at once; the user is emailed |
-| 24 | The emailed login code was stored in clear in `users.login_code` | Low | Only its SHA-256 is stored; codes are compared in constant time |
+| 24 | The emailed login code was stored in clear in `users.login_code` | Low | Stored as HMAC-SHA256 under `PASSWORD_PEPPER` (a bare hash of a 6-digit code is reversed instantly); compared in constant time |
 | 25 | Login matched the email case-sensitively, and the admin editor stored emails as typed | Low | Emails are trimmed and lowercased everywhere |
 | 26 | JWT verification did not pin the algorithm | Low | `HS256` only |
+| 27 | A stolen database (dump, backup, SQL injection) exposed bcrypt hashes to unlimited offline guessing, so weak or reused passwords could be recovered and tried elsewhere | High | Hashes are **sealed**: scrypt (N=2^16, r=8, p=2 — 64 MiB per guess) then AES-256-GCM-encrypted with `PASSWORD_PEPPER`, a key held only in the server environment (migration `009`, `server/passwords.js`). The database alone holds nothing to attack. Existing bcrypt hashes are sealed at startup without needing the password, and become scrypt at the user's next login. Production refuses to start without the key; it rotates via `PASSWORD_PEPPER_PREVIOUS` |
+
+### What a stolen database does and does not give
+
+| The attacker has | Passwords |
+|---|---|
+| The database or a backup only | Safe: each hash is encrypted with a key that is not in the database; there is nothing to run guesses against |
+| The database **and** `PASSWORD_PEPPER` (full server compromise) | Every guess costs 64 MiB and ~0.3 s of scrypt per account; passwords that are common, breached, or based on the name/email were refused at creation, so only long-shot guesses remain |
+| Emails, names, stars, submissions, course data | Not protected by this — they are ordinary rows |
+
+Keep `PASSWORD_PEPPER` out of every place the database goes (backups, dumps, staging copies),
+and keep a copy in a password manager: without it, no existing password can be verified.
 
 ## Operating rules
 
@@ -50,8 +62,8 @@ The pre-deployment review found and fixed the following (all in `server/index.js
 - `GET /api/users/directory` (the Users page) shows every approved user's name, role, stars and
   avatar to any logged-in user — by design, it replaces the old public leaderboard. Emails and
   approval state stay admin-only (`/api/admin/users`).
-- Passwords: bcrypt cost 12, 8–72 bytes, no common/breached/name-based passwords
-  (`server/passwords.js`). Password hashes are never selected into an API response (every user
+- Passwords: scrypt + AES-256-GCM sealing under `PASSWORD_PEPPER`, 8–256 characters, no
+  common/breached/name-based passwords (`server/passwords.js`). Password hashes are never selected into an API response (every user
   listing names its columns), and nothing logs request bodies. Without SMTP outside production
   the server prints login codes to its log so you can still sign in; in production it never does.
 - Secrets live only in the Dokploy **Environment** tab (never in git): `JWT_SECRET` (≥ 32 random

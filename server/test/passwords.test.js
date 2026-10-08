@@ -4,11 +4,16 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const passwords = require('../passwords');
 
+const KEY_A = crypto.randomBytes(32).toString('base64');
+const KEY_B = crypto.randomBytes(32).toString('base64');
+passwords.configure({ PASSWORD_PEPPER: KEY_A });
+
 test('password policy', () => {
   assert.equal(passwords.passwordProblem('Blue-Kettle-Morning-7'), null);
   assert.equal(passwords.passwordProblem('ăîșțâăîșțâ'), null); // diacritics are fine (2 bytes each)
   assert.match(passwords.passwordProblem('short1'), /at least 8/);
-  assert.match(passwords.passwordProblem('x'.repeat(73)), /too long/);
+  assert.equal(passwords.passwordProblem('Long passphrase '.repeat(10)), null); // no 72-byte cap any more
+  assert.match(passwords.passwordProblem('x'.repeat(257)), /too long/);
   assert.match(passwords.passwordProblem('Password123'), /too common/);
   assert.match(passwords.passwordProblem('qwerty123!'), /too common/);
   assert.match(passwords.passwordProblem('11111111111'), /too easy/);
@@ -40,14 +45,64 @@ test('breach lookup (k-anonymity range API)', async (t) => {
   assert.equal(await passwords.breachCount('anything-at-all'), null);
 });
 
-test('hashing and login codes', async () => {
-  const hash = await passwords.hashPassword('Blue-Kettle-Morning-7');
-  assert.match(hash, /^\$2b\$12\$/);
-  assert.deepEqual(await passwords.verifyPassword('Blue-Kettle-Morning-7', hash), { ok: true, needsRehash: false });
-  assert.deepEqual(await passwords.verifyPassword('wrong', hash), { ok: false, needsRehash: false });
+test('stored hashes are sealed scrypt: a database copy alone holds nothing to crack', async (t) => {
+  t.after(() => passwords.configure({ PASSWORD_PEPPER: KEY_A }));
+  const stored = await passwords.hashPassword('Blue-Kettle-Morning-7');
+  assert.match(stored, /^\$sealed\$v1\$[0-9a-f]{8}\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$/);
+  // Neither the algorithm, its parameters, the salt nor the hash appear in the stored value
+  assert.equal(/scrypt|\$2b\$|65536/.test(stored), false);
+  const inner = passwords._internals.unseal(stored);
+  assert.match(inner, /^scrypt\$65536\$8\$2\$/);
+  assert.deepEqual(await passwords.verifyPassword('Blue-Kettle-Morning-7', stored), { ok: true, needsRehash: false });
+  assert.deepEqual(await passwords.verifyPassword('wrong', stored), { ok: false, needsRehash: false });
   assert.deepEqual(await passwords.verifyPassword('Blue-Kettle-Morning-7', null), { ok: false, needsRehash: false });
+  // Tampering with the ciphertext is detected (GCM tag)
+  const tampered = stored.slice(0, -3) + (stored.endsWith('A') ? 'B' : 'A') + stored.slice(-2);
+  assert.equal((await passwords.verifyPassword('Blue-Kettle-Morning-7', tampered)).ok, false);
+
+  // Without the key (an attacker holding only the database) the value cannot even be opened
+  passwords.configure({ PASSWORD_PEPPER: KEY_B });
+  assert.equal(passwords._internals.unseal(stored), null);
+  assert.equal((await passwords.verifyPassword('Blue-Kettle-Morning-7', stored)).ok, false);
+
+  // Key rotation: the old key in PASSWORD_PEPPER_PREVIOUS still opens it, and asks for a re-seal
+  passwords.configure({ PASSWORD_PEPPER: KEY_B, PASSWORD_PEPPER_PREVIOUS: KEY_A });
+  assert.deepEqual(await passwords.verifyPassword('Blue-Kettle-Morning-7', stored), { ok: true, needsRehash: true });
+});
+
+test('legacy bcrypt hashes verify, are sealed in place, and upgrade to scrypt on login', async () => {
+  const bcrypt = require('bcrypt');
+  const legacy = bcrypt.hashSync('Old-Password-From-2025', 10);
+  assert.deepEqual(await passwords.verifyPassword('Old-Password-From-2025', legacy), { ok: true, needsRehash: true });
+  // sealAllPasswords (startup) encrypts it without knowing the password
+  const rows = [{ id: 1, password: legacy }, { id: 2, password: await passwords.hashPassword('Already-Sealed-1') }];
+  const fakeDb = {
+    query: async (sql, params) => {
+      if (sql.startsWith('SELECT')) return [rows.filter((r) => !r.password.startsWith(params[0].replace('%', '')))];
+      const row = rows.find((r) => r.id === params[1] && r.password === params[2]);
+      if (row) row.password = params[0];
+      return [[]];
+    },
+  };
+  assert.deepEqual(await passwords.sealAllPasswords(fakeDb), { sealed: 1, failed: 0 });
+  assert.match(rows[0].password, /^\$sealed\$v1\$/);
+  assert.equal(rows[0].password.includes('$2b$'), false);
+  // Still the same password; still flagged for the scrypt upgrade on the next login
+  assert.deepEqual(await passwords.verifyPassword('Old-Password-From-2025', rows[0].password), { ok: true, needsRehash: true });
+  assert.deepEqual(await passwords.sealAllPasswords(fakeDb), { sealed: 0, failed: 0 }); // idempotent
+});
+
+test('production refuses to run without PASSWORD_PEPPER; weak keys are rejected', (t) => {
+  t.after(() => passwords.configure({ PASSWORD_PEPPER: KEY_A }));
+  assert.throws(() => passwords.configure({}, { production: true }), /PASSWORD_PEPPER must be set/);
+  assert.throws(() => passwords.configure({ PASSWORD_PEPPER: 'short' }, { production: true }), /at least 32/);
+  assert.match(passwords.configure({ PASSWORD_PEPPER: crypto.randomBytes(32).toString('hex') }, { production: true }), /^[0-9a-f]{8}$/);
+});
+
+test('login codes are stored as an HMAC under the pepper', () => {
   const stored = passwords.hashLoginCode('123456');
   assert.match(stored, /^[0-9a-f]{64}$/);
+  assert.notEqual(stored, crypto.createHash('sha256').update('123456').digest('hex'));
   assert.equal(passwords.loginCodeMatches('123456', stored), true);
   assert.equal(passwords.loginCodeMatches('123457', stored), false);
   assert.equal(passwords.loginCodeMatches('123456', null), false);

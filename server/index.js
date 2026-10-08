@@ -42,6 +42,15 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
 }
 const jwtSecret = JWT_SECRET && JWT_SECRET.length >= 32 ? JWT_SECRET : 'insecure-development-only-secret-do-not-use';
 
+// PASSWORD_PEPPER encrypts every stored password hash (see passwords.js): a copy of the database
+// alone is useless for cracking. Like JWT_SECRET, production refuses to start without it.
+try {
+  console.log(`[Passwords] Hashes are sealed with key ${passwords.configure(process.env, { production: isProduction })}`);
+} catch (err) {
+  console.error(`[FATAL] ${err.message}`);
+  process.exit(1);
+}
+
 // CORS origins - only needed when the client is served from a different origin (local dev).
 // In production the client build is served by this server, so the browser never sends CORS.
 const allowedOrigins = isProduction
@@ -3135,6 +3144,9 @@ if (fs.existsSync(path.join(publicDir, 'index.html'))) {
     console.error('[FATAL] Database migration failed:', err.message || err);
     process.exit(1);
   }
+  // Encrypt any hash not yet sealed with the current key (first start after this release,
+  // or after rotating PASSWORD_PEPPER)
+  await passwords.sealAllPasswords(db);
   server.listen(PORT, () => {
     console.log(`Server listening on port ${PORT} (${NODE_ENV})`);
   });

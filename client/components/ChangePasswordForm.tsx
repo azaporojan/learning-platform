@@ -14,7 +14,7 @@ export const ChangePasswordForm: React.FC = () => {
   const [done, setDone] = useState(false);
 
   const reset = () => { setCurrent(''); setNext(''); setConfirm(''); setError(null); };
-  const tooLong = new TextEncoder().encode(next).length > 72;
+  const tooLong = next.length > 256;
   const mismatch = confirm.length > 0 && next !== confirm;
   const canSave = current.length > 0 && next.length >= 8 && !tooLong && next === confirm && !saving;
 
@@ -73,7 +73,7 @@ export const ChangePasswordForm: React.FC = () => {
         A passphrase of a few unrelated words works well. Common passwords and passwords found in public data breaches are refused.
         Every other device you are signed in on will be signed out.
       </p>
-      {tooLong && <div className="text-xs text-red-500">That password is too long (max 72 bytes).</div>}
+      {tooLong && <div className="text-xs text-red-500">That password is too long (max 256 characters).</div>}
       {mismatch && <div className="text-xs text-red-500">The new passwords do not match.</div>}
       {error && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/30 dark:text-red-300 rounded-lg p-2">{error}</div>}
       <div className="flex justify-end gap-2">

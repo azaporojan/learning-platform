@@ -76,6 +76,7 @@ function startServer(uploadsDir) {
       UPLOADS_DIR: uploadsDir,
       EMAIL_USER: '',
       EMAIL_PASS: '',
+      PASSWORD_PEPPER: 'dGVzdC1vbmx5LXBlcHBlci10aGF0LWlzLTMyLWJ5dGVzLWxvbmch', // test-only, 37 bytes
       PASSWORD_BREACH_CHECK: 'false', // no network in CI; covered by test/passwords.test.js
       AUTH_RATE_LIMIT: '1000',        // the suite logs in far more than a real user would
     },
@@ -857,7 +858,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
 
   // ---- Password security ----------------------------------------------------
   // Weak, common, name-based and over-long (bcrypt reads only 72 bytes) passwords are refused
-  for (const [password, re] of [['Password123', /too common/], ['Pwtest2024', /based on your (name|email)/], ['a'.repeat(73), /too long/], ['ă'.repeat(37), /too long/], ['zzzzzzzzzz', /too easy/]]) {
+  for (const [password, re] of [['Password123', /too common/], ['Pwtest2024', /based on your (name|email)/], ['a'.repeat(257), /too long/], ['zzzzzzzzzz', /too easy/]]) {
     const r = await anon('/register', { method: 'POST', json: { name: 'Pwtest', email: 'pwtest@example.test', password } });
     assert.equal(r.status, 400, password);
     assert.match(r.body.error, re);
@@ -865,9 +866,12 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const pwReg = await anon('/register', { method: 'POST', json: { name: 'Pwtest', email: 'pwtest@example.test', password: 'Blue-Kettle-Morning-7' } });
   assert.equal(pwReg.status, 201, JSON.stringify(pwReg.body));
   assert.equal((await admin(`/users/${pwReg.body.userId}/approve`, { method: 'POST' })).status, 200);
-  // Stored as bcrypt cost 12; the emailed login code is stored only as a SHA-256
+  // Stored sealed (scrypt hash encrypted with PASSWORD_PEPPER); the emailed code only as an HMAC
   const [pwRow] = await dbQuery('SELECT password, login_code FROM users WHERE id = $1', [pwReg.body.userId]);
-  assert.match(pwRow.password, /^\$2b\$12\$/);
+  assert.match(pwRow.password, /^\$sealed\$v1\$[0-9a-f]{8}\$/);
+  assert.equal(/scrypt|\$2b\$/.test(pwRow.password), false);
+  // Every account in the database is sealed, including those created before this release
+  assert.deepEqual(await dbQuery("SELECT id FROM users WHERE password NOT LIKE '$sealed$v1$%'"), []);
   const pw1 = await loginAs('PWTEST@Example.test', 'Blue-Kettle-Morning-7'); // email is case-insensitive
   const pwOther = await loginAs('pwtest@example.test', 'Blue-Kettle-Morning-7'); // a second device
   await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Blue-Kettle-Morning-7' } });
@@ -898,17 +902,17 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const locked = await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });
   assert.equal(locked.status, 429);
   await dbQuery('UPDATE users SET locked_until = NOW() - INTERVAL \'1 second\' WHERE id = $1', [pwReg.body.userId]);
-  // Hashes from before the cost increase (10) are upgraded on the next successful login
+  // A legacy bcrypt hash (as left by older releases) still logs in and is upgraded to sealed scrypt
   const bcrypt = require('bcrypt');
   await dbQuery('UPDATE users SET password = $1 WHERE id = $2', [bcrypt.hashSync('Green-Lamp-Evening-8', 10), pwReg.body.userId]);
   await loginAs('pwtest@example.test', 'Green-Lamp-Evening-8');
   const [rehashed] = await dbQuery('SELECT password, failed_login_attempts, locked_until FROM users WHERE id = $1', [pwReg.body.userId]);
-  assert.match(rehashed.password, /^\$2b\$12\$/);
+  assert.match(rehashed.password, /^\$sealed\$v1\$/);
   assert.equal(rehashed.failed_login_attempts, 0);
   assert.equal(rehashed.locked_until, null);
   // No API response ever carries a password hash
   for (const r of [await admin('/admin/users'), await admin('/users/directory'), await anon('/users'), await pw1('/me')]) {
-    assert.equal(JSON.stringify(r.body).includes('$2b$'), false);
+    assert.equal(/\$2b\$|\$sealed\$|scrypt/.test(JSON.stringify(r.body)), false);
   }
 
   // Logout clears the session
