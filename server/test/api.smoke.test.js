@@ -623,6 +623,9 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal((await admin(`/study-sets/${quiz.body.id}`)).body.items[0].explanation, '4xx = client error');
   const lessonSets = await stud(`/lessons/${phase2Lesson.body.id}/study-sets`);
   assert.deepEqual(lessonSets.body.map((x) => x.kind), ['quiz', 'flashcards']);
+  // The lesson listing hides the answers from students too
+  assert.equal(/"correct"|"explanation"/.test(JSON.stringify(lessonSets.body)), false);
+  assert.equal(lessonSets.body[0].items[1].multiple, true);
   // Grading happens on the server
   const badAttempt = await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [1] } });
   assert.equal(badAttempt.status, 400);
@@ -943,6 +946,16 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal((await pending2fa('/verify-code', { method: 'POST', json: { userId: started.body.userId, code: earlyCode } })).status, 400);
   assert.equal((await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } })).status, 401);
   await dbQuery('UPDATE users SET locked_until = NULL, failed_login_attempts = 0 WHERE id = $1', [pwReg.body.userId]);
+
+  // Parallel wrong codes cannot exceed the 5 tries per code, and the code is then void
+  const racer = session();
+  const raceLogin = await racer('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });
+  assert.equal(raceLogin.status, 200);
+  const raceCode = await readLoginCode('pwtest@example.test');
+  const wrongCode = raceCode === '000000' ? '111111' : '000000';
+  const raced = await Promise.all(Array.from({ length: 12 }, () => racer('/verify-code', { method: 'POST', json: { userId: raceLogin.body.userId, code: wrongCode } })));
+  assert.ok(raced.filter((r) => r.body.error === 'Incorrect code.').length <= 4, JSON.stringify(raced.map((r) => r.body.error)));
+  assert.equal((await racer('/verify-code', { method: 'POST', json: { userId: raceLogin.body.userId, code: raceCode } })).status, 400);
 
   // No API response ever carries a password hash
   for (const r of [await admin('/admin/users'), await admin('/users/directory'), await anon('/users'), await pw1('/me')]) {

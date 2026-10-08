@@ -19,6 +19,9 @@ async function runMigrations(pool) {
   `);
 
   const client = await pool.connect();
+  // Migrations report things an operator must act on with RAISE WARNING / NOTICE
+  const onNotice = (msg) => console.warn(`[DB] ${msg.severity || 'NOTICE'}: ${msg.message}`);
+  client.on('notice', onNotice);
   try {
     // Serialize concurrent starts (e.g. two replicas) with an advisory lock.
     await client.query('SELECT pg_advisory_lock(727270)');
@@ -41,6 +44,7 @@ async function runMigrations(pool) {
     }
     await client.query('SELECT pg_advisory_unlock(727270)');
   } finally {
+    client.off('notice', onNotice);
     client.release();
   }
 }

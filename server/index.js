@@ -546,18 +546,32 @@ api.post('/verify-code', authLimiter, async (req, res) => {
     }
 
     // Verifică codul — max 5 încercări per cod, apoi codul este invalidat (anti brute-force)
-    if (!passwords.loginCodeMatches(code, user.login_code)) {
-      const attempts = (user.login_code_attempts || 0) + 1;
-      if (attempts >= 5) {
+    // Each try is claimed atomically BEFORE comparing, so parallel requests cannot exceed the
+    // 5 tries per code (a read-then-write counter could be raced past its cap)
+    const [claimed] = await db.query(
+      `UPDATE users SET login_code_attempts = login_code_attempts + 1
+       WHERE id = ? AND login_code IS NOT NULL AND login_code_attempts < 5 AND login_code_expires > NOW()
+       RETURNING login_code, login_code_attempts`,
+      [userId]
+    );
+    if (claimed.length === 0) {
+      await db.query('UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ?', [userId]);
+      return res.status(400).json({ error: 'Too many incorrect attempts. Please log in again.' });
+    }
+    if (!passwords.loginCodeMatches(code, claimed[0].login_code)) {
+      if (claimed[0].login_code_attempts >= 5) {
         await db.query('UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ?', [userId]);
         return res.status(400).json({ error: 'Too many incorrect attempts. Please log in again.' });
       }
-      await db.query('UPDATE users SET login_code_attempts = ? WHERE id = ?', [attempts, userId]);
       return res.status(400).json({ error: 'Incorrect code.' });
     }
 
-    // Login cu succes -> Șterge codul folosit
-    await db.query('UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ?', [userId]);
+    // Login cu succes -> consumă codul (o singură dată: două cereri paralele nu pot folosi același cod)
+    const [consumed] = await db.query(
+      'UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ? AND login_code = ? RETURNING id',
+      [userId, claimed[0].login_code]
+    );
+    if (consumed.length === 0) return res.status(400).json({ error: 'Code expired. Please try again.' });
 
     // Cookie HTTP-only cu JWT (poartă versiunea sesiunii)
     issueSession(res, user);
@@ -647,6 +661,10 @@ api.put('/me/password', authLimiter, authenticateToken, async (req, res) => {
       return res.status(429).json({ error: 'Too many wrong passwords. Please try again in 15 minutes.' });
     }
     const check = await passwords.verifyPassword(current, user.password);
+    if (check.unreadable) {
+      // A server key problem, not a wrong password: don't make the user retype it
+      return res.status(503).json({ error: 'Password changes are temporarily unavailable. Please try again later.' });
+    }
     if (!check.ok) {
       if (!check.unreadable && await recordFailedPassword(user)) {
         return res.status(429).json({ error: 'Too many wrong passwords. Please try again in 15 minutes.' });
