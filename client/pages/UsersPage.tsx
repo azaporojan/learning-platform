@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { DirectoryUser, User } from '../types';
 import { apiUrl, getFileUrl } from '../config';
 import { useSocket } from '../contexts/SocketContext';
@@ -30,6 +31,8 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
   const { socket } = useSocket();
   const [users, setUsers] = useState<DirectoryUser[]>([]);
   const isAdmin = currentUser.role === 'admin';
+  const [searchParams] = useSearchParams();
+  const highlightUserId = /^\d+$/.test(searchParams.get('user') || '') ? Number(searchParams.get('user')) : null;
 
   const fetchDirectory = useCallback(async () => {
     try {
@@ -55,7 +58,7 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
       <div className="h-full overflow-y-auto custom-scrollbar">
         <div className="max-w-6xl mx-auto bg-card-light dark:bg-card-dark rounded-3xl border border-gray-200 dark:border-gray-700 p-6 sm:p-8 shadow-sm">
           <h2 className="text-3xl font-extrabold italic text-gray-700 dark:text-gray-200 mb-6">Users</h2>
-          <UsersAdminTable currentUserId={currentUser.id} />
+          <UsersAdminTable currentUserId={currentUser.id} highlightUserId={highlightUserId} />
         </div>
       </div>
     );

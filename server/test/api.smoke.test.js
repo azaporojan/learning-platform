@@ -106,6 +106,16 @@ function session() {
   };
 }
 
+// Notification emails are sent without blocking the request (and only logged in tests, where
+// SMTP is not configured): wait for the log line.
+async function waitForOutput(child, pattern) {
+  for (let i = 0; i < 40; i++) {
+    if (pattern.test(child.getOutput())) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.fail(`server output never matched ${pattern}:\n${child.getOutput().slice(-2000)}`);
+}
+
 async function loginAs(email, password) {
   const s = session();
   const login = await s('/login', { method: 'POST', json: { email, password } });
@@ -184,6 +194,10 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const pending = adminNotifs.body.find((n) => n.type === 'new_user_pending');
   assert.equal(pending.metadata.userId, student.id);
   assert.equal(pending.status, 'approved');
+  // Every notification deep-links into the app, and its email carries the same link
+  assert.equal(pending.link, `/users?user=${student.id}`);
+  await waitForOutput(child, /to=admin@example\.test subject="New User Registered" link=\S+\/users\?user=\d+/);
+  await waitForOutput(child, /to=student@example\.test subject="Account Approved! 🎉" link=\S+\/courses\b/);
 
   // Courses: admin creates a course and two phases; the second phase is gated on the first
   const anonCourse = await anon('/courses', { method: 'POST', json: { name: 'x' } });
@@ -473,6 +487,33 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(inboxAfter.body.submissions[0].status, 'approved');
   assert.strictEqual(inboxAfter.body.counts.approved, 1);
   assert.strictEqual(inboxAfter.body.counts.pending, 0);
+  // Submission + review notifications open the task on its course road (in the app and by email)
+  const taskDeepLink = `/courses/${course.body.id}?lesson=${lesson.body.id}&task=${task.body.id}`;
+  const studNotifs = (await stud('/notifications')).body;
+  assert.equal(studNotifs.find((n) => n.type === 'account_approved').link, '/courses');
+  assert.equal(studNotifs.find((n) => n.type === 'submission_approved').link, taskDeepLink);
+  assert.equal((await admin('/notifications')).body.find((n) => n.type === 'task_submission').link, taskDeepLink);
+  await waitForOutput(child, new RegExp(`to=student@example\\.test subject="Task Approved! ✅" link=\\S+${taskDeepLink.replace(/[?]/g, '\\?')}`));
+  // Stars: in-app + email, linking to the leaderboard
+  const stars = await admin(`/admin/users/${student.id}/add-stars`, { method: 'POST', json: { stars: 5 } });
+  assert.equal(stars.status, 200);
+  assert.equal((await stud('/notifications')).body.find((n) => n.type === 'stars_received').link, '/users');
+  await waitForOutput(child, /to=student@example\.test subject="⭐ \+5 Stars Received!" link=\S+\/users/);
+  // Approving / promoting from the admin user editor notifies too (it used to be silent)
+  const lateReg = await anon('/register', { method: 'POST', json: { name: 'Late', email: 'late@example.test', password: 'LatePass123!' } });
+  assert.equal(lateReg.status, 201);
+  const editForm = new FormData();
+  editForm.append('is_approved', 'true');
+  editForm.append('role', 'admin');
+  const editedUser = await admin(`/admin/users/${lateReg.body.userId}`, { method: 'PUT', body: editForm });
+  assert.equal(editedUser.status, 200, JSON.stringify(editedUser.body));
+  await waitForOutput(child, /to=late@example\.test subject="Account Approved! 🎉"/);
+  await waitForOutput(child, /to=late@example\.test subject="You are now an administrator 🛠️"/);
+  const late = await loginAs('late@example.test', 'LatePass123!');
+  assert.deepEqual((await late('/notifications')).body.map((n) => [n.type, n.link]).sort(), [['account_approved', '/courses'], ['role_changed', '/courses']]);
+  assert.equal((await admin(`/admin/users/${lateReg.body.userId}`, { method: 'DELETE' })).status, 200);
+  // Every notification created so far has a link
+  assert.ok([...studNotifs, ...(await admin('/notifications')).body].every((n) => typeof n.link === 'string' && n.link.startsWith('/')));
 
   // The course road: enrolment gates everything for a student, then the sequence gates phase 2
   const phase2Lesson = await admin('/lessons', { method: 'POST', json: { pathId: phase2.body.id, title: 'P2 L1', description: 'What phase 2 covers', order: 1 } });

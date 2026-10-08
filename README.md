@@ -24,7 +24,7 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 - 👥 Pagina „Users” cu rolurile admin/student (studenții văd clasamentul, adminii gestionează conturile)
 - 📝 Task-uri cu deadline-uri; predare ca și comentariu (link la PR / ticket Jira), fișier sau ambele
 - 🧠 Quiz-uri și flashcards sub fiecare lecție, pentru pregătire (corectate pe server, cel mai bun scor salvat; nu blochează drumul)
-- 🔔 Notificări în timp real pentru task-uri noi
+- 🔔 Notificări în timp real și pe email (cont aprobat, task nou, submisie aprobată/respinsă, stele primite); fiecare notificare are un link direct (deep link) spre task / pagina potrivită
 - 💬 Chat în timp real cu Socket.IO
 - 🖼️ Upload de imagini și fișiere în task-uri și chat
 - 👥 Vizualizare utilizatori online
@@ -37,7 +37,7 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 - ✅ Aprobare/respingere submisii studenți; pagina „Submissions” listează tot ce au predat studenții, cu link direct la lecție/task
 - 📜 Script de lecție (Markdown, doar pentru admin): pregătești planul lecției înainte și îl urmărești în timpul ei
 - 🧠 Quiz-uri și flashcards per lecție: editor în aplicație (formular sau JSON) și API complet (`/api/study-sets`, vezi `docs/AGENT_API.md`)
-- 🔄 Notificări live pentru submisii noi
+- 🔄 Notificări live și pe email pentru utilizatori noi și submisii noi, cu link direct la submisie / utilizator
 - 📊 Monitorizare progres studenți
 
 ## 🛠️ Stack Tehnologic
@@ -197,7 +197,7 @@ docker run --rm -p 3001:3001 --env-file server/.env -e DB_HOST=host.docker.inter
 | `EMAIL_PASS` | App password Gmail | `xxxx xxxx xxxx xxxx` |
 | `PORT` | Port server | `3001` |
 | `NODE_ENV` | Environment | `development` / `production` |
-| `FRONTEND_URL` | URL public (emailuri; origin CORS în dev) | `http://localhost:5173` |
+| `FRONTEND_URL` | URL public — baza linkurilor din emailuri (trebuie să fie adresa reală a aplicației în producție); origin CORS în dev | `http://localhost:5173` |
 | `UPLOADS_DIR` | Director pentru fișierele încărcate | `server/uploads` (Docker: `/app/server/uploads`) |
 | `MAX_UPLOAD_MB` / `MAX_IMAGE_UPLOAD_MB` | Limită dimensiune fișiere (submisii / imagini) | `25` / `10` |
 

@@ -226,10 +226,11 @@ const transporter = nodemailer.createTransport({
 // Send an email, or log it when SMTP is not configured (dev / CI).
 async function deliverMail(message) {
   if (!emailEnabled) {
-    console.log(`[Email] (disabled) to=${message.to} subject="${message.subject}"`);
+    console.log(`[Email] (disabled) to=${message.to} subject="${message.subject}"${message.link ? ` link=${message.link}` : ''}`);
     return;
   }
-  await transporter.sendMail(message);
+  const { link, ...mail } = message; // `link` is only for the log line above
+  await transporter.sendMail(mail);
 }
 
 // ---------------------------------------------------------------------------
@@ -359,38 +360,30 @@ const sendLoginCode = async (email, code) => {
   }
 };
 
-// Generic helper function to send any email
-const sendEmail = async (email, subject, htmlContent) => {
+// Absolute URL of an in-app path (deep link), e.g. '/courses/1?lesson=2&task=3'
+const appUrl = (link) => `${FRONTEND_URL.replace(/\/+$/, '')}${link && link.startsWith('/') ? link : '/'}`;
+
+// Helper function to send notification email. `message` is trusted HTML (escape user input
+// before passing it); the button deep-links to `link` (an in-app path) when given.
+const sendNotificationEmail = async (email, subject, message, link = null, actionLabel = 'Open in Learning Platform') => {
 
   try {
+    const url = appUrl(link);
     await deliverMail({
       from: `"Learning Platform" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: subject,
-      html: htmlContent
-    });
-  } catch (error) {
-    console.error('[ERROR] Failed to send email:', error);
-  }
-};
-
-// Helper function to send notification email
-const sendNotificationEmail = async (email, subject, message) => {
-
-  try {
-    await deliverMail({
-      from: `"Learning Platform" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: subject,
+      link: url,
       html: `
         <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px; max-width: 500px;">
           <h2 style="color: #333;">🎓 Learning Platform</h2>
           <p>${message}</p>
           <p style="margin-top: 20px;">
-            <a href="${FRONTEND_URL}" style="background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
-              Access Platform
+            <a href="${escapeHtml(url)}" style="background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
+              ${escapeHtml(actionLabel)}
             </a>
           </p>
+          <p style="color: #999; font-size: 12px;">Or open: <a href="${escapeHtml(url)}" style="color: #999;">${escapeHtml(url)}</a></p>
           <p style="color: #999; font-size: 12px; margin-top: 20px;">This email was sent automatically by Learning Platform.</p>
         </div>
       `
@@ -612,16 +605,64 @@ async function createNotification(userId, type, title, message, link = null, met
   }
 }
 
-// Helper function to notify all admins
-async function notifyAdmins(type, title, message, link = null, metadata = null) {
+// Every notification goes out twice, with the same deep link: in the app (bell) and by email.
+//   link       in-app path the notification opens, e.g. taskLink(id) or '/courses'
+//   emailHtml  (user) => HTML body for the email; defaults to the escaped message
+//   email      false = in-app only
+// The email is not awaited: a slow SMTP server must not hold up the request that caused it.
+async function notifyUser(userId, { type, title, message, link = null, metadata = null, emailHtml = null, email = true, actionLabel }) {
+  try {
+    await createNotification(userId, type, title, message, link, metadata);
+    if (!email) return;
+    const [rows] = await db.query('SELECT name, email FROM users WHERE id = ?', [userId]);
+    if (rows.length === 0) return;
+    const body = emailHtml
+      ? emailHtml(rows[0])
+      : `Hello <strong>${escapeHtml(rows[0].name)}</strong>!<br><br>${escapeHtml(message).replace(/\n/g, '<br>')}`;
+    sendNotificationEmail(rows[0].email, title, body, link, actionLabel);
+  } catch (error) {
+    console.error('[Notification] Error notifying user:', error);
+  }
+}
+
+// Helper function to notify all admins (in the app and by email)
+async function notifyAdmins(type, title, message, link = null, metadata = null, emailHtml = null) {
   try {
     const [admins] = await db.query("SELECT id FROM users WHERE role = 'admin'");
     for (const admin of admins) {
-      await createNotification(admin.id, type, title, message, link, metadata);
+      await notifyUser(admin.id, { type, title, message, link, metadata, emailHtml });
     }
   } catch (error) {
     console.error('[Notification] Error notifying admins:', error);
   }
+}
+
+// Deep link to a task on its course road (CoursePage opens it from ?lesson=&task=; for an admin
+// it opens the task's submissions). Falls back to the catalogue for a phase outside any course.
+async function taskLink(taskId) {
+  const [rows] = await db.query(
+    `SELECT t.id, l.id AS lesson_id, p.course_id FROM tasks t
+     INNER JOIN lessons l ON l.id = t.lesson_id INNER JOIN paths p ON p.id = l.path_id WHERE t.id = ?`,
+    [taskId]
+  );
+  if (rows.length === 0 || rows[0].course_id === null) return '/courses';
+  return `/courses/${rows[0].course_id}?lesson=${rows[0].lesson_id}&task=${rows[0].id}`;
+}
+
+// The account-approved notice, shared by POST /users/:id/approve and the admin user editor.
+async function notifyAccountApproved(userId) {
+  await db.query(
+    "UPDATE notifications SET status = 'approved', is_read = TRUE WHERE type = 'new_user_pending' AND (metadata->>'userId')::int = ?",
+    [userId]
+  );
+  await notifyUser(userId, {
+    type: 'account_approved',
+    title: 'Account Approved! 🎉',
+    message: 'Your account has been approved by an administrator. You can now access the platform.',
+    link: '/courses',
+    actionLabel: 'Log in and start learning',
+    emailHtml: (u) => `Hello <strong>${escapeHtml(u.name)}</strong>!<br><br>Your account on the Learning Platform has been approved by an administrator. You can now log in and start learning!`,
+  });
 }
 
 // Register Endpoint
@@ -664,23 +705,15 @@ api.post('/register', authLimiter, async (req, res) => {
     }
 
     // Notify all admins about new user registration
+    // ...in the app and by email, both opening the user's row on the Users page
     await notifyAdmins(
       'new_user_pending',
       'New User Registered',
       `${name} (${email}) is waiting for approval.`,
-      null,
-      { userId: result.insertId, email, name }
+      `/users?user=${result.insertId}`,
+      { userId: result.insertId, email, name },
+      () => `A new user <strong>${escapeHtml(name)}</strong> (${escapeHtml(email)}) is waiting for approval on the Learning Platform.`
     );
-
-    // Send email to admins
-    const [admins] = await db.query("SELECT email FROM users WHERE role = 'admin'");
-    for (const admin of admins) {
-      await sendNotificationEmail(
-        admin.email,
-        'New User Registered',
-        `A new user <strong>${escapeHtml(name)}</strong> (${escapeHtml(email)}) is waiting for approval on the Learning Platform.`
-      );
-    }
 
     res.status(201).json({
       message: 'Account created successfully! Waiting for administrator approval.',
@@ -721,31 +754,9 @@ api.post('/users/:id/approve', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Approve user
+    // Approve user, then tell them (in the app and by email)
     await db.query('UPDATE users SET is_approved = TRUE WHERE id = ?', [id]);
-
-    // Update all pending notifications for this user to approved
-    await db.query(
-      "UPDATE notifications SET status = 'approved', is_read = TRUE WHERE type = 'new_user_pending' AND (metadata->>'userId')::int = ?",
-      [id]
-    );
-
-    // Notify user
-    await createNotification(
-      id,
-      'account_approved',
-      'Account Approved! 🎉',
-      'Your account has been approved by an administrator. You can now access the platform.',
-      null,
-      null
-    );
-
-    // Send email to user
-    await sendNotificationEmail(
-      targetUser[0].email,
-      'Account Approved! 🎉',
-      `Hello <strong>${escapeHtml(targetUser[0].name)}</strong>!<br><br>Your account on the Learning Platform has been approved by an administrator. You can now log in and start learning!`
-    );
+    await notifyAccountApproved(id);
 
     res.json({ message: 'User approved successfully' });
   } catch (error) {
@@ -777,21 +788,13 @@ api.post('/users/:id/reject', authenticateToken, async (req, res) => {
       [id]
     );
 
-    // Notify user before deleting
-    await createNotification(
-      id,
-      'account_rejected',
-      'Account Rejected',
-      'Your registration request has been rejected by an administrator.',
-      null,
-      null
-    );
-
-    // Send email to user
-    await sendNotificationEmail(
+    // Email only: the account (and with it any in-app notification) is deleted right below
+    sendNotificationEmail(
       targetUser[0].email,
       'Registration Request Rejected',
-      `Hello <strong>${escapeHtml(targetUser[0].name)}</strong>.<br><br>Unfortunately, your registration request on the Learning Platform has been rejected by an administrator.`
+      `Hello <strong>${escapeHtml(targetUser[0].name)}</strong>.<br><br>Unfortunately, your registration request on the Learning Platform has been rejected by an administrator.`,
+      '/',
+      'Visit the Learning Platform'
     );
 
     // Delete user
@@ -901,6 +904,23 @@ api.put('/admin/users/:id', authenticateToken, requireAdmin, uploadImage.single(
       values
     );
 
+    // Approving from the editor is the same event as the Approve button: tell the user
+    const before = targetUser[0];
+    if (is_approved !== undefined && !before.is_approved && (is_approved === 'true' || is_approved === true)) {
+      await notifyAccountApproved(Number(id));
+    }
+    if (role !== undefined && role !== before.role) {
+      await notifyUser(Number(id), {
+        type: 'role_changed',
+        title: role === 'admin' ? 'You are now an administrator 🛠️' : 'Your role changed',
+        message: role === 'admin'
+          ? 'An administrator gave you admin rights on the Learning Platform.'
+          : 'Your account is now a student account on the Learning Platform.',
+        link: '/courses',
+        metadata: { role },
+      });
+    }
+
     // Get updated user
     const [updatedUser] = await db.query(
       'SELECT id, name, email, role, stars, avatar_url, is_approved, created_at FROM users WHERE id = ?',
@@ -978,14 +998,14 @@ api.post('/admin/users/:id/add-stars', authenticateToken, async (req, res) => {
     const [updatedUser] = await db.query('SELECT id, name, email, role, stars, avatar_url FROM users WHERE id = ?', [id]);
 
     // Create notification for user
-    await createNotification(
-      parseInt(id),
-      'stars_received',
-      `⭐ +${starsToAdd} Stars Received!`,
-      `You've received ${starsToAdd} star${starsToAdd > 1 ? 's' : ''} from the administrator! Keep up the great work!`,
-      null,
-      { starsAdded: starsToAdd, newTotal: updatedUser[0].stars }
-    );
+    await notifyUser(parseInt(id), {
+      type: 'stars_received',
+      title: `⭐ +${starsToAdd} Stars Received!`,
+      message: `You've received ${starsToAdd} star${starsToAdd > 1 ? 's' : ''} from the administrator! Keep up the great work!`,
+      link: '/users',
+      actionLabel: 'See the leaderboard',
+      metadata: { starsAdded: starsToAdd, newTotal: updatedUser[0].stars },
+    });
 
     // Emit Socket.IO events to update UI
     io.emit('leaderboard:update'); // Update leaderboard for everyone
@@ -1585,22 +1605,17 @@ api.post('/tasks', authenticateToken, requireAdmin, async (req, res) => {
         )
       `, [lesson.path_id, lesson.path_id]);
 
+      const link = await taskLink(result.insertId);
       for (const student of students) {
-        // Create in-app notification
-        await createNotification(
-          student.id,
-          'new_task',
-          'New Task Available! 📝',
-          `Task: "${title}" (${taskType})\nPath: ${lesson.path_name}\nLesson: ${lesson.lesson_title}`,
-          null,
-          { taskId: result.insertId, lessonId, pathId: lesson.path_id, type, deadline: deadlineTs }
-        );
-
-        // Send email notification
-        await sendNotificationEmail(
-          student.email,
-          'New Task Available! 📝',
-          `Hello <strong>${escapeHtml(student.name)}</strong>!<br><br>
+        // In the app and by email, both opening the task on the road
+        await notifyUser(student.id, {
+          type: 'new_task',
+          title: 'New Task Available! 📝',
+          message: `Task: "${title}" (${taskType})\nPath: ${lesson.path_name}\nLesson: ${lesson.lesson_title}`,
+          link,
+          actionLabel: 'Open the task',
+          metadata: { taskId: result.insertId, lessonId, pathId: lesson.path_id, type, deadline: deadlineTs },
+          emailHtml: () => `Hello <strong>${escapeHtml(student.name)}</strong>!<br><br>
           A new task has been added to your learning path:<br><br>
           <strong>Task:</strong> ${escapeHtml(title)}<br>
           <strong>Type:</strong> <span style="color: ${type === 'mandatory' ? '#dc2626' : '#16a34a'};">${taskType}</span><br>
@@ -1608,8 +1623,8 @@ api.post('/tasks', authenticateToken, requireAdmin, async (req, res) => {
           <strong>Lesson:</strong> ${escapeHtml(lesson.lesson_title)}<br>
           ${deadline ? `<strong>Deadline:</strong> ${new Date(deadline).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}<br>` : ''}
           <br>
-          Log in to the platform to view the task details and start working on it!`
-        );
+          Log in to the platform to view the task details and start working on it!`,
+        });
       }
 
       // Mark task as NEW for all these students (viewed_at = NULL means it's new)
@@ -1784,7 +1799,7 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
         'task_submission',
         'New Task Submission! 📤',
         notificationMessage,
-        null, // Remove link
+        await taskLink(id), // opens the task's submissions on the road
         {
           taskId: id,
           userId,
@@ -1795,32 +1810,20 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
           taskType: task.type,
           lessonTitle,
           pathName
-        }
+        },
+        () => `A student has submitted a task:<br><br>
+          <strong>Student:</strong> ${escapeHtml(users[0].name)}<br>
+          <strong>Task:</strong> ${escapeHtml(task.title)}<br>
+          <strong>Type:</strong> ${task.type.charAt(0).toUpperCase() + task.type.slice(1)}<br>
+          <strong>Lesson:</strong> ${escapeHtml(lessonTitle)}<br>
+          <strong>Path:</strong> ${escapeHtml(pathName)}<br>
+          ${req.file ? `<strong>File:</strong> ${escapeHtml(req.file.originalname)}<br>` : ''}
+          ${comment ? `<strong>Comment:</strong> ${escapeHtml(comment)}<br>` : ''}
+          <br>Please review the submission in the platform.`
       );
 
       // Emit live event for Admin graph update
       io.emit('task:submission_uploaded', { taskId: id });
-
-      // Send email to admins with detailed info
-      const [admins] = await db.query('SELECT email FROM users WHERE role = ?', ['admin']);
-      for (const admin of admins) {
-        const emailHtml = `
-          <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px; max-width: 500px;">
-            <h2 style="color: #333;">New Task Submission! 📤</h2>
-            <p>Hello,</p>
-            <p>A student has submitted a task:</p>
-            <p><strong>Student:</strong> ${escapeHtml(users[0].name)}</p>
-            <p><strong>Task:</strong> ${escapeHtml(task.title)}</p>
-            <p><strong>Type:</strong> ${task.type.charAt(0).toUpperCase() + task.type.slice(1)}</p>
-            <p><strong>Lesson:</strong> ${escapeHtml(lessonTitle)}</p>
-            <p><strong>Path:</strong> ${escapeHtml(pathName)}</p>
-            ${req.file ? `<p><strong>File:</strong> ${escapeHtml(req.file.originalname)}</p>` : ''}
-            ${comment ? `<p><strong>Comment:</strong> ${escapeHtml(comment)}</p>` : ''}
-            <p style="color: #999; font-size: 12px; margin-top: 20px;">Please review the submission in the platform.</p>
-          </div>
-        `;
-        await sendEmail(admin.email, 'New Task Submission! 📤', emailHtml);
-      }
     }
     } catch (notifyErr) {
       console.error('[Submit] Saved, but notifying admins failed:', notifyErr);
@@ -2068,26 +2071,16 @@ api.post('/submissions/:id/approve', authenticateToken, async (req, res) => {
     const [task] = await db.query('SELECT title FROM tasks WHERE id = ?', [submission.task_id]);
     const taskTitle = task.length > 0 ? task[0].title : 'Task';
 
-    await createNotification(
-      submission.user_id,
-      'submission_approved',
-      'Submission Approved! ✅',
-      `Your submission for "${taskTitle}" has been approved! The next step is now unlocked.`,
-      null,
-      { taskId: submission.task_id, submissionId: id }
-    );
-
-    // Send Email
-    const [student] = await db.query('SELECT email, name FROM users WHERE id = ?', [submission.user_id]);
-    if (student.length > 0) {
-      await sendNotificationEmail(
-        student[0].email,
-        'Submission Approved! ✅',
-        `Hello <strong>${escapeHtml(student[0].name)}</strong>!<br><br>
+    await notifyUser(submission.user_id, {
+      type: 'submission_approved',
+      title: 'Submission Approved! ✅',
+      message: `Your submission for "${taskTitle}" has been approved! The next step is now unlocked.`,
+      link: await taskLink(submission.task_id),
+      metadata: { taskId: submission.task_id, submissionId: id },
+      emailHtml: (u) => `Hello <strong>${escapeHtml(u.name)}</strong>!<br><br>
             Great news! Your submission for task <strong>"${escapeHtml(taskTitle)}"</strong> has been approved by an administrator.<br>
-            You can now proceed to the next task in your learning path.`
-      );
-    }
+            You can now proceed to the next task in your learning path.`,
+    });
 
     // Emit Socket.IO events for live updates
     // 1. Notify all users about leaderboard change
@@ -2154,26 +2147,16 @@ api.post('/tasks/:taskId/approve-all', authenticateToken, async (req, res) => {
     }
 
     // Notify the user
-    await createNotification(
-      studentId,
-      'submission_approved',
-      'Task Approved! ✅',
-      `Your submissions for "${taskTitle}" have been approved! ${isMandatory ? 'The next step is now unlocked.' : 'XP has been granted.'}`,
-      null,
-      { taskId }
-    );
-
-    // Send Email
-    const [student] = await db.query('SELECT email, name FROM users WHERE id = ?', [studentId]);
-    if (student.length > 0) {
-      await sendNotificationEmail(
-        student[0].email,
-        'Task Approved! ✅',
-        `Hello <strong>${escapeHtml(student[0].name)}</strong>!<br><br>
+    await notifyUser(studentId, {
+      type: 'submission_approved',
+      title: 'Task Approved! ✅',
+      message: `Your submissions for "${taskTitle}" have been approved! ${isMandatory ? 'The next step is now unlocked.' : 'XP has been granted.'}`,
+      link: await taskLink(taskId),
+      metadata: { taskId },
+      emailHtml: (u) => `Hello <strong>${escapeHtml(u.name)}</strong>!<br><br>
             Great news! Your submissions for task <strong>"${escapeHtml(taskTitle)}"</strong> have been approved by an administrator.<br>
-            You can now proceed to the next task in your learning path.`
-      );
-    }
+            You can now proceed to the next task in your learning path.`,
+    });
 
     // Emit Socket.IO events for live updates
     io.emit('leaderboard:update');
@@ -2217,30 +2200,21 @@ api.post('/tasks/:taskId/reject-all', authenticateToken, async (req, res) => {
     );
 
     // Notify the user with the rejection comment
-    await createNotification(
-      studentId,
-      'submission_rejected',
-      'Task Rejected ❌',
-      `Your submissions for "${taskTitle}" were rejected. Reason: ${comment.trim()}`,
-      null,
-      { taskId, comment: comment.trim() }
-    );
-
-    // Send Email with detailed rejection reason
-    const [student] = await db.query('SELECT email, name FROM users WHERE id = ?', [studentId]);
-    if (student.length > 0) {
-      await sendNotificationEmail(
-        student[0].email,
-        'Task Rejected ❌',
-        `Hello <strong>${escapeHtml(student[0].name)}</strong>!<br><br>
+    await notifyUser(studentId, {
+      type: 'submission_rejected',
+      title: 'Task Rejected ❌',
+      message: `Your submissions for "${taskTitle}" were rejected. Reason: ${comment.trim()}`,
+      link: await taskLink(taskId),
+      actionLabel: 'Open the task and resubmit',
+      metadata: { taskId, comment: comment.trim() },
+      emailHtml: (u) => `Hello <strong>${escapeHtml(u.name)}</strong>!<br><br>
             Your submissions for task <strong>"${escapeHtml(taskTitle)}"</strong> have been reviewed and rejected by an administrator.<br><br>
             <strong>Reason:</strong><br>
             <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin-top: 10px; border-left: 4px solid #ef4444;">
               ${escapeHtml(comment.trim()).replace(/\n/g, '<br>')}
             </div><br>
-            Please review the feedback and resubmit your work when ready.`
-      );
-    }
+            Please review the feedback and resubmit your work when ready.`,
+    });
 
     // Emit Socket.IO event for live updates
     io.emit('task:rejected', {
