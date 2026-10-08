@@ -235,7 +235,9 @@ const transporter = nodemailer.createTransport({
 // Send an email, or log it when SMTP is not configured (dev / CI).
 async function deliverMail(message) {
   if (!emailEnabled) {
-    console.log(`[Email] (disabled) to=${message.to} subject="${message.subject}"${message.link ? ` link=${message.link}` : ''}`);
+    // Production logs never carry full email addresses (a***@example.com); dev/test keep them
+    const to = isProduction ? String(message.to).replace(/^(.)[^@]*/, '$1***') : message.to;
+    console.log(`[Email] (disabled) to=${to} subject="${message.subject}"${message.link ? ` link=${message.link}` : ''}`);
     return;
   }
   const { link, ...mail } = message; // `link` is only for the log line above
