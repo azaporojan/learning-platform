@@ -219,11 +219,16 @@ function registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, 
       // either finishes before the edit — and its result is then reset with the others — or is
       // graded against the new items afterwards
       const rows = await db.transaction(async (tx) => {
-        const [current] = await tx.query('SELECT items FROM study_sets WHERE id = ? FOR UPDATE', [set.id]);
+        // jsonb comparison in SQL: Postgres reorders object keys, so comparing JSON text in JS
+        // would see every re-sent (unchanged) item list as a change
+        const [current] = await tx.query(
+          'SELECT items IS DISTINCT FROM ?::jsonb AS changed FROM study_sets WHERE id = ? FOR UPDATE',
+          [JSON.stringify(items === undefined ? [] : items), set.id]
+        );
         if (current.length === 0) return [];
         const [updated] = await tx.query(`UPDATE study_sets SET ${sets.join(', ')} WHERE id = ? RETURNING *`, params);
         // New content = new results: a best score earned on the old questions no longer counts
-        if (items !== undefined && JSON.stringify(items) !== JSON.stringify(current[0].items)) {
+        if (items !== undefined && current[0].changed) {
           await tx.query('DELETE FROM study_set_progress WHERE study_set_id = ?', [set.id]);
         }
         return updated;

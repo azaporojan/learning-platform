@@ -533,6 +533,10 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const editedUser = await admin(`/admin/users/${lateReg.body.userId}`, { method: 'PUT', body: editForm });
   assert.equal(editedUser.status, 200, JSON.stringify(editedUser.body));
   await waitForOutput(child, /to=late@example\.test subject="Account Approved! 🎉"/);
+  // An email already used by another account (any letter case) is refused, not a 500
+  const dupForm = new FormData();
+  dupForm.append('email', 'STUDENT@example.test');
+  assert.equal((await admin(`/admin/users/${lateReg.body.userId}`, { method: 'PUT', body: dupForm })).status, 409);
   await waitForOutput(child, /to=late@example\.test subject="You are now an administrator 🛠️"/);
   const late = await loginAs('late@example.test', 'LatePass123!');
   assert.deepEqual((await late('/notifications')).body.map((n) => [n.type, n.link]).sort(), [['account_approved', '/courses'], ['role_changed', '/courses']]);
@@ -657,10 +661,17 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(edited.body.item_count, 1);
   // New questions = new results: the student's best score on the old deck is gone
   assert.equal((await stud(`/study-sets/${deck.body.id}`)).body.progress, null);
-  // Renaming alone keeps results
+  // Renaming alone keeps results — also when the editor re-sends the unchanged items (the stored
+  // jsonb has its keys reordered, so this must be a semantic comparison)
   await stud(`/study-sets/${deck.body.id}/attempts`, { method: 'POST', json: { known: 1 } });
   await admin(`/study-sets/${deck.body.id}`, { method: 'PUT', json: { title: 'Key terms (v2)' } });
   assert.equal((await stud(`/study-sets/${deck.body.id}`)).body.progress.best_score, 1);
+  await admin(`/study-sets/${deck.body.id}`, { method: 'PUT', json: { title: 'Key terms (v3)', items: [{ front: 'QA', back: 'Quality assurance' }] } });
+  assert.equal((await stud(`/study-sets/${deck.body.id}`)).body.progress.best_score, 1);
+  const quizBefore = (await admin(`/study-sets/${quiz.body.id}`)).body;
+  await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [1, [0, 2]] } });
+  await admin(`/study-sets/${quiz.body.id}`, { method: 'PUT', json: { title: quizBefore.title, items: quizBefore.items } });
+  assert.equal((await stud(`/study-sets/${quiz.body.id}`)).body.progress.best_score, 2);
   // A third phase behind the unfinished phase 2 is locked for the 'previous' reason
   const phase3 = await admin('/paths', { method: 'POST', json: { name: 'Phase 3', course_id: course.body.id } });
   assert.equal(phase3.body.order_index, 3);

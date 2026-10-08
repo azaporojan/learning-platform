@@ -1020,6 +1020,8 @@ api.put('/admin/users/:id', authenticateToken, requireAdmin, uploadImage.single(
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) || normalized.length > 255) {
         return res.status(400).json({ error: 'A valid email is required.' });
       }
+      const [taken] = await db.query('SELECT id FROM users WHERE email = ? AND id <> ?', [normalized, id]);
+      if (taken.length > 0) return res.status(409).json({ error: 'This email is already used by another account.' });
       updates.push('email = ?');
       values.push(normalized);
     }
