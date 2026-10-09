@@ -17,6 +17,8 @@
 //   - stars_required > 0: the student has at least that many stars
 // ---------------------------------------------------------------------------
 
+const { serializeLessonFile } = require('./lessonFiles');
+
 const isAdminRole = (role) => role === 'admin';
 
 // Why a phase (path) is locked for a user: [] = accessible. Mirrors the per-phase logic of
@@ -289,6 +291,7 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
       let lessons = [];
       let tasks = [];
       let studySets = [];
+      let lessonFiles = [];
       if (pathIds.length > 0) {
         // Explicit columns: `script` (admin-only teaching notes) is never loaded for the road.
         [lessons] = await db.query(
@@ -298,6 +301,8 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
         const lessonIds = lessons.map((l) => l.id);
         if (lessonIds.length > 0) {
           [tasks] = await db.query('SELECT * FROM tasks WHERE lesson_id = ANY(?) ORDER BY order_index ASC, id ASC', [lessonIds]);
+          // Lesson materials: names and sizes only; the bytes come from /lesson-files/:id/* (gated)
+          [lessonFiles] = await db.query('SELECT * FROM lesson_files WHERE lesson_id = ANY(?) ORDER BY order_index ASC, id ASC', [lessonIds]);
           // Quizzes / flashcards: titles and sizes only; the items come from GET /study-sets/:id
           [studySets] = await db.query(
             `SELECT id, lesson_id, kind, title, description, order_index, jsonb_array_length(items) AS item_count
@@ -350,6 +355,13 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
         setsByLesson.set(s.lesson_id, list);
       });
 
+      const filesByLesson = new Map();
+      lessonFiles.forEach((f) => {
+        const list = filesByLesson.get(f.lesson_id) || [];
+        list.push(serializeLessonFile(f));
+        filesByLesson.set(f.lesson_id, list);
+      });
+
       const tasksByLesson = new Map();
       tasks.forEach((t) => {
         const list = tasksByLesson.get(t.lesson_id) || [];
@@ -370,7 +382,7 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
             id: l.id, path_id: l.path_id, title: l.title, description: l.description,
             order_index: l.order_index, position_x: l.position_x, position_y: l.position_y,
             created_at: l.created_at, updated_at: l.updated_at,
-            tasks: lt, study_sets: setsByLesson.get(l.id) || [], completed: lessonCompleted({ tasks: lt }),
+            tasks: lt, study_sets: setsByLesson.get(l.id) || [], files: filesByLesson.get(l.id) || [], completed: lessonCompleted({ tasks: lt }),
           };
         });
         const lockReasons = phaseLockReasonsFrom({

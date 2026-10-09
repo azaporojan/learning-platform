@@ -153,6 +153,11 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
                                 {lesson.title}
                               </span>
                             </button>
+                            {(lesson.files || []).length > 0 && (
+                              <span title={`${(lesson.files || []).length} attached file(s)`} className="flex items-center text-[10px] font-bold text-gray-400 flex-shrink-0">
+                                <span className="material-icons text-sm">attach_file</span>{(lesson.files || []).length}
+                              </span>
+                            )}
                             {isAdmin && onOpenScript && (
                               <button onClick={() => onOpenScript(lesson, phase)} title="Lesson script (admin only)" className="w-6 h-6 rounded-full flex items-center justify-center text-gray-400 hover:text-purple-600 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <span className="material-icons text-base">description</span>

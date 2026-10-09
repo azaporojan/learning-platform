@@ -243,6 +243,33 @@ ranking or grading. Changing a set's `items` deletes the students' results on it
 order_index, item_count, progress}`, without items. Read a set with `GET /api/study-sets/:id`
 before you rewrite it with `PUT`.
 
+## 5c. Lesson materials (attached files)
+
+Teachers attach files to a lesson: **PDF, Word (`.doc`/`.docx`), PowerPoint (`.ppt`/`.pptx`),
+TXT and Markdown (`.md`)**, up to 50 MB each (`MAX_LESSON_FILE_MB`) and 50 per lesson. Students open
+PDF, TXT and MD files inside the app; every type can be downloaded. Reading a file follows the
+lesson's phase gates, like task briefs: a student who has not reached the phase gets
+`403 {"lockReasons":[…]}`.
+
+| Method & path | Body | Purpose |
+|---|---|---|
+| `GET /api/lessons/:id/files` | — | The lesson's files: `[{id, lesson_id, name, ext, size, viewable, view_as, order_index}]` |
+| `POST /api/lessons/:id/files` | multipart, field `files` (1–10 files) | Attach files → `201` with the created entries |
+| `PUT /api/lesson-files/:id` | `{name?, order?}` | Rename / reorder |
+| `DELETE /api/lesson-files/:id` | — | Remove the file (and its bytes) |
+| `GET /api/lesson-files/:id/view` | — | PDF inline (`application/pdf`); TXT / MD as `text/plain`. `415` for Word / PowerPoint |
+| `GET /api/lesson-files/:id/download` | — | Any type, as an attachment with its original name |
+
+```bash
+curl -sS -X POST "$LEARNING_API_URL/lessons/12/files" \
+  -H "Authorization: Bearer $LEARNING_API_KEY" \
+  -F "files=@Week 1 – Java setup.pdf" -F "files=@cheat-sheet.md"
+```
+
+The content must match the extension (a PDF must start with `%PDF-`, Office files must be real
+Office containers, TXT/MD must be text), otherwise `400`. `GET /api/courses/:id` lists each lesson's
+`files` (names and sizes only).
+
 ## 6. Using it from a Claude agent
 
 **Review before students see it.** Imported content goes live immediately, and lesson/task

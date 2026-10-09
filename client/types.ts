@@ -99,6 +99,18 @@ export interface QuizResult {
   explanation: string;
 }
 
+// Lesson materials (teacher-attached files). The content is read through /lesson-files/:id/*.
+export interface LessonFile {
+  id: number;
+  lesson_id: number;
+  name: string;
+  ext: string;          // 'pdf' | 'txt' | 'md' | 'doc' | 'docx' | 'ppt' | 'pptx'
+  size: number;         // bytes
+  viewable: boolean;    // PDF / TXT / MD open in the app
+  view_as: 'pdf' | 'text' | 'markdown' | null;
+  order_index: number;
+}
+
 export interface RoadLesson {
   id: number;
   path_id: number;
@@ -110,6 +122,7 @@ export interface RoadLesson {
   completed: boolean;
   tasks: RoadTask[];
   study_sets?: RoadStudySet[];
+  files?: LessonFile[];
 }
 
 export type LockReason = 'enroll' | 'previous' | 'stars' | 'unpublished';

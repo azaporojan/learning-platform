@@ -6,6 +6,7 @@ import Link from '@tiptap/extension-link';
 import { RoadLesson, RoadStudySet, RoadTask, StudySetKind } from '../types';
 import { NodeStatus } from '../roadState';
 import { apiUrl } from '../config';
+import { LessonMaterials } from './LessonMaterials';
 
 interface LessonModalProps {
   lesson: RoadLesson | null;
@@ -18,6 +19,7 @@ interface LessonModalProps {
   studySetStatus: (set: RoadStudySet) => NodeStatus;
   onOpenStudySet: (set: RoadStudySet) => void;
   onAddStudySet?: (kind: StudySetKind) => void; // admin
+  phaseLocked?: boolean; // student has not reached this lesson's phase (materials stay closed)
 }
 
 const isProbablyHtml = (value: string) => /<\s*[a-z][\s\S]*>/i.test(value);
@@ -32,7 +34,7 @@ const toHtml = (value: string) => {
 
 // View a lesson (summary + its tasks); admins can edit the title/summary with the rich-text
 // editor or delete the lesson.
-export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, isAdmin, onClose, onChanged, onOpenTask, onOpenScript, studySetStatus, onOpenStudySet, onAddStudySet }) => {
+export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, isAdmin, onClose, onChanged, onOpenTask, onOpenScript, studySetStatus, onOpenStudySet, onAddStudySet, phaseLocked = false }) => {
   const [mode, setMode] = useState<'view' | 'edit' | 'delete'>('view');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -140,7 +142,7 @@ export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, is
             <div className="flex flex-col items-center text-center py-8">
               <span className="material-icons text-red-500 text-5xl mb-3">warning</span>
               <h4 className="text-xl font-bold text-gray-800 dark:text-white mb-2">Delete this lesson?</h4>
-              <p className="text-gray-600 dark:text-gray-300 max-w-md">All of its tasks, quizzes and flashcards — and every student submission and result on them — will be deleted. This cannot be undone.</p>
+              <p className="text-gray-600 dark:text-gray-300 max-w-md">All of its tasks, quizzes, flashcards and attached files — and every student submission and result on them — will be deleted. This cannot be undone.</p>
             </div>
           ) : mode === 'edit' ? (
             <div>
@@ -217,6 +219,8 @@ export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, is
                   })}
                 </div>
               </div>
+
+              <LessonMaterials lessonId={lesson.id} files={lesson.files || []} isAdmin={isAdmin} locked={phaseLocked} onChanged={onChanged} />
 
               {(isAdmin || (lesson.study_sets || []).length > 0) && (
                 <div className="border-t border-gray-200 dark:border-gray-700 pt-6 mt-6">

@@ -105,7 +105,7 @@ async function waitForHealth(child) {
 // Minimal cookie-jar fetch
 function session() {
   let cookieHeader = '';
-  return async (pathname, opts = {}) => {
+  const call = async (pathname, opts = {}) => {
     const headers = { ...(opts.headers || {}) };
     if (cookieHeader) headers.cookie = cookieHeader;
     if (opts.json !== undefined) {
@@ -119,6 +119,8 @@ function session() {
     try { body = await res.json(); } catch (e) { /* non-JSON */ }
     return { status: res.status, body, res };
   };
+  call.cookie = () => cookieHeader;
+  return call;
 }
 
 // Notification emails are sent without blocking the request (and only logged in tests, where
@@ -130,6 +132,9 @@ async function waitForOutput(child, pattern) {
   }
   assert.fail(`server output never matched ${pattern}:\n${child.getOutput().slice(-2000)}`);
 }
+
+// Files in the uploads root (lesson materials live in their own subfolder)
+const uploadedFiles = (dir) => fs.readdirSync(dir).filter((f) => fs.statSync(path.join(dir, f)).isFile());
 
 // The server removes a rejected upload asynchronously: give the unlink a moment to land
 async function eventually(check, message) {
@@ -376,7 +381,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const early = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: earlyForm });
   assert.equal(early.status, 403, JSON.stringify(early.body));
   assert.deepEqual(early.body.lockReasons, ['enroll']);
-  await eventually(() => fs.readdirSync(uploadsDir).length === 0, 'the refused upload was not removed');
+  await eventually(() => uploadedFiles(uploadsDir).length === 0, 'the refused upload was not removed');
   const firstEnrol = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' });
   assert.equal(firstEnrol.status, 200);
 
@@ -384,7 +389,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   form.append('file', new Blob(['<script>alert(1)</script>'], { type: 'text/html' }), '../evil name.html');
   const submit = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: form });
   assert.equal(submit.status, 201, JSON.stringify(submit.body));
-  const stored = fs.readdirSync(uploadsDir);
+  const stored = uploadedFiles(uploadsDir);
   assert.equal(stored.length, 1);
   assert.match(stored[0], /-evil_name\.html$/); // sanitised basename, no traversal
 
@@ -422,7 +427,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   blank.append('comment', '   \n\t ');
   assert.equal((await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: blank })).status, 400);
   for (const sid of [commentOnly.body.id, both.body.id]) assert.equal((await stud(`/submissions/${sid}`, { method: 'DELETE' })).status, 200);
-  await eventually(() => fs.readdirSync(uploadsDir).length === 1, 'deleted submission files were not removed');
+  await eventually(() => uploadedFiles(uploadsDir).length === 1, 'deleted submission files were not removed');
 
   // Admin review inbox: every submission with its place in the course and a deep-link target
   assert.equal((await stud('/admin/submissions')).status, 403);
@@ -568,7 +573,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const lockedSubmit = await stud(`/tasks/${phase2Task.body.id}/submit`, { method: 'POST', body: lockedForm });
   assert.equal(lockedSubmit.status, 403, JSON.stringify(lockedSubmit.body));
   assert.deepEqual(lockedSubmit.body.lockReasons, ['enroll']);
-  await eventually(() => fs.readdirSync(uploadsDir).length === 1, 'the rejected upload was not removed');
+  await eventually(() => uploadedFiles(uploadsDir).length === 1, 'the rejected upload was not removed');
   // The legacy read routes apply the same rule
   const legacyDetails = await anon(`/paths/${phase2.body.id}/details`);
   assert.equal(legacyDetails.status, 200);
@@ -581,6 +586,12 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(adminLegacyTask.body.description, 'secret brief');
   const enrol = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' });
   assert.equal(enrol.status, 200);
+  const unicodeForm = new FormData();
+  unicodeForm.append('file', new Blob(['tema'], { type: 'text/plain' }), 'Temă – Ștefan.txt');
+  const unicodeSubmit = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: unicodeForm });
+  assert.equal(unicodeSubmit.status, 201, JSON.stringify(unicodeSubmit.body));
+  assert.equal(unicodeSubmit.body.fileName, 'Temă – Ștefan.txt'); // not latin1-garbled
+  assert.equal((await stud(`/submissions/${unicodeSubmit.body.id}`, { method: 'DELETE' })).status, 200);
   const enrolAgain = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' }); // idempotent
   assert.equal(enrolAgain.status, 200);
   const catalogue = await stud('/courses');
@@ -607,6 +618,58 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.ok(badSet.body.details.some((d) => /options/.test(d)), JSON.stringify(badSet.body));
   const ghostLessonSet = await admin('/study-sets', { method: 'POST', json: { lessonId: 999999, kind: 'flashcards', title: 'F', items: [] } });
   assert.equal(ghostLessonSet.status, 404);
+  // Lesson materials: teachers attach Word / PowerPoint / PDF / TXT / MD files to a lesson
+  const pdfBytes = '%PDF-1.4\n1 0 obj <<>> endobj\ntrailer <<>>\n%%EOF\n';
+  const filesForm = (entries) => {
+    const f = new FormData();
+    for (const [name, content, type] of entries) f.append('files', new Blob([content], { type: type || 'application/octet-stream' }), name);
+    return f;
+  };
+  assert.equal((await stud(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['a.pdf', pdfBytes]]) })).status, 403);
+  assert.equal((await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['virus.exe', 'MZ']]) })).status, 400);
+  const fakePdf = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['page.pdf', '<html><script>alert(1)</script></html>']]) });
+  assert.equal(fakePdf.status, 400, 'an HTML file renamed to .pdf is refused');
+  assert.equal(fs.readdirSync(path.join(uploadsDir, 'lesson-files')).length, 0, 'refused uploads leave no bytes behind');
+  const uploaded = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([
+    ['Curs 1 – introducere.pdf', pdfBytes, 'application/pdf'],
+    ['notes.md', '# Week 2\n\n- **HTTP** basics\n- <script>alert(1)</script>', 'text/markdown'],
+    ['slides.pptx', Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3])],
+  ]) });
+  assert.equal(uploaded.status, 201, JSON.stringify(uploaded.body));
+  assert.deepEqual(uploaded.body.map((f) => [f.ext, f.viewable, f.view_as]), [['pdf', true, 'pdf'], ['md', true, 'markdown'], ['pptx', false, null]]);
+  const [p2Pdf, p2Md, p2Pptx] = uploaded.body;
+  assert.equal(p2Pdf.name, 'Curs 1 – introducere.pdf');
+  // On the road (names only) and readable by an enrolled student who reached the phase
+  const roadFiles = (await stud(`/courses/${course.body.id}`)).body.phases[1].lessons[0].files;
+  assert.deepEqual(roadFiles.map((f) => f.name), ['Curs 1 – introducere.pdf', 'notes.md', 'slides.pptx']);
+  const pdfView = await fetch(`${BASE}/lesson-files/${p2Pdf.id}/view`, { headers: { cookie: stud.cookie() } });
+  assert.equal(pdfView.status, 200);
+  assert.equal(pdfView.headers.get('content-type'), 'application/pdf');
+  assert.match(pdfView.headers.get('content-disposition'), /^inline;/);
+  assert.match(pdfView.headers.get('content-disposition'), /filename\*=UTF-8''Curs%201%20%E2%80%93%20introducere\.pdf/);
+  assert.equal(await pdfView.text(), pdfBytes);
+  const mdView = await fetch(`${BASE}/lesson-files/${p2Md.id}/view`, { headers: { cookie: stud.cookie() } });
+  assert.equal(mdView.headers.get('content-type'), 'text/plain; charset=utf-8'); // never HTML on this origin
+  assert.match(mdView.headers.get('content-security-policy'), /sandbox/);
+  assert.equal(mdView.headers.get('x-content-type-options'), 'nosniff');
+  assert.match(await mdView.text(), /# Week 2/);
+  assert.equal((await stud(`/lesson-files/${p2Pptx.id}/view`)).status, 415, 'PowerPoint is download-only');
+  const pptxDl = await fetch(`${BASE}/lesson-files/${p2Pptx.id}/download`, { headers: { cookie: stud.cookie() } });
+  assert.equal(pptxDl.status, 200);
+  assert.match(pptxDl.headers.get('content-disposition'), /^attachment; filename="slides\.pptx"/);
+  assert.equal((await anon(`/lesson-files/${p2Pdf.id}/view`)).status, 401);
+  // The public uploads route never serves lesson materials (they follow the lesson's lock rules)
+  const storedName = fs.readdirSync(path.join(uploadsDir, 'lesson-files'))[0];
+  assert.equal((await anon(`/uploads/lesson-files/${storedName}`)).status, 404);
+  // Rename, delete (bytes removed)
+  const renamedFile = await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { name: 'Week 2 notes.md' } });
+  assert.equal(renamedFile.body.name, 'Week 2 notes.md');
+  const tmp = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['tmp.txt', 'temporary']]) });
+  assert.equal(fs.readdirSync(path.join(uploadsDir, 'lesson-files')).length, 4);
+  assert.equal((await stud(`/lesson-files/${tmp.body[0].id}`, { method: 'DELETE' })).status, 403);
+  assert.equal((await admin(`/lesson-files/${tmp.body[0].id}`, { method: 'DELETE' })).status, 200);
+  await eventually(() => fs.readdirSync(path.join(uploadsDir, 'lesson-files')).length === 3, 'deleted lesson file bytes were not removed');
+
   const quiz = await admin('/study-sets', { method: 'POST', json: {
     lessonId: phase2Lesson.body.id, kind: 'quiz', title: 'Phase 2 check', items: [
       { question: 'Which HTTP status means Not Found?', options: ['200', '404', '500'], correct: 1, explanation: '4xx = client error' },
@@ -712,13 +775,18 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   ghostForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'ghost.txt');
   const ghostSubmit = await stud('/tasks/999999/submit', { method: 'POST', body: ghostForm });
   assert.equal(ghostSubmit.status, 404);
-  await eventually(() => !fs.readdirSync(uploadsDir).some((f) => f.endsWith('ghost.txt')), 'the ghost upload was not removed');
+  await eventually(() => !uploadedFiles(uploadsDir).some((f) => f.endsWith('ghost.txt')), 'the ghost upload was not removed');
   assert.equal((await admin('/paths/999999', { method: 'DELETE' })).status, 404);
   // Add a star gate on phase 2 that the student (10 stars) does not meet
   const gate = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 500 } });
   assert.equal(gate.status, 200);
   const roadGated = await stud(`/courses/${course.body.id}`);
   assert.deepEqual(roadGated.body.phases[1].lockReasons, ['stars']);
+  // …and so are its lesson materials (the list is visible, the content is not)
+  assert.equal((await stud(`/lesson-files/${p2Pdf.id}/view`)).status, 403);
+  assert.equal((await stud(`/lesson-files/${p2Pdf.id}/download`)).status, 403);
+  assert.equal((await stud(`/lessons/${phase2Lesson.body.id}/files`)).body.length, 3);
+  assert.equal((await admin(`/lesson-files/${p2Pdf.id}/view`)).status, 200);
   // …and its study sets are closed too
   const lockedSet = await stud(`/study-sets/${quiz.body.id}`);
   assert.equal(lockedSet.status, 403);

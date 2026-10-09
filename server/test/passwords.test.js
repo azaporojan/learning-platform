@@ -57,7 +57,9 @@ test('stored hashes are sealed scrypt: a database copy alone holds nothing to cr
   assert.deepEqual(await passwords.verifyPassword('wrong', stored), { ok: false, needsRehash: false });
   assert.deepEqual(await passwords.verifyPassword('Blue-Kettle-Morning-7', null), { ok: false, needsRehash: false });
   // Tampering with the ciphertext is detected (GCM tag)
-  const tampered = stored.slice(0, -3) + (stored.endsWith('A') ? 'B' : 'A') + stored.slice(-2);
+  const flip = stored.at(-3) === 'A' ? 'B' : 'A'; // always a different character
+  const tampered = stored.slice(0, -3) + flip + stored.slice(-2);
+  assert.notEqual(tampered, stored);
   assert.equal((await passwords.verifyPassword('Blue-Kettle-Morning-7', tampered)).ok, false);
 
   // Without the key (an attacker holding only the database) the value cannot even be opened

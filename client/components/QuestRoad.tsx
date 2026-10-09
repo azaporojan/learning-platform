@@ -228,7 +228,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                     </span>
                   )}
                 </button>
-                <Tooltip text={lesson.title} sub={`${shortPhaseName(stop.phase)} · ${lesson.tasks.length} task${lesson.tasks.length === 1 ? '' : 's'}`} above={lastRow(i)} align={tipAlign(p.x)} />
+                <Tooltip text={lesson.title} sub={`${shortPhaseName(stop.phase)} · ${lesson.tasks.length} task${lesson.tasks.length === 1 ? '' : 's'}${(lesson.files || []).length ? ` · ${(lesson.files || []).length} file${(lesson.files || []).length === 1 ? '' : 's'}` : ''}`} above={lastRow(i)} align={tipAlign(p.x)} />
               </div>
 
               {/* Task chain below the lesson */}

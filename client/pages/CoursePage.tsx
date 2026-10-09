@@ -311,6 +311,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
         onOpenTask={(task) => { setLessonModal(null); openTask(task); }}
         onOpenScript={isAdmin && lessonModal ? () => navigate(`/courses/${course.id}/lessons/${lessonModal.id}/script`) : undefined}
         studySetStatus={(set) => state.studySets.get(set.id) || 'open'}
+        phaseLocked={!isAdmin && lessonModal !== null && course.phases.some((p) => p.locked && p.lessons.some((l) => l.id === lessonModal.id))}
         onOpenStudySet={(set) => { setLessonModal(null); openStudySet(set); }}
         onAddStudySet={isAdmin && lessonModal ? (kind) => { const l = lessonModal; setLessonModal(null); addStudySet(l, kind); } : undefined}
       />

@@ -148,6 +148,9 @@ const INLINE_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.gif']);
 // Serve uploads. Only raster images are rendered inline; everything else (HTML, JS, CSS,
 // PDFs, archives, ...) is forced to download so a student submission can never execute
 // as a page on this origin (stored XSS).
+// Lesson materials live in <uploads>/lesson-files and are only served through
+// /api/lesson-files/:id/* (which applies the lesson's lock rules) — never by the public route.
+api.use('/uploads/lesson-files', (req, res) => res.status(404).json({ error: 'Not found' }));
 api.use('/uploads', express.static(uploadsDir, {
   index: false,
   dotfiles: 'deny',
@@ -1310,6 +1313,7 @@ const courseRoutes = require('./courses');
 courseRoutes.registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId });
 const studySets = require('./studySets');
 studySets.registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons });
+const lessonFiles = require('./lessonFiles').registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons, uploadsDir });
 
 api.get('/paths', async (req, res) => {
   const userId = await optionalUserId(req);
@@ -1461,6 +1465,7 @@ api.delete('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
     const { id } = req.params;
 
     // Deleting a phase closes the gap in its course's numbering and refreshes open course pages.
+    const dropFiles = await lessonFiles.filesOf({ pathId: id });
     const courseId = await db.transaction(async (tx) => {
       const [rows] = await tx.query('SELECT course_id FROM paths WHERE id = ?', [id]);
       if (rows.length === 0) { const err = new Error('Path not found'); err.status = 404; throw err; }
@@ -1471,6 +1476,7 @@ api.delete('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
       if (rows[0].course_id !== null) await courseRoutes.renumberCourse(tx, rows[0].course_id);
       return rows[0].course_id;
     });
+    dropFiles(); // lesson materials of the deleted phase
     if (courseId !== null) io.emit('course:updated', { courseId });
     res.json({ success: true });
   } catch (error) {
@@ -1706,8 +1712,10 @@ api.delete('/lessons/:id', authenticateToken, requireAdmin, async (req, res) => 
     const [lessons] = await db.query('SELECT path_id FROM lessons WHERE id = ?', [id]);
     const pathId = lessons.length > 0 ? lessons[0].path_id : null;
 
-    // Tasks will be deleted automatically due to CASCADE
+    // Tasks (and lesson files) will be deleted automatically due to CASCADE; the files' bytes too
+    const dropFiles = await lessonFiles.filesOf({ lessonId: id });
     await db.query('DELETE FROM lessons WHERE id = ?', [id]);
+    dropFiles();
 
     // Emit Socket.IO event for live lesson deletion
     if (pathId) {
@@ -1900,6 +1908,8 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
   const { id } = req.params;
   const userId = req.user.id; // always the authenticated user — never trust the body
   const dropUpload = () => { if (req.file) fs.unlink(req.file.path, () => {}); };
+  // multer decodes multipart file names as latin1: keep "Temă – Ștefan.docx" readable
+  if (req.file) req.file.originalname = require('./lessonFiles').utf8Name(req.file.originalname);
 
   // A submission is a comment (pull-request link, Jira ticket, note), a file, or both.
   const comment = typeof req.body?.comment === 'string' ? req.body.comment.trim() : '';
@@ -3215,6 +3225,8 @@ if (fs.existsSync(path.join(publicDir, 'index.html'))) {
     console.error('[FATAL] Database migration failed:', err.message || err);
     process.exit(1);
   }
+  lessonFiles.removeOrphanFiles(); // bytes of lesson files whose rows were deleted while offline
+
   // Encrypt any hash not yet sealed with the current key (first start after this release,
   // or after rotating PASSWORD_PEPPER)
   const { failed } = await passwords.sealAllPasswords(db);

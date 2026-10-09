@@ -15,7 +15,7 @@ database on the **shared PostgreSQL** service; uploads live on a Docker volume.
 | Deployed by | push to `main` → `deploy` job → `DOKPLOY_WEBHOOK_URL` |
 | Domain | `learning.bsf.md` → container port 3001, Let's Encrypt |
 | Database | `learning_platform` / role `learning_platform` on the shared Postgres (`common-stuff-postgres-vmlpfq:5432`, project **Infrastructure**) |
-| Uploads | volume `learning-platform-uploads` mounted at `/app/server/uploads` |
+| Uploads | volume `learning-platform-uploads` mounted at `/app/server/uploads` (submissions, images, and lesson materials in `lesson-files/`) |
 | Health check | `GET /api/health` → `{"status":"ok"}` (Docker `HEALTHCHECK`) |
 | Rollback | redeploy a previous `:<sha>` tag from the Dokploy UI |
 
