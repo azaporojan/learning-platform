@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const bcrypt = require('bcrypt');
+const passwords = require('./passwords');
 const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
@@ -41,6 +41,15 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
   console.warn('[WARN] JWT_SECRET is missing or short — using an insecure development fallback.');
 }
 const jwtSecret = JWT_SECRET && JWT_SECRET.length >= 32 ? JWT_SECRET : 'insecure-development-only-secret-do-not-use';
+
+// PASSWORD_PEPPER encrypts every stored password hash (see passwords.js): a copy of the database
+// alone is useless for cracking. Like JWT_SECRET, production refuses to start without it.
+try {
+  console.log(`[Passwords] Hashes are sealed with key ${passwords.configure(process.env)}`);
+} catch (err) {
+  console.error(`[FATAL] ${err.message}`);
+  process.exit(1);
+}
 
 // CORS origins - only needed when the client is served from a different origin (local dev).
 // In production the client build is served by this server, so the browser never sends CORS.
@@ -106,7 +115,7 @@ const apiLimiter = rateLimit({
 });
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 20,
+  limit: Math.max(1, parseInt(process.env.AUTH_RATE_LIMIT || '20', 10)),
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'Too many attempts. Please try again later.' },
@@ -139,6 +148,17 @@ const INLINE_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.gif']);
 // Serve uploads. Only raster images are rendered inline; everything else (HTML, JS, CSS,
 // PDFs, archives, ...) is forced to download so a student submission can never execute
 // as a page on this origin (stored XSS).
+// Lesson materials live in <uploads>/lesson-files and are only served through
+// /api/lesson-files/:id/* (which applies the lesson's lock rules) — never by the public route.
+// The check runs on the decoded, normalised path: express.static decodes it (lesson%2Dfiles,
+// ./lesson-files, x/../lesson-files) after routing, so matching the raw route is not enough.
+api.use('/uploads', (req, res, next) => {
+  let decoded;
+  try { decoded = decodeURIComponent(req.path); } catch { return res.status(404).json({ error: 'Not found' }); }
+  const normalised = path.posix.normalize(`/${decoded.replace(/\\/g, '/')}`).toLowerCase();
+  if (normalised === '/lesson-files' || normalised.startsWith('/lesson-files/')) return res.status(404).json({ error: 'Not found' });
+  next();
+});
 api.use('/uploads', express.static(uploadsDir, {
   index: false,
   dotfiles: 'deny',
@@ -209,7 +229,7 @@ const uploadImage = multer({
 // ---------------------------------------------------------------------------
 const emailEnabled = Boolean(process.env.EMAIL_USER && process.env.EMAIL_PASS);
 if (!emailEnabled) {
-  console.warn('[Email] EMAIL_USER/EMAIL_PASS not set — outgoing emails (login codes, notifications) are disabled and logged instead.');
+  console.warn('[Email] EMAIL_USER/EMAIL_PASS not set — outgoing emails (login codes, notifications) are disabled (set LOG_LOGIN_CODES=true in dev to print login codes).');
 }
 const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -226,17 +246,43 @@ const transporter = nodemailer.createTransport({
 // Send an email, or log it when SMTP is not configured (dev / CI).
 async function deliverMail(message) {
   if (!emailEnabled) {
-    console.log(`[Email] (disabled) to=${message.to} subject="${message.subject}"`);
+    // Production logs never carry full email addresses (a***@example.com); dev/test keep them
+    const to = isProduction ? String(message.to).replace(/^(.)[^@]*/, '$1***') : message.to;
+    console.log(`[Email] (disabled) to=${to} subject="${message.subject}"${message.link ? ` link=${message.link}` : ''}`);
     return;
   }
-  await transporter.sendMail(message);
+  const { link, ...mail } = message; // `link` is only for the log line above
+  await transporter.sendMail(mail);
 }
 
 // ---------------------------------------------------------------------------
 // Auth helpers
 // ---------------------------------------------------------------------------
 function verifySessionToken(token) {
-  return jwt.verify(token, jwtSecret); // { id, role }
+  return jwt.verify(token, jwtSecret, { algorithms: ['HS256'] }); // { id, role, sv }
+}
+
+// A session cookie is valid only while its session version matches the user's: changing the
+// password bumps the version, which signs out every other device at once.
+async function sessionFromToken(token) {
+  if (!token) return null;
+  let decoded;
+  try { decoded = verifySessionToken(token); } catch (e) { return null; }
+  const [rows] = await db.query('SELECT role, session_version FROM users WHERE id = ?', [decoded.id]);
+  if (rows.length === 0 || rows[0].session_version !== (decoded.sv || 0)) return null;
+  // The role is read fresh here (not trusted from the token), so requireAdmin can reuse it
+  return { ...decoded, role: rows[0].role, roleFromDb: true };
+}
+
+const SESSION_MS = 24 * 60 * 60 * 1000;
+function issueSession(res, user) {
+  const token = jwt.sign({ id: user.id, role: user.role, sv: user.session_version || 0 }, jwtSecret, { algorithm: 'HS256', expiresIn: '24h' });
+  res.cookie('token', token, {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'strict' : 'lax',
+    maxAge: SESSION_MS,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -291,10 +337,13 @@ const authenticateToken = async (req, res, next) => {
   }
 
   try {
-    req.user = verifySessionToken(token); // { id, role }
+    const session = await sessionFromToken(token); // { id, role, sv }
+    if (!session) return res.status(401).json({ error: 'Invalid token' });
+    req.user = session;
     next();
   } catch (err) {
-    return res.status(401).json({ error: 'Invalid token' });
+    console.error('[Auth] Session check failed:', err);
+    return res.status(500).json({ error: 'Server error.' });
   }
 };
 
@@ -302,7 +351,8 @@ const authenticateToken = async (req, res, next) => {
 // demoted/deleted admin loses access immediately, not when their token expires.
 const requireAdmin = async (req, res, next) => {
   try {
-    const [rows] = await db.query('SELECT role FROM users WHERE id = ?', [req.user.id]);
+    // Session requests already carry the role read by sessionFromToken in this request
+    const [rows] = req.user.roleFromDb ? [[{ role: req.user.role }]] : await db.query('SELECT role FROM users WHERE id = ?', [req.user.id]);
     if (rows.length === 0 || rows[0].role !== 'admin') {
       return res.status(403).json({ error: 'Admin access required' });
     }
@@ -315,14 +365,9 @@ const requireAdmin = async (req, res, next) => {
 };
 
 // Read the session from the cookie without rejecting anonymous requests.
-function optionalUserId(req) {
-  const token = req.cookies.token;
-  if (!token) return null;
-  try {
-    return verifySessionToken(token).id;
-  } catch (e) {
-    return null;
-  }
+async function optionalUserId(req) {
+  const session = await sessionFromToken(req.cookies.token);
+  return session ? session.id : null;
 }
 
 // Escape user-provided text before interpolating it into HTML emails.
@@ -337,6 +382,9 @@ function escapeHtml(value) {
 
 // Helper function to send email
 const sendLoginCode = async (email, code) => {
+  // Without SMTP, local dev / CI can opt in to printing the code (LOG_LOGIN_CODES=true) so you can
+  // still log in. Never in production, and never by default (a staging box must not log codes).
+  if (!emailEnabled && !isProduction && process.env.LOG_LOGIN_CODES === 'true') console.log(`[Email] (disabled) login code for ${email}: ${code}`);
   try {
     await deliverMail({
       from: `"Learning App" <${process.env.EMAIL_USER}>`,
@@ -359,38 +407,30 @@ const sendLoginCode = async (email, code) => {
   }
 };
 
-// Generic helper function to send any email
-const sendEmail = async (email, subject, htmlContent) => {
+// Absolute URL of an in-app path (deep link), e.g. '/courses/1?lesson=2&task=3'
+const appUrl = (link) => `${FRONTEND_URL.replace(/\/+$/, '')}${link && link.startsWith('/') ? link : '/'}`;
+
+// Helper function to send notification email. `message` is trusted HTML (escape user input
+// before passing it); the button deep-links to `link` (an in-app path) when given.
+const sendNotificationEmail = async (email, subject, message, link = null, actionLabel = 'Open in Learning Platform') => {
 
   try {
+    const url = appUrl(link);
     await deliverMail({
       from: `"Learning Platform" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: subject,
-      html: htmlContent
-    });
-  } catch (error) {
-    console.error('[ERROR] Failed to send email:', error);
-  }
-};
-
-// Helper function to send notification email
-const sendNotificationEmail = async (email, subject, message) => {
-
-  try {
-    await deliverMail({
-      from: `"Learning Platform" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: subject,
+      link: url,
       html: `
         <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px; max-width: 500px;">
           <h2 style="color: #333;">🎓 Learning Platform</h2>
           <p>${message}</p>
           <p style="margin-top: 20px;">
-            <a href="${FRONTEND_URL}" style="background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
-              Access Platform
+            <a href="${escapeHtml(url)}" style="background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
+              ${escapeHtml(actionLabel)}
             </a>
           </p>
+          <p style="color: #999; font-size: 12px;">Or open: <a href="${escapeHtml(url)}" style="color: #999;">${escapeHtml(url)}</a></p>
           <p style="color: #999; font-size: 12px; margin-top: 20px;">This email was sent automatically by Learning Platform.</p>
         </div>
       `
@@ -410,39 +450,86 @@ api.get('/health', async (req, res) => {
   }
 });
 
+// One wrong password (at login, or as the "current password" of a password change). The 10th in
+// a row locks the account for 15 minutes, voids any login code already sent, and tells the owner.
+async function recordFailedPassword(user) {
+  const [after] = await db.query(
+    `UPDATE users SET
+       failed_login_attempts = CASE WHEN failed_login_attempts + 1 >= 10 THEN 0 ELSE failed_login_attempts + 1 END,
+       locked_until = CASE WHEN failed_login_attempts + 1 >= 10 THEN NOW() + INTERVAL '15 minutes' ELSE locked_until END,
+       login_code = CASE WHEN failed_login_attempts + 1 >= 10 THEN NULL ELSE login_code END,
+       login_code_expires = CASE WHEN failed_login_attempts + 1 >= 10 THEN NULL ELSE login_code_expires END
+     WHERE id = ? RETURNING locked_until`,
+    [user.id]
+  );
+  const lockedNow = after[0] && after[0].locked_until && new Date(after[0].locked_until) > new Date() && !(user.locked_until && new Date(user.locked_until) > new Date());
+  if (lockedNow) {
+    sendNotificationEmail(
+      user.email,
+      'Your account was locked for 15 minutes 🔒',
+      `There were 10 failed password attempts on your Learning Platform account, so logging in is paused for 15 minutes.<br><br>
+       If this was you, wait and try again. If not, someone may be guessing your password: once you can log in,
+       change it from your profile (or ask an administrator for help).`,
+      '/courses',
+      'Open the Learning Platform'
+    );
+  }
+  return lockedNow;
+}
+
 api.post('/login', authLimiter, async (req, res) => {
-  const { email, password } = req.body || {};
-  if (typeof email !== 'string' || typeof password !== 'string') {
+  const { password } = req.body || {};
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : null;
+  if (!email || typeof password !== 'string') {
     return res.status(400).json({ error: 'Email and password are required.' });
   }
 
   try {
-    const [users] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
+    const [users] = await db.query(
+      'SELECT id, email, password, role, is_approved, failed_login_attempts, locked_until FROM users WHERE email = ?',
+      [email]
+    );
+    const user = users[0] || null;
 
-    if (users.length === 0) {
+    // Per-account lock (10 wrong passwords → 15 minutes), on top of the per-IP rate limit.
+    // While locked, even the right password is refused — with the same answer, in the same time,
+    // as a wrong password or an unknown email, so the lock reveals neither the account nor a
+    // correct guess. The owner learns about the lock by email instead.
+    const locked = Boolean(user && user.locked_until && new Date(user.locked_until) > new Date());
+
+    // Unknown emails are checked against a dummy hash, so every case takes the same time
+    const { ok, needsRehash, unreadable } = await passwords.verifyPassword(password, user && !locked ? user.password : null);
+    if (!ok) {
+      if (user && !locked && !unreadable) await recordFailedPassword(user);
       return res.status(401).json({ error: 'Incorrect email or password.' });
     }
-
-    const user = users[0];
-
-    // Verifică parola
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-      return res.status(401).json({ error: 'Incorrect email or password.' });
+    if (user.failed_login_attempts > 0 || user.locked_until) {
+      await db.query('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?', [user.id]);
     }
-
     // Verifică dacă contul e aprobat
     if (!user.is_approved && user.role !== 'admin') { // Adminii trec direct, de obicei, dar poți schimba
       return res.status(403).json({ error: 'Your account has not been approved by an administrator yet.' });
     }
 
+    // Legacy / older hashes are upgraded transparently (after the approval check: no scrypt work
+    // for an account that cannot log in anyway)
+    if (needsRehash) {
+      // Only if the hash is still the one just verified: a password changed meanwhile must win
+      // Best effort: when the server is busy the upgrade simply waits for the next login
+      try {
+        await db.query('UPDATE users SET password = ? WHERE id = ? AND password = ?', [await passwords.hashPassword(password), user.id, user.password]);
+      } catch (err) {
+        if (!passwords.isBusy(err)) throw err;
+      }
+    }
+
     // Generează cod 6 cifre (CSPRNG)
     const code = crypto.randomInt(100000, 1000000).toString();
 
-    // Salvează codul în DB (expiră în 10 min)
+    // Salvează doar hash-ul codului în DB (expiră în 10 min)
     await db.query(
       "UPDATE users SET login_code = ?, login_code_expires = NOW() + INTERVAL '10 minutes', login_code_attempts = 0 WHERE id = ?",
-      [code, user.id]
+      [passwords.hashLoginCode(code), user.id]
     );
 
     // Trimite email (sau loghează în consolă)
@@ -451,6 +538,7 @@ api.post('/login', authLimiter, async (req, res) => {
     res.json({ message: 'Code sent via email.', step: 'code_required', userId: user.id });
 
   } catch (err) {
+    if (passwords.isBusy(err)) return res.status(503).json({ error: 'The server is busy, please try again in a moment.' });
     console.error(err);
     res.status(500).json({ error: 'Server error.' });
   }
@@ -458,55 +546,64 @@ api.post('/login', authLimiter, async (req, res) => {
 
 // 2. Endpoint: Verificare Cod (Finalizează Login)
 api.post('/verify-code', authLimiter, async (req, res) => {
-  const { userId, code } = req.body || {};
-  if (!Number.isInteger(Number(userId)) || typeof code !== 'string') {
+  const { code } = req.body || {};
+  // Same id rule as route params: digits only, int4-sized (1.5, "1e2" or a huge id would reach
+  // PostgreSQL as a cast error)
+  const userId = /^\d{1,9}$/.test(String(req.body?.userId)) ? Number(req.body.userId) : NaN;
+  if (!Number.isInteger(userId) || typeof code !== 'string') {
     return res.status(400).json({ error: 'User ID and code are required.' });
   }
 
   try {
-    const [users] = await db.query('SELECT * FROM users WHERE id = ?', [userId]);
+    const [users] = await db.query(
+      'SELECT id, name, email, role, stars, avatar_url, is_approved, session_version, login_code, login_code_expires, login_code_attempts, locked_until FROM users WHERE id = ?',
+      [userId]
+    );
     if (users.length === 0) return res.status(404).json({ error: 'User not found.' });
 
     const user = users[0];
 
-    // Verifică expirarea (și că există un cod activ)
+    // Approval is re-checked here too: an account un-approved after /login must not get a session
+    if (!user.is_approved && user.role !== 'admin') {
+      return res.status(403).json({ error: 'Your account has not been approved by an administrator yet.' });
+    }
+
+    // Verifică expirarea (și că există un cod activ); un cont blocat nu poate termina login-ul
     const now = new Date();
-    if (!user.login_code || !user.login_code_expires || new Date(user.login_code_expires) < now) {
+    if ((user.locked_until && new Date(user.locked_until) > now) || !user.login_code || !user.login_code_expires || new Date(user.login_code_expires) < now) {
       return res.status(400).json({ error: 'Code expired. Please try again.' });
     }
 
     // Verifică codul — max 5 încercări per cod, apoi codul este invalidat (anti brute-force)
-    const expected = Buffer.from(String(user.login_code));
-    const provided = Buffer.from(code);
-    const codeMatches = expected.length === provided.length && crypto.timingSafeEqual(expected, provided);
-    if (!codeMatches) {
-      const attempts = (user.login_code_attempts || 0) + 1;
-      if (attempts >= 5) {
+    // Each try is claimed atomically BEFORE comparing, so parallel requests cannot exceed the
+    // 5 tries per code (a read-then-write counter could be raced past its cap)
+    const [claimed] = await db.query(
+      `UPDATE users SET login_code_attempts = login_code_attempts + 1
+       WHERE id = ? AND login_code IS NOT NULL AND login_code_attempts < 5 AND login_code_expires > NOW()
+       RETURNING login_code, login_code_attempts`,
+      [userId]
+    );
+    if (claimed.length === 0) {
+      await db.query('UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ?', [userId]);
+      return res.status(400).json({ error: 'Too many incorrect attempts. Please log in again.' });
+    }
+    if (!passwords.loginCodeMatches(code, claimed[0].login_code)) {
+      if (claimed[0].login_code_attempts >= 5) {
         await db.query('UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ?', [userId]);
         return res.status(400).json({ error: 'Too many incorrect attempts. Please log in again.' });
       }
-      await db.query('UPDATE users SET login_code_attempts = ? WHERE id = ?', [attempts, userId]);
       return res.status(400).json({ error: 'Incorrect code.' });
     }
 
-    // Login cu succes -> Șterge codul folosit
-    await db.query('UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ?', [userId]);
-
-    // Generare Token JWT
-    const token = jwt.sign(
-      { id: user.id, role: user.role },
-      jwtSecret,
-      { expiresIn: '24h' }
+    // Login cu succes -> consumă codul (o singură dată: două cereri paralele nu pot folosi același cod)
+    const [consumed] = await db.query(
+      'UPDATE users SET login_code = NULL, login_code_expires = NULL, login_code_attempts = 0 WHERE id = ? AND login_code = ? RETURNING id',
+      [userId, claimed[0].login_code]
     );
+    if (consumed.length === 0) return res.status(400).json({ error: 'Code expired. Please try again.' });
 
-    // Setare Cookie HTTP-Only
-    const isProduction = NODE_ENV === 'production';
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'strict' : 'lax',
-      maxAge: 24 * 60 * 60 * 1000 // 24 hours
-    });
+    // Cookie HTTP-only cu JWT (poartă versiunea sesiunii)
+    issueSession(res, user);
 
     res.json({
       message: 'Authentication successful!',
@@ -532,9 +629,10 @@ api.get('/me', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    const decoded = verifySessionToken(token);
+    const decoded = await sessionFromToken(token);
+    if (!decoded) return res.status(401).json({ error: 'Invalid token' });
 
-    const [users] = await db.query('SELECT id, name, email, role, stars, avatar_url FROM users WHERE id = ?', [decoded.id]);
+    const [users] = await db.query('SELECT id, name, email, role, stars, avatar_url, password_changed_at FROM users WHERE id = ?', [decoded.id]);
     if (users.length === 0) return res.status(404).json({ error: 'User not found' });
 
     res.json({ user: users[0] });
@@ -549,7 +647,8 @@ api.put('/me', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    const decoded = verifySessionToken(token);
+    const decoded = await sessionFromToken(token);
+    if (!decoded) return res.status(401).json({ error: 'Invalid token' });
     const { name, avatar_url } = req.body || {};
 
     if (typeof name !== 'string' || name.trim().length < 2 || name.trim().length > 255) {
@@ -572,6 +671,74 @@ api.put('/me', async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(401).json({ error: 'Invalid token' });
+  }
+});
+
+// Change own password: needs the current one. Every other session is signed out (session version
+// bump), this one gets a fresh cookie, and the user is told by email in case it was not them.
+// Per user, not per IP: a classroom behind one NAT shares an IP (and the login limiter), and
+// wrong current passwords already count toward the account lock
+const passwordChangeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20, // above the 10-wrong-passwords account lock, so the lock decides first
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => `user:${req.user.id}`,
+  message: { error: 'Too many attempts. Please try again later.' },
+});
+api.put('/me/password', authenticateToken, passwordChangeLimiter, async (req, res) => {
+  const { current_password: current, new_password: next } = req.body || {};
+  if (typeof current !== 'string' || typeof next !== 'string') {
+    return res.status(400).json({ error: 'current_password and new_password are required.' });
+  }
+  try {
+    const [rows] = await db.query('SELECT id, name, email, role, password, locked_until FROM users WHERE id = ?', [req.user.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const user = rows[0];
+    // Guessing the current password from a stolen session counts like guessing it at login
+    if (user.locked_until && new Date(user.locked_until) > new Date()) {
+      return res.status(429).json({ error: 'Too many wrong passwords. Please try again in 15 minutes.' });
+    }
+    const check = await passwords.verifyPassword(current, user.password);
+    if (check.unreadable) {
+      // A server key problem, not a wrong password: don't make the user retype it
+      return res.status(503).json({ error: 'Password changes are temporarily unavailable. Please try again later.' });
+    }
+    if (!check.ok) {
+      if (!check.unreadable && await recordFailedPassword(user)) {
+        return res.status(429).json({ error: 'Too many wrong passwords. Please try again in 15 minutes.' });
+      }
+      return res.status(400).json({ error: 'Your current password is incorrect.' });
+    }
+    if (current === next) return res.status(400).json({ error: 'The new password must be different from the current one.' });
+    const problem = await passwords.validateNewPassword(next, { email: user.email, name: user.name });
+    if (problem) return res.status(400).json({ error: problem });
+
+    const [updated] = await db.query(
+      `UPDATE users SET password = ?, password_changed_at = NOW(), session_version = session_version + 1,
+         failed_login_attempts = 0, locked_until = NULL, login_code = NULL, login_code_expires = NULL
+       WHERE id = ? AND password = ? RETURNING id, role, session_version, password_changed_at`,
+      [await passwords.hashPassword(next), user.id, user.password]
+    );
+    // Only if the password is still the one just verified: of two concurrent changes, one wins
+    if (updated.length === 0) return res.status(409).json({ error: 'Your password was changed meanwhile. Please sign in again.' });
+    issueSession(res, updated[0]);
+    // Close every live socket of this user. Other devices cannot reconnect (their cookie is now
+    // stale); this device reconnects at once with its fresh cookie (SocketContext).
+    io.in(userRoom(user.id)).disconnectSockets(true);
+    sendNotificationEmail(
+      user.email,
+      'Your password was changed 🔐',
+      `Hello <strong>${escapeHtml(user.name)}</strong>,<br><br>The password of your Learning Platform account was just changed and every other device was signed out.<br><br>
+       <strong>If this was not you</strong>, contact an administrator right away.`,
+      '/courses',
+      'Open the Learning Platform'
+    );
+    res.json({ success: true, password_changed_at: updated[0].password_changed_at });
+  } catch (err) {
+    if (passwords.isBusy(err)) return res.status(503).json({ error: 'The server is busy, please try again in a moment.' });
+    console.error('[PUT /me/password] Error:', err);
+    res.status(500).json({ error: 'Failed to change password' });
   }
 });
 
@@ -612,16 +779,64 @@ async function createNotification(userId, type, title, message, link = null, met
   }
 }
 
-// Helper function to notify all admins
-async function notifyAdmins(type, title, message, link = null, metadata = null) {
+// Every notification goes out twice, with the same deep link: in the app (bell) and by email.
+//   link       in-app path the notification opens, e.g. taskLink(id) or '/courses'
+//   emailHtml  (user) => HTML body for the email; defaults to the escaped message
+//   email      false = in-app only
+// The email is not awaited: a slow SMTP server must not hold up the request that caused it.
+async function notifyUser(userId, { type, title, message, link = null, metadata = null, emailHtml = null, email = true, actionLabel }) {
+  try {
+    await createNotification(userId, type, title, message, link, metadata);
+    if (!email) return;
+    const [rows] = await db.query('SELECT name, email FROM users WHERE id = ?', [userId]);
+    if (rows.length === 0) return;
+    const body = emailHtml
+      ? emailHtml(rows[0])
+      : `Hello <strong>${escapeHtml(rows[0].name)}</strong>!<br><br>${escapeHtml(message).replace(/\n/g, '<br>')}`;
+    sendNotificationEmail(rows[0].email, title, body, link, actionLabel);
+  } catch (error) {
+    console.error('[Notification] Error notifying user:', error);
+  }
+}
+
+// Helper function to notify all admins (in the app and by email)
+async function notifyAdmins(type, title, message, link = null, metadata = null, emailHtml = null) {
   try {
     const [admins] = await db.query("SELECT id FROM users WHERE role = 'admin'");
     for (const admin of admins) {
-      await createNotification(admin.id, type, title, message, link, metadata);
+      await notifyUser(admin.id, { type, title, message, link, metadata, emailHtml });
     }
   } catch (error) {
     console.error('[Notification] Error notifying admins:', error);
   }
+}
+
+// Deep link to a task on its course road (CoursePage opens it from ?lesson=&task=; for an admin
+// it opens the task's submissions). Falls back to the catalogue for a phase outside any course.
+async function taskLink(taskId) {
+  const [rows] = await db.query(
+    `SELECT t.id, l.id AS lesson_id, p.course_id FROM tasks t
+     INNER JOIN lessons l ON l.id = t.lesson_id INNER JOIN paths p ON p.id = l.path_id WHERE t.id = ?`,
+    [taskId]
+  );
+  if (rows.length === 0 || rows[0].course_id === null) return '/courses';
+  return `/courses/${rows[0].course_id}?lesson=${rows[0].lesson_id}&task=${rows[0].id}`;
+}
+
+// The account-approved notice, shared by POST /users/:id/approve and the admin user editor.
+async function notifyAccountApproved(userId) {
+  await db.query(
+    "UPDATE notifications SET status = 'approved', is_read = TRUE WHERE type = 'new_user_pending' AND (metadata->>'userId')::int = ?",
+    [userId]
+  );
+  await notifyUser(userId, {
+    type: 'account_approved',
+    title: 'Account Approved! 🎉',
+    message: 'Your account has been approved by an administrator. You can now access the platform.',
+    link: '/courses',
+    actionLabel: 'Log in and start learning',
+    emailHtml: (u) => `Hello <strong>${escapeHtml(u.name)}</strong>!<br><br>Your account on the Learning Platform has been approved by an administrator. You can now log in and start learning!`,
+  });
 }
 
 // Register Endpoint
@@ -636,8 +851,10 @@ api.post('/register', authLimiter, async (req, res) => {
   if (name.length < 2 || name.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 255) {
     return res.status(400).json({ error: 'A valid name and email are required.' });
   }
-  if (password.length < 8 || password.length > 128) {
-    return res.status(400).json({ error: 'Password must be between 8 and 128 characters.' });
+  // Synchronous rules first (cheap); the breach lookup runs below, once the email is known to be free
+  const passwordError = passwords.passwordProblem(password, { email, name });
+  if (passwordError) {
+    return res.status(400).json({ error: passwordError });
   }
 
   // The configured bootstrap admin is created approved + admin so the first login works
@@ -645,16 +862,17 @@ api.post('/register', authLimiter, async (req, res) => {
   const isBootstrapAdmin = BOOTSTRAP_ADMIN_EMAIL && email === BOOTSTRAP_ADMIN_EMAIL;
 
   try {
-    const [existingUsers] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
+    const [existingUsers] = await db.query('SELECT id FROM users WHERE email = ?', [email]);
     if (existingUsers.length > 0) {
       return res.status(409).json({ error: 'This email is already registered.' });
     }
 
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    const breached = await passwords.validateNewPassword(password, { email, name });
+    if (breached) return res.status(400).json({ error: breached });
+    const hashedPassword = await passwords.hashPassword(password);
 
     const [result] = await db.query(
-      'INSERT INTO users (name, email, password, role, stars, is_approved) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO users (name, email, password, role, stars, is_approved, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, NOW())',
       [name, email, hashedPassword, isBootstrapAdmin ? 'admin' : 'student', 0, isBootstrapAdmin]
     );
 
@@ -664,23 +882,15 @@ api.post('/register', authLimiter, async (req, res) => {
     }
 
     // Notify all admins about new user registration
+    // ...in the app and by email, both opening the user's row on the Users page
     await notifyAdmins(
       'new_user_pending',
       'New User Registered',
       `${name} (${email}) is waiting for approval.`,
-      null,
-      { userId: result.insertId, email, name }
+      `/users?user=${result.insertId}`,
+      { userId: result.insertId, email, name },
+      () => `A new user <strong>${escapeHtml(name)}</strong> (${escapeHtml(email)}) is waiting for approval on the Learning Platform.`
     );
-
-    // Send email to admins
-    const [admins] = await db.query("SELECT email FROM users WHERE role = 'admin'");
-    for (const admin of admins) {
-      await sendNotificationEmail(
-        admin.email,
-        'New User Registered',
-        `A new user <strong>${escapeHtml(name)}</strong> (${escapeHtml(email)}) is waiting for approval on the Learning Platform.`
-      );
-    }
 
     res.status(201).json({
       message: 'Account created successfully! Waiting for administrator approval.',
@@ -688,6 +898,7 @@ api.post('/register', authLimiter, async (req, res) => {
     });
 
   } catch (err) {
+    if (passwords.isBusy(err)) return res.status(503).json({ error: 'The server is busy, please try again in a moment.' });
     console.error('Registration Error:', err);
     res.status(500).json({ error: 'Server error.' });
   }
@@ -721,36 +932,29 @@ api.post('/users/:id/approve', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Approve user
+    // Approve user, then tell them (in the app and by email)
     await db.query('UPDATE users SET is_approved = TRUE WHERE id = ?', [id]);
-
-    // Update all pending notifications for this user to approved
-    await db.query(
-      "UPDATE notifications SET status = 'approved', is_read = TRUE WHERE type = 'new_user_pending' AND (metadata->>'userId')::int = ?",
-      [id]
-    );
-
-    // Notify user
-    await createNotification(
-      id,
-      'account_approved',
-      'Account Approved! 🎉',
-      'Your account has been approved by an administrator. You can now access the platform.',
-      null,
-      null
-    );
-
-    // Send email to user
-    await sendNotificationEmail(
-      targetUser[0].email,
-      'Account Approved! 🎉',
-      `Hello <strong>${escapeHtml(targetUser[0].name)}</strong>!<br><br>Your account on the Learning Platform has been approved by an administrator. You can now log in and start learning!`
-    );
+    await notifyAccountApproved(id);
 
     res.json({ message: 'User approved successfully' });
   } catch (error) {
     console.error('[Approve User] Error:', error);
     res.status(500).json({ error: 'Failed to approve user' });
+  }
+});
+
+// Clear a password lock early (admin only): the 15-minute lock after 10 wrong passwords can be
+// triggered by anyone who knows the email, so an admin can lift it for the owner
+api.post('/users/:id/unlock', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      'UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ? RETURNING id', [req.params.id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[Unlock User] Error:', error);
+    res.status(500).json({ error: 'Failed to unlock user' });
   }
 });
 
@@ -777,21 +981,13 @@ api.post('/users/:id/reject', authenticateToken, async (req, res) => {
       [id]
     );
 
-    // Notify user before deleting
-    await createNotification(
-      id,
-      'account_rejected',
-      'Account Rejected',
-      'Your registration request has been rejected by an administrator.',
-      null,
-      null
-    );
-
-    // Send email to user
-    await sendNotificationEmail(
+    // Email only: the account (and with it any in-app notification) is deleted right below
+    sendNotificationEmail(
       targetUser[0].email,
       'Registration Request Rejected',
-      `Hello <strong>${escapeHtml(targetUser[0].name)}</strong>.<br><br>Unfortunately, your registration request on the Learning Platform has been rejected by an administrator.`
+      `Hello <strong>${escapeHtml(targetUser[0].name)}</strong>.<br><br>Unfortunately, your registration request on the Learning Platform has been rejected by an administrator.`,
+      '/',
+      'Visit the Learning Platform'
     );
 
     // Delete user
@@ -866,8 +1062,15 @@ api.put('/admin/users/:id', authenticateToken, requireAdmin, uploadImage.single(
     }
 
     if (email !== undefined) {
+      // Stored lowercase, like registration, so the login lookup keeps matching
+      const normalized = typeof email === 'string' ? email.trim().toLowerCase() : '';
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) || normalized.length > 255) {
+        return res.status(400).json({ error: 'A valid email is required.' });
+      }
+      const [taken] = await db.query('SELECT id FROM users WHERE email = ? AND id <> ?', [normalized, id]);
+      if (taken.length > 0) return res.status(409).json({ error: 'This email is already used by another account.' });
       updates.push('email = ?');
-      values.push(email);
+      values.push(normalized);
     }
 
     if (role !== undefined) {
@@ -900,6 +1103,23 @@ api.put('/admin/users/:id', authenticateToken, requireAdmin, uploadImage.single(
       `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
       values
     );
+
+    // Approving from the editor is the same event as the Approve button: tell the user
+    const before = targetUser[0];
+    if (is_approved !== undefined && !before.is_approved && (is_approved === 'true' || is_approved === true)) {
+      await notifyAccountApproved(Number(id));
+    }
+    if (role !== undefined && role !== before.role) {
+      await notifyUser(Number(id), {
+        type: 'role_changed',
+        title: role === 'admin' ? 'You are now an administrator 🛠️' : 'Your role changed',
+        message: role === 'admin'
+          ? 'An administrator gave you admin rights on the Learning Platform.'
+          : 'Your account is now a student account on the Learning Platform.',
+        link: '/courses',
+        metadata: { role },
+      });
+    }
 
     // Get updated user
     const [updatedUser] = await db.query(
@@ -978,14 +1198,14 @@ api.post('/admin/users/:id/add-stars', authenticateToken, async (req, res) => {
     const [updatedUser] = await db.query('SELECT id, name, email, role, stars, avatar_url FROM users WHERE id = ?', [id]);
 
     // Create notification for user
-    await createNotification(
-      parseInt(id),
-      'stars_received',
-      `⭐ +${starsToAdd} Stars Received!`,
-      `You've received ${starsToAdd} star${starsToAdd > 1 ? 's' : ''} from the administrator! Keep up the great work!`,
-      null,
-      { starsAdded: starsToAdd, newTotal: updatedUser[0].stars }
-    );
+    await notifyUser(parseInt(id), {
+      type: 'stars_received',
+      title: `⭐ +${starsToAdd} Stars Received!`,
+      message: `You've received ${starsToAdd} star${starsToAdd > 1 ? 's' : ''} from the administrator! Keep up the great work!`,
+      link: '/users',
+      actionLabel: 'See the leaderboard',
+      metadata: { starsAdded: starsToAdd, newTotal: updatedUser[0].stars },
+    });
 
     // Emit Socket.IO events to update UI
     io.emit('leaderboard:update'); // Update leaderboard for everyone
@@ -1127,9 +1347,12 @@ api.post('/tasks/:taskId/mark-viewed', authenticateToken, async (req, res) => {
 // Courses (course → phases → lessons → tasks), enrolment and the users directory.
 const courseRoutes = require('./courses');
 courseRoutes.registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId });
+const studySets = require('./studySets');
+studySets.registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons });
+const lessonFiles = require('./lessonFiles').registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons, uploadsDir });
 
 api.get('/paths', async (req, res) => {
-  const userId = optionalUserId(req);
+  const userId = await optionalUserId(req);
   let userRole = 'student';
 
   try {
@@ -1278,6 +1501,7 @@ api.delete('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
     const { id } = req.params;
 
     // Deleting a phase closes the gap in its course's numbering and refreshes open course pages.
+    const dropFiles = await lessonFiles.filesOf({ pathId: id });
     const courseId = await db.transaction(async (tx) => {
       const [rows] = await tx.query('SELECT course_id FROM paths WHERE id = ?', [id]);
       if (rows.length === 0) { const err = new Error('Path not found'); err.status = 404; throw err; }
@@ -1288,6 +1512,7 @@ api.delete('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
       if (rows[0].course_id !== null) await courseRoutes.renumberCourse(tx, rows[0].course_id);
       return rows[0].course_id;
     });
+    dropFiles(); // lesson materials of the deleted phase
     if (courseId !== null) io.emit('course:updated', { courseId });
     res.json({ success: true });
   } catch (error) {
@@ -1306,7 +1531,7 @@ api.delete('/paths/:id', authenticateToken, requireAdmin, async (req, res) => {
 // Get Lessons for a Path (including tasks and status for current user)
 api.get('/paths/:pathId/details', async (req, res) => {
   const { pathId } = req.params;
-  const userId = optionalUserId(req);
+  const userId = await optionalUserId(req);
 
   try {
     // 1. Get Lessons
@@ -1523,8 +1748,10 @@ api.delete('/lessons/:id', authenticateToken, requireAdmin, async (req, res) => 
     const [lessons] = await db.query('SELECT path_id FROM lessons WHERE id = ?', [id]);
     const pathId = lessons.length > 0 ? lessons[0].path_id : null;
 
-    // Tasks will be deleted automatically due to CASCADE
+    // Tasks (and lesson files) will be deleted automatically due to CASCADE; the files' bytes too
+    const dropFiles = await lessonFiles.filesOf({ lessonId: id });
     await db.query('DELETE FROM lessons WHERE id = ?', [id]);
+    dropFiles();
 
     // Emit Socket.IO event for live lesson deletion
     if (pathId) {
@@ -1583,22 +1810,17 @@ api.post('/tasks', authenticateToken, requireAdmin, async (req, res) => {
         )
       `, [lesson.path_id, lesson.path_id]);
 
+      const link = await taskLink(result.insertId);
       for (const student of students) {
-        // Create in-app notification
-        await createNotification(
-          student.id,
-          'new_task',
-          'New Task Available! 📝',
-          `Task: "${title}" (${taskType})\nPath: ${lesson.path_name}\nLesson: ${lesson.lesson_title}`,
-          null,
-          { taskId: result.insertId, lessonId, pathId: lesson.path_id, type, deadline: deadlineTs }
-        );
-
-        // Send email notification
-        await sendNotificationEmail(
-          student.email,
-          'New Task Available! 📝',
-          `Hello <strong>${escapeHtml(student.name)}</strong>!<br><br>
+        // In the app and by email, both opening the task on the road
+        await notifyUser(student.id, {
+          type: 'new_task',
+          title: 'New Task Available! 📝',
+          message: `Task: "${title}" (${taskType})\nPath: ${lesson.path_name}\nLesson: ${lesson.lesson_title}`,
+          link,
+          actionLabel: 'Open the task',
+          metadata: { taskId: result.insertId, lessonId, pathId: lesson.path_id, type, deadline: deadlineTs },
+          emailHtml: () => `Hello <strong>${escapeHtml(student.name)}</strong>!<br><br>
           A new task has been added to your learning path:<br><br>
           <strong>Task:</strong> ${escapeHtml(title)}<br>
           <strong>Type:</strong> <span style="color: ${type === 'mandatory' ? '#dc2626' : '#16a34a'};">${taskType}</span><br>
@@ -1606,8 +1828,8 @@ api.post('/tasks', authenticateToken, requireAdmin, async (req, res) => {
           <strong>Lesson:</strong> ${escapeHtml(lesson.lesson_title)}<br>
           ${deadline ? `<strong>Deadline:</strong> ${new Date(deadline).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}<br>` : ''}
           <br>
-          Log in to the platform to view the task details and start working on it!`
-        );
+          Log in to the platform to view the task details and start working on it!`,
+        });
       }
 
       // Mark task as NEW for all these students (viewed_at = NULL means it's new)
@@ -1722,6 +1944,8 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
   const { id } = req.params;
   const userId = req.user.id; // always the authenticated user — never trust the body
   const dropUpload = () => { if (req.file) fs.unlink(req.file.path, () => {}); };
+  // multer decodes multipart file names as latin1: keep "Temă – Ștefan.docx" readable
+  if (req.file) req.file.originalname = require('./lessonFiles').utf8Name(req.file.originalname);
 
   // A submission is a comment (pull-request link, Jira ticket, note), a file, or both.
   const comment = typeof req.body?.comment === 'string' ? req.body.comment.trim() : '';
@@ -1782,7 +2006,7 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
         'task_submission',
         'New Task Submission! 📤',
         notificationMessage,
-        null, // Remove link
+        await taskLink(id), // opens the task's submissions on the road
         {
           taskId: id,
           userId,
@@ -1793,32 +2017,20 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
           taskType: task.type,
           lessonTitle,
           pathName
-        }
+        },
+        () => `A student has submitted a task:<br><br>
+          <strong>Student:</strong> ${escapeHtml(users[0].name)}<br>
+          <strong>Task:</strong> ${escapeHtml(task.title)}<br>
+          <strong>Type:</strong> ${task.type.charAt(0).toUpperCase() + task.type.slice(1)}<br>
+          <strong>Lesson:</strong> ${escapeHtml(lessonTitle)}<br>
+          <strong>Path:</strong> ${escapeHtml(pathName)}<br>
+          ${req.file ? `<strong>File:</strong> ${escapeHtml(req.file.originalname)}<br>` : ''}
+          ${comment ? `<strong>Comment:</strong> ${escapeHtml(comment)}<br>` : ''}
+          <br>Please review the submission in the platform.`
       );
 
       // Emit live event for Admin graph update
       io.emit('task:submission_uploaded', { taskId: id });
-
-      // Send email to admins with detailed info
-      const [admins] = await db.query('SELECT email FROM users WHERE role = ?', ['admin']);
-      for (const admin of admins) {
-        const emailHtml = `
-          <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px; max-width: 500px;">
-            <h2 style="color: #333;">New Task Submission! 📤</h2>
-            <p>Hello,</p>
-            <p>A student has submitted a task:</p>
-            <p><strong>Student:</strong> ${escapeHtml(users[0].name)}</p>
-            <p><strong>Task:</strong> ${escapeHtml(task.title)}</p>
-            <p><strong>Type:</strong> ${task.type.charAt(0).toUpperCase() + task.type.slice(1)}</p>
-            <p><strong>Lesson:</strong> ${escapeHtml(lessonTitle)}</p>
-            <p><strong>Path:</strong> ${escapeHtml(pathName)}</p>
-            ${req.file ? `<p><strong>File:</strong> ${escapeHtml(req.file.originalname)}</p>` : ''}
-            ${comment ? `<p><strong>Comment:</strong> ${escapeHtml(comment)}</p>` : ''}
-            <p style="color: #999; font-size: 12px; margin-top: 20px;">Please review the submission in the platform.</p>
-          </div>
-        `;
-        await sendEmail(admin.email, 'New Task Submission! 📤', emailHtml);
-      }
     }
     } catch (notifyErr) {
       console.error('[Submit] Saved, but notifying admins failed:', notifyErr);
@@ -2066,26 +2278,16 @@ api.post('/submissions/:id/approve', authenticateToken, async (req, res) => {
     const [task] = await db.query('SELECT title FROM tasks WHERE id = ?', [submission.task_id]);
     const taskTitle = task.length > 0 ? task[0].title : 'Task';
 
-    await createNotification(
-      submission.user_id,
-      'submission_approved',
-      'Submission Approved! ✅',
-      `Your submission for "${taskTitle}" has been approved! The next step is now unlocked.`,
-      null,
-      { taskId: submission.task_id, submissionId: id }
-    );
-
-    // Send Email
-    const [student] = await db.query('SELECT email, name FROM users WHERE id = ?', [submission.user_id]);
-    if (student.length > 0) {
-      await sendNotificationEmail(
-        student[0].email,
-        'Submission Approved! ✅',
-        `Hello <strong>${escapeHtml(student[0].name)}</strong>!<br><br>
+    await notifyUser(submission.user_id, {
+      type: 'submission_approved',
+      title: 'Submission Approved! ✅',
+      message: `Your submission for "${taskTitle}" has been approved! The next step is now unlocked.`,
+      link: await taskLink(submission.task_id),
+      metadata: { taskId: submission.task_id, submissionId: id },
+      emailHtml: (u) => `Hello <strong>${escapeHtml(u.name)}</strong>!<br><br>
             Great news! Your submission for task <strong>"${escapeHtml(taskTitle)}"</strong> has been approved by an administrator.<br>
-            You can now proceed to the next task in your learning path.`
-      );
-    }
+            You can now proceed to the next task in your learning path.`,
+    });
 
     // Emit Socket.IO events for live updates
     // 1. Notify all users about leaderboard change
@@ -2152,26 +2354,16 @@ api.post('/tasks/:taskId/approve-all', authenticateToken, async (req, res) => {
     }
 
     // Notify the user
-    await createNotification(
-      studentId,
-      'submission_approved',
-      'Task Approved! ✅',
-      `Your submissions for "${taskTitle}" have been approved! ${isMandatory ? 'The next step is now unlocked.' : 'XP has been granted.'}`,
-      null,
-      { taskId }
-    );
-
-    // Send Email
-    const [student] = await db.query('SELECT email, name FROM users WHERE id = ?', [studentId]);
-    if (student.length > 0) {
-      await sendNotificationEmail(
-        student[0].email,
-        'Task Approved! ✅',
-        `Hello <strong>${escapeHtml(student[0].name)}</strong>!<br><br>
+    await notifyUser(studentId, {
+      type: 'submission_approved',
+      title: 'Task Approved! ✅',
+      message: `Your submissions for "${taskTitle}" have been approved! ${isMandatory ? 'The next step is now unlocked.' : 'XP has been granted.'}`,
+      link: await taskLink(taskId),
+      metadata: { taskId },
+      emailHtml: (u) => `Hello <strong>${escapeHtml(u.name)}</strong>!<br><br>
             Great news! Your submissions for task <strong>"${escapeHtml(taskTitle)}"</strong> have been approved by an administrator.<br>
-            You can now proceed to the next task in your learning path.`
-      );
-    }
+            You can now proceed to the next task in your learning path.`,
+    });
 
     // Emit Socket.IO events for live updates
     io.emit('leaderboard:update');
@@ -2215,30 +2407,21 @@ api.post('/tasks/:taskId/reject-all', authenticateToken, async (req, res) => {
     );
 
     // Notify the user with the rejection comment
-    await createNotification(
-      studentId,
-      'submission_rejected',
-      'Task Rejected ❌',
-      `Your submissions for "${taskTitle}" were rejected. Reason: ${comment.trim()}`,
-      null,
-      { taskId, comment: comment.trim() }
-    );
-
-    // Send Email with detailed rejection reason
-    const [student] = await db.query('SELECT email, name FROM users WHERE id = ?', [studentId]);
-    if (student.length > 0) {
-      await sendNotificationEmail(
-        student[0].email,
-        'Task Rejected ❌',
-        `Hello <strong>${escapeHtml(student[0].name)}</strong>!<br><br>
+    await notifyUser(studentId, {
+      type: 'submission_rejected',
+      title: 'Task Rejected ❌',
+      message: `Your submissions for "${taskTitle}" were rejected. Reason: ${comment.trim()}`,
+      link: await taskLink(taskId),
+      actionLabel: 'Open the task and resubmit',
+      metadata: { taskId, comment: comment.trim() },
+      emailHtml: (u) => `Hello <strong>${escapeHtml(u.name)}</strong>!<br><br>
             Your submissions for task <strong>"${escapeHtml(taskTitle)}"</strong> have been reviewed and rejected by an administrator.<br><br>
             <strong>Reason:</strong><br>
             <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin-top: 10px; border-left: 4px solid #ef4444;">
               ${escapeHtml(comment.trim()).replace(/\n/g, '<br>')}
             </div><br>
-            Please review the feedback and resubmit your work when ready.`
-      );
-    }
+            Please review the feedback and resubmit your work when ready.`,
+    });
 
     // Emit Socket.IO event for live updates
     io.emit('task:rejected', {
@@ -2335,6 +2518,7 @@ api.delete('/admin/api-keys/:id', authenticateToken, requireAdmin, async (req, r
 //   name, description?, stars_required?,          // new path  (or)
 //   pathId,                                        // append lessons to an existing path
 //   lessons: [{ title, description?, tasks?: [{ title, description?, type?, xp?, deadline? }] }]
+//            (each lesson may also carry study_sets?: [{ kind, title, description?, items }] — see studySets.js)
 // }
 const LAYOUT = {
   firstX: 80,            // x of the first lesson
@@ -2381,6 +2565,13 @@ function validateImportBody(body) {
         if (t && t.type !== undefined && !TASK_TYPES.has(t.type)) errors.push(`lessons[${i}].tasks[${j}].type must be "mandatory" or "optional"`);
         if (t && t.xp !== undefined && (!Number.isInteger(t.xp) || t.xp < 0)) errors.push(`lessons[${i}].tasks[${j}].xp must be a non-negative integer`);
         try { if (t) parseDeadline(t.deadline); } catch (e) { errors.push(`lessons[${i}].tasks[${j}]: ${e.message}`); }
+      });
+    }
+    if (l && l.study_sets !== undefined) {
+      if (!Array.isArray(l.study_sets)) errors.push(`lessons[${i}].study_sets must be an array`);
+      else if (l.study_sets.length > studySets.MAX_SETS_PER_LESSON) errors.push(`lessons[${i}]: at most ${studySets.MAX_SETS_PER_LESSON} study sets`);
+      else l.study_sets.forEach((set, k) => {
+        errors.push(...studySets.validateStudySet(set, { prefix: `lessons[${i}].study_sets[${k}]` }).errors);
       });
     }
   });
@@ -2463,7 +2654,17 @@ api.post('/admin/paths/import', authenticateToken, requireAdmin, async (req, res
           createdTasks.push({ id: tr.insertId, title: task.title.trim(), type: task.type || 'mandatory', order_index: task._order });
         }
 
-        lessons.push({ id: lessonId, title: lesson.title.trim(), order_index: order, tasks: createdTasks });
+        const createdSets = [];
+        for (const [index, set] of (lesson.study_sets || []).entries()) {
+          const { kind, items } = studySets.validateStudySet(set);
+          const [sr] = await tx.query(
+            'INSERT INTO study_sets (lesson_id, kind, title, description, order_index, items) VALUES (?, ?, ?, ?, ?, ?::jsonb)',
+            [lessonId, kind, set.title.trim(), (set.description || '').trim(), index + 1, JSON.stringify(items)]
+          );
+          createdSets.push({ id: sr.insertId, kind, title: set.title.trim(), item_count: items.length });
+        }
+
+        lessons.push({ id: lessonId, title: lesson.title.trim(), order_index: order, tasks: createdTasks, study_sets: createdSets });
         parentId = lessonId;
         x += LAYOUT.lessonSpacingX;
         order += 1;
@@ -2486,7 +2687,8 @@ api.post('/admin/paths/import', authenticateToken, requireAdmin, async (req, res
       lessons: created.lessons,
       counts: {
         lessons: created.lessons.length,
-        tasks: created.lessons.reduce((n, l) => n + l.tasks.length, 0)
+        tasks: created.lessons.reduce((n, l) => n + l.tasks.length, 0),
+        study_sets: created.lessons.reduce((n, l) => n + l.study_sets.length, 0)
       }
     });
   } catch (err) {
@@ -2905,11 +3107,11 @@ api.delete('/chats/:chatId/messages/:messageId', authenticateToken, async (req, 
 // ==================== END CHAT ENDPOINTS ====================
 
 // Socket.IO - authenticate the handshake with the same session cookie as the REST API.
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   try {
     const cookies = cookie.parse(socket.handshake.headers.cookie || '');
-    if (!cookies.token) return next(new Error('unauthorized'));
-    const decoded = verifySessionToken(cookies.token);
+    const decoded = await sessionFromToken(cookies.token);
+    if (!decoded) return next(new Error('unauthorized'));
     socket.data.userId = decoded.id;
     next();
   } catch (e) {
@@ -3057,6 +3259,17 @@ if (fs.existsSync(path.join(publicDir, 'index.html'))) {
     await runMigrations(db.pool);
   } catch (err) {
     console.error('[FATAL] Database migration failed:', err.message || err);
+    process.exit(1);
+  }
+  lessonFiles.quarantineOrphanFiles(); // files without a row are set aside (never deleted)
+
+  // Encrypt any hash not yet sealed with the current key (first start after this release,
+  // or after rotating PASSWORD_PEPPER)
+  const { failed } = await passwords.sealAllPasswords(db);
+  // Same rule as the key itself (passwords.js): only an explicit development/test setup may carry on
+  if (failed > 0 && !['development', 'test'].includes(process.env.NODE_ENV)) {
+    // Every login would be refused: stop loudly instead
+    console.error('[FATAL] Some password hashes are sealed with a key this server does not have. Restore the previous PASSWORD_PEPPER, or add it to PASSWORD_PEPPER_PREVIOUS.');
     process.exit(1);
   }
   server.listen(PORT, () => {

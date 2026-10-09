@@ -1,8 +1,8 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { CourseDetail, Phase, RoadLesson, RoadTask } from '../types';
+import { CourseDetail, Phase, RoadLesson, RoadStudySet, RoadTask } from '../types';
 import { RoadState, NodeStatus, shortPhaseName, lockReasonText } from '../roadState';
 
-export type RoadSelection = { type: 'phase' | 'lesson' | 'task'; id: number } | null;
+export type RoadSelection = { type: 'phase' | 'lesson' | 'task' | 'study'; id: number } | null;
 
 interface QuestRoadProps {
   course: CourseDetail;
@@ -12,6 +12,7 @@ interface QuestRoadProps {
   onOpenPhase: (phase: Phase) => void;
   onOpenLesson: (lesson: RoadLesson, phase: Phase) => void;
   onOpenTask: (task: RoadTask, lesson: RoadLesson, phase: Phase) => void;
+  onOpenStudySet: (set: RoadStudySet, lesson: RoadLesson, phase: Phase) => void;
 }
 
 interface Stop {
@@ -37,12 +38,16 @@ const TASK_STEP = 32;
 const PHASE_SIZE = 50;
 const LESSON_SIZE = 44;
 const TASK_SIZE = 26;
+const LABEL_ROOM = 44;      // space the next row's labels need above its nodes
+
+// Bubbles hanging under a lesson: its tasks, then its quizzes / flashcard decks
+const chainLength = (lesson: RoadLesson) => lesson.tasks.length + (lesson.study_sets?.length || 0);
 
 // One winding road for the whole course: phases and lessons are "stops" laid out in a snake
 // (left→right, then right→left on the next row) so the full course fits the available width.
 // Each lesson's tasks hang below their lesson. Everything is derived from order, not from the
 // stored x/y of the old free-form graph.
-export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, selected, onOpenPhase, onOpenLesson, onOpenTask }) => {
+export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, selected, onOpenPhase, onOpenLesson, onOpenTask, onOpenStudySet }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
 
@@ -75,8 +80,12 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
     const cols = Math.max(3, Math.floor((width - 2 * PAD_X) / CELL_W_TARGET));
     const cellW = (width - 2 * PAD_X) / cols;
     const rows = Math.max(1, Math.ceil(stops.length / cols));
-    const available = Math.max(size.height - PAD_TOP - PAD_BOTTOM, ROW_H_MIN);
-    const rowH = Math.min(ROW_H_MAX, Math.max(ROW_H_MIN, available / rows));
+    // A row must be tall enough for the longest bubble chain hanging under one of its lessons
+    const longest = stops.reduce((m, s) => Math.max(m, s.lesson ? chainLength(s.lesson) : 0), 0);
+    const chainMin = longest > 0 ? NODE_OFFSET_Y + TASK_FIRST_DY + (longest - 1) * TASK_STEP + TASK_SIZE / 2 + LABEL_ROOM - 30 : 0;
+    const rowMin = Math.max(ROW_H_MIN, chainMin);
+    const available = Math.max(size.height - PAD_TOP - PAD_BOTTOM, rowMin);
+    const rowH = Math.min(Math.max(ROW_H_MAX, rowMin), Math.max(rowMin, available / rows));
     const points = stops.map((_, i) => {
       const row = Math.floor(i / cols);
       const colRaw = i % cols;
@@ -115,7 +124,8 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
   const hasSelection = (stop: Stop) =>
     selected !== null && stop.kind === 'lesson' && (
       (selected.type === 'lesson' && selected.id === stop.lesson!.id) ||
-      (selected.type === 'task' && stop.lesson!.tasks.some((t) => t.id === selected.id)));
+      (selected.type === 'task' && stop.lesson!.tasks.some((t) => t.id === selected.id)) ||
+      (selected.type === 'study' && (stop.lesson!.study_sets || []).some((t) => t.id === selected.id)));
 
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-auto custom-scrollbar bg-white dark:bg-gray-950">
@@ -218,12 +228,12 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                     </span>
                   )}
                 </button>
-                <Tooltip text={lesson.title} sub={`${shortPhaseName(stop.phase)} · ${lesson.tasks.length} task${lesson.tasks.length === 1 ? '' : 's'}`} above={lastRow(i)} align={tipAlign(p.x)} />
+                <Tooltip text={lesson.title} sub={`${shortPhaseName(stop.phase)} · ${lesson.tasks.length} task${lesson.tasks.length === 1 ? '' : 's'}${(lesson.files || []).length ? ` · ${(lesson.files || []).length} file${(lesson.files || []).length === 1 ? '' : 's'}` : ''}`} above={lastRow(i)} align={tipAlign(p.x)} />
               </div>
 
               {/* Task chain below the lesson */}
-              {lesson.tasks.length > 0 && (
-                <div className="absolute left-1/2 -translate-x-1/2 w-0.5 bg-gray-300 dark:bg-gray-700" style={{ top: LESSON_SIZE / 2, height: TASK_FIRST_DY + (lesson.tasks.length - 1) * TASK_STEP - LESSON_SIZE / 2 }} />
+              {chainLength(lesson) > 0 && (
+                <div className="absolute left-1/2 -translate-x-1/2 w-0.5 bg-gray-300 dark:bg-gray-700" style={{ top: LESSON_SIZE / 2, height: TASK_FIRST_DY + (chainLength(lesson) - 1) * TASK_STEP - LESSON_SIZE / 2 }} />
               )}
               {lesson.tasks.map((task, k) => {
                 const ts = state.tasks.get(task.id) || 'open';
@@ -249,6 +259,36 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                       )}
                     </button>
                     <Tooltip text={task.title} sub={`${task.type === 'mandatory' ? 'Mandatory' : 'Optional'} · ${task.xp_reward} ★${task.deadline ? ` · due ${new Date(task.deadline).toLocaleDateString()}` : ''}`} above={lastRow(i)} align={tipAlign(p.x)} />
+                  </div>
+                );
+              })}
+              {(lesson.study_sets || []).map((set, k) => {
+                const ss = state.studySets.get(set.id) || 'open';
+                const ssel = isSelected('study', set.id);
+                const locked = ss === 'locked' && !isAdmin;
+                const quiz = set.kind === 'quiz';
+                return (
+                  <div key={`s${set.id}`} className={`absolute group hover:z-50 ${ssel ? 'z-40' : 'z-10'}`} style={{ left: 0, top: TASK_FIRST_DY + (lesson.tasks.length + k) * TASK_STEP, transform: 'translate(-50%, -50%)' }}>
+                    <button
+                      type="button"
+                      data-road-node={`study-${set.id}`}
+                      onClick={() => !locked && onOpenStudySet(set, lesson, stop.phase)}
+                      title={set.title}
+                      className={`relative flex items-center justify-center rounded-full border-2 shadow-sm transition-transform ${studyClasses(ss, set.kind, isAdmin)} ${
+                        locked ? 'cursor-not-allowed' : 'hover:scale-125 cursor-pointer'
+                      } ${ssel ? 'ring-4 ring-primary/50 scale-125' : ''}`}
+                      style={{ width: TASK_SIZE, height: TASK_SIZE }}
+                    >
+                      {locked ? <span className="font-extrabold text-xs">?</span>
+                        : <span className="material-icons text-sm">{ss === 'completed' && !isAdmin ? 'check' : quiz ? 'quiz' : 'style'}</span>}
+                    </button>
+                    <Tooltip
+                      text={set.title}
+                      sub={`${quiz ? 'Quiz' : 'Flashcards'} · ${set.item_count} ${quiz ? 'question' : 'card'}${set.item_count === 1 ? '' : 's'}${
+                        !isAdmin && set.progress && set.progress.total === set.item_count ? ` · best ${set.progress.best_score}/${set.progress.total}` : ''}`}
+                      above={lastRow(i)}
+                      align={tipAlign(p.x)}
+                    />
                   </div>
                 );
               })}
@@ -303,6 +343,16 @@ function taskClasses(status: NodeStatus, type: 'mandatory' | 'optional', isAdmin
   return type === 'mandatory'
     ? 'bg-blue-50 border-blue-400 text-blue-500 dark:bg-blue-900/40'
     : 'bg-yellow-50 border-yellow-300 text-yellow-500 dark:bg-yellow-900/30';
+}
+
+function studyClasses(status: NodeStatus, kind: 'quiz' | 'flashcards', isAdmin: boolean): string {
+  if (!isAdmin) {
+    if (status === 'completed') return 'bg-green-50 border-green-400 text-green-600 dark:bg-green-900/40';
+    if (status === 'locked') return 'bg-gray-100 border-gray-300 text-gray-400 dark:bg-gray-800 dark:border-gray-600';
+  }
+  return kind === 'quiz'
+    ? 'bg-purple-50 border-purple-400 text-purple-600 dark:bg-purple-900/40 dark:text-purple-300'
+    : 'bg-pink-50 border-pink-400 text-pink-600 dark:bg-pink-900/40 dark:text-pink-300';
 }
 
 function taskIcon(status: NodeStatus, type: 'mandatory' | 'optional', isAdmin: boolean) {

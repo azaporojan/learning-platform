@@ -50,6 +50,67 @@ export interface RoadTask {
   unviewed_count?: number;
 }
 
+// Quizzes and flashcard decks hanging under a lesson (prep material: no stars, no gating)
+export type StudySetKind = 'quiz' | 'flashcards';
+
+export interface StudyProgress {
+  best_score: number;
+  last_score: number;
+  total: number;
+  attempts: number;
+}
+
+// As listed on the road (GET /courses/:id): no items
+export interface RoadStudySet {
+  id: number;
+  lesson_id: number;
+  kind: StudySetKind;
+  title: string;
+  description: string;
+  order_index: number;
+  item_count: number;
+  progress: StudyProgress | null;
+}
+
+// Quiz answers (`correct`, `explanation`) are only sent to admins; students get `multiple`.
+export interface QuizItem {
+  question: string;
+  options: string[];
+  correct?: number[];
+  explanation?: string;
+  multiple?: boolean;
+}
+
+export interface FlashcardItem {
+  front: string;
+  back: string;
+}
+
+// GET /study-sets/:id
+export interface StudySet extends RoadStudySet {
+  items: Array<QuizItem | FlashcardItem>;
+  updated_at?: string;
+}
+
+export interface QuizResult {
+  correct: boolean;
+  selected: number[];
+  correct_options: number[];
+  explanation: string;
+}
+
+// Lesson materials (teacher-attached files). The content is read through /lesson-files/:id/*.
+export interface LessonFile {
+  id: number;
+  lesson_id: number;
+  name: string;
+  ext: string;          // 'pdf' | 'txt' | 'md' | 'doc' | 'docx' | 'ppt' | 'pptx'
+  size: number;         // bytes
+  viewable: boolean;    // PDF / TXT / MD open in the app
+  view_as: 'pdf' | 'text' | 'markdown' | null;
+  order_index: number;
+}
+
 export interface RoadLesson {
   id: number;
   path_id: number;
@@ -60,6 +121,8 @@ export interface RoadLesson {
   position_y: number;
   completed: boolean;
   tasks: RoadTask[];
+  study_sets?: RoadStudySet[];
+  files?: LessonFile[];
 }
 
 export type LockReason = 'enroll' | 'previous' | 'stars' | 'unpublished';

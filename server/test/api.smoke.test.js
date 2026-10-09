@@ -40,12 +40,23 @@ async function resetDb() {
   await c.end();
 }
 
+// The database only holds a hash of the emailed login code; without SMTP (tests, dev) the
+// server prints the code itself, so the latest one is read from its output.
+let serverOutput = () => '';
 async function readLoginCode(email) {
+  const re = new RegExp(`login code for ${email.toLowerCase().replace(/[.]/g, '\\.')}: (\\d{6})`, 'g');
+  for (let i = 0; i < 40; i++) {
+    const all = [...serverOutput().matchAll(re)];
+    if (all.length > 0) return all[all.length - 1][1];
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`no login code logged for ${email}`);
+}
+
+async function dbQuery(sql, params) {
   const c = new Client(dbConfig);
   await c.connect();
-  const { rows } = await c.query('SELECT login_code FROM users WHERE email = $1', [email]);
-  await c.end();
-  return rows[0].login_code;
+  try { return (await c.query(sql, params)).rows; } finally { await c.end(); }
 }
 
 function startServer(uploadsDir) {
@@ -65,6 +76,10 @@ function startServer(uploadsDir) {
       UPLOADS_DIR: uploadsDir,
       EMAIL_USER: '',
       EMAIL_PASS: '',
+      PASSWORD_PEPPER: 'dGVzdC1vbmx5LXBlcHBlci10aGF0LWlzLTMyLWJ5dGVzLWxvbmch', // test-only, 37 bytes
+      PASSWORD_BREACH_CHECK: 'false',
+      LOG_LOGIN_CODES: 'true',        // no SMTP here: read codes from the log (never on by default) // no network in CI; covered by test/passwords.test.js
+      AUTH_RATE_LIMIT: '1000',        // the suite logs in far more than a real user would
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -90,7 +105,7 @@ async function waitForHealth(child) {
 // Minimal cookie-jar fetch
 function session() {
   let cookieHeader = '';
-  return async (pathname, opts = {}) => {
+  const call = async (pathname, opts = {}) => {
     const headers = { ...(opts.headers || {}) };
     if (cookieHeader) headers.cookie = cookieHeader;
     if (opts.json !== undefined) {
@@ -104,6 +119,33 @@ function session() {
     try { body = await res.json(); } catch (e) { /* non-JSON */ }
     return { status: res.status, body, res };
   };
+  call.cookie = () => cookieHeader;
+  return call;
+}
+
+// Notification emails are sent without blocking the request (and only logged in tests, where
+// SMTP is not configured): wait for the log line.
+async function waitForOutput(child, pattern) {
+  for (let i = 0; i < 40; i++) {
+    if (pattern.test(child.getOutput())) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.fail(`server output never matched ${pattern}:\n${child.getOutput().slice(-2000)}`);
+}
+
+// Lesson material bytes (the .orphaned/ folder aside)
+const lessonFileCount = (dir) => fs.readdirSync(path.join(dir, 'lesson-files')).filter((f) => !f.startsWith('.')).length;
+
+// Files in the uploads root (lesson materials live in their own subfolder)
+const uploadedFiles = (dir) => fs.readdirSync(dir).filter((f) => fs.statSync(path.join(dir, f)).isFile());
+
+// The server removes a rejected upload asynchronously: give the unlink a moment to land
+async function eventually(check, message) {
+  for (let i = 0; i < 40; i++) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.fail(message);
 }
 
 async function loginAs(email, password) {
@@ -123,9 +165,19 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   }
   await resetDb();
   const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-uploads-'));
+  // A lesson file whose row is gone (e.g. the DB was restored from an older backup) is set aside
+  // at startup, never deleted
+  fs.mkdirSync(path.join(uploadsDir, 'lesson-files'), { recursive: true });
+  const stray = path.join(uploadsDir, 'lesson-files', '1700000000000-abc.pdf');
+  fs.writeFileSync(stray, '%PDF-1.4 stray');
+  fs.utimesSync(stray, new Date(Date.now() - 3600e3), new Date(Date.now() - 3600e3));
   const child = startServer(uploadsDir);
+  serverOutput = child.getOutput;
   t.after(() => { child.kill('SIGTERM'); fs.rmSync(uploadsDir, { recursive: true, force: true }); });
   await waitForHealth(child);
+  await eventually(() => fs.existsSync(path.join(uploadsDir, 'lesson-files', '.orphaned', '1700000000000-abc.pdf')), 'the orphaned file was not set aside');
+  assert.equal(fs.readFileSync(path.join(uploadsDir, 'lesson-files', '.orphaned', '1700000000000-abc.pdf'), 'utf8'), '%PDF-1.4 stray');
+  assert.equal(lessonFileCount(uploadsDir), 0);
 
   const anon = session();
 
@@ -184,6 +236,10 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const pending = adminNotifs.body.find((n) => n.type === 'new_user_pending');
   assert.equal(pending.metadata.userId, student.id);
   assert.equal(pending.status, 'approved');
+  // Every notification deep-links into the app, and its email carries the same link
+  assert.equal(pending.link, `/users?user=${student.id}`);
+  await waitForOutput(child, /to=admin@example\.test subject="New User Registered" link=\S+\/users\?user=\d+/);
+  await waitForOutput(child, /to=student@example\.test subject="Account Approved! 🎉" link=\S+\/courses\b/);
 
   // Courses: admin creates a course and two phases; the second phase is gated on the first
   const anonCourse = await anon('/courses', { method: 'POST', json: { name: 'x' } });
@@ -337,7 +393,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const early = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: earlyForm });
   assert.equal(early.status, 403, JSON.stringify(early.body));
   assert.deepEqual(early.body.lockReasons, ['enroll']);
-  assert.equal(fs.readdirSync(uploadsDir).length, 0);
+  await eventually(() => uploadedFiles(uploadsDir).length === 0, 'the refused upload was not removed');
   const firstEnrol = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' });
   assert.equal(firstEnrol.status, 200);
 
@@ -345,7 +401,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   form.append('file', new Blob(['<script>alert(1)</script>'], { type: 'text/html' }), '../evil name.html');
   const submit = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: form });
   assert.equal(submit.status, 201, JSON.stringify(submit.body));
-  const stored = fs.readdirSync(uploadsDir);
+  const stored = uploadedFiles(uploadsDir);
   assert.equal(stored.length, 1);
   assert.match(stored[0], /-evil_name\.html$/); // sanitised basename, no traversal
 
@@ -383,7 +439,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   blank.append('comment', '   \n\t ');
   assert.equal((await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: blank })).status, 400);
   for (const sid of [commentOnly.body.id, both.body.id]) assert.equal((await stud(`/submissions/${sid}`, { method: 'DELETE' })).status, 200);
-  assert.equal(fs.readdirSync(uploadsDir).length, 1);
+  await eventually(() => uploadedFiles(uploadsDir).length === 1, 'deleted submission files were not removed');
 
   // Admin review inbox: every submission with its place in the course and a deep-link target
   assert.equal((await stud('/admin/submissions')).status, 403);
@@ -473,6 +529,37 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(inboxAfter.body.submissions[0].status, 'approved');
   assert.strictEqual(inboxAfter.body.counts.approved, 1);
   assert.strictEqual(inboxAfter.body.counts.pending, 0);
+  // Submission + review notifications open the task on its course road (in the app and by email)
+  const taskDeepLink = `/courses/${course.body.id}?lesson=${lesson.body.id}&task=${task.body.id}`;
+  const studNotifs = (await stud('/notifications')).body;
+  assert.equal(studNotifs.find((n) => n.type === 'account_approved').link, '/courses');
+  assert.equal(studNotifs.find((n) => n.type === 'submission_approved').link, taskDeepLink);
+  assert.equal((await admin('/notifications')).body.find((n) => n.type === 'task_submission').link, taskDeepLink);
+  await waitForOutput(child, new RegExp(`to=student@example\\.test subject="Task Approved! ✅" link=\\S+${taskDeepLink.replace(/[?]/g, '\\?')}`));
+  // Stars: in-app + email, linking to the leaderboard
+  const stars = await admin(`/admin/users/${student.id}/add-stars`, { method: 'POST', json: { stars: 5 } });
+  assert.equal(stars.status, 200);
+  assert.equal((await stud('/notifications')).body.find((n) => n.type === 'stars_received').link, '/users');
+  await waitForOutput(child, /to=student@example\.test subject="⭐ \+5 Stars Received!" link=\S+\/users/);
+  // Approving / promoting from the admin user editor notifies too (it used to be silent)
+  const lateReg = await anon('/register', { method: 'POST', json: { name: 'Late', email: 'late@example.test', password: 'LatePass123!' } });
+  assert.equal(lateReg.status, 201);
+  const editForm = new FormData();
+  editForm.append('is_approved', 'true');
+  editForm.append('role', 'admin');
+  const editedUser = await admin(`/admin/users/${lateReg.body.userId}`, { method: 'PUT', body: editForm });
+  assert.equal(editedUser.status, 200, JSON.stringify(editedUser.body));
+  await waitForOutput(child, /to=late@example\.test subject="Account Approved! 🎉"/);
+  // An email already used by another account (any letter case) is refused, not a 500
+  const dupForm = new FormData();
+  dupForm.append('email', 'STUDENT@example.test');
+  assert.equal((await admin(`/admin/users/${lateReg.body.userId}`, { method: 'PUT', body: dupForm })).status, 409);
+  await waitForOutput(child, /to=late@example\.test subject="You are now an administrator 🛠️"/);
+  const late = await loginAs('late@example.test', 'LatePass123!');
+  assert.deepEqual((await late('/notifications')).body.map((n) => [n.type, n.link]).sort(), [['account_approved', '/courses'], ['role_changed', '/courses']]);
+  assert.equal((await admin(`/admin/users/${lateReg.body.userId}`, { method: 'DELETE' })).status, 200);
+  // Every notification created so far has a link
+  assert.ok([...studNotifs, ...(await admin('/notifications')).body].every((n) => typeof n.link === 'string' && n.link.startsWith('/')));
 
   // The course road: enrolment gates everything for a student, then the sequence gates phase 2
   const phase2Lesson = await admin('/lessons', { method: 'POST', json: { pathId: phase2.body.id, title: 'P2 L1', description: 'What phase 2 covers', order: 1 } });
@@ -498,7 +585,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const lockedSubmit = await stud(`/tasks/${phase2Task.body.id}/submit`, { method: 'POST', body: lockedForm });
   assert.equal(lockedSubmit.status, 403, JSON.stringify(lockedSubmit.body));
   assert.deepEqual(lockedSubmit.body.lockReasons, ['enroll']);
-  assert.equal(fs.readdirSync(uploadsDir).length, 1); // the rejected upload was removed
+  await eventually(() => uploadedFiles(uploadsDir).length === 1, 'the rejected upload was not removed');
   // The legacy read routes apply the same rule
   const legacyDetails = await anon(`/paths/${phase2.body.id}/details`);
   assert.equal(legacyDetails.status, 200);
@@ -511,6 +598,12 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(adminLegacyTask.body.description, 'secret brief');
   const enrol = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' });
   assert.equal(enrol.status, 200);
+  const unicodeForm = new FormData();
+  unicodeForm.append('file', new Blob(['tema'], { type: 'text/plain' }), 'Temă – Ștefan.txt');
+  const unicodeSubmit = await stud(`/tasks/${task.body.id}/submit`, { method: 'POST', body: unicodeForm });
+  assert.equal(unicodeSubmit.status, 201, JSON.stringify(unicodeSubmit.body));
+  assert.equal(unicodeSubmit.body.fileName, 'Temă – Ștefan.txt'); // not latin1-garbled
+  assert.equal((await stud(`/submissions/${unicodeSubmit.body.id}`, { method: 'DELETE' })).status, 200);
   const enrolAgain = await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' }); // idempotent
   assert.equal(enrolAgain.status, 200);
   const catalogue = await stud('/courses');
@@ -527,6 +620,158 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(roadAfter.body.phases[1].lessons[0].tasks[0].is_new, true);
   assert.equal(roadAfter.body.phases[1].lessons[0].tasks[0].description, 'secret brief'); // reached → full content
   assert.equal((await stud(`/tasks/${phase2Task.body.id}`)).body.description, 'secret brief');
+  // Study sets (quizzes + flashcards) under a lesson: admin-managed, students practise
+  const anonSet = await anon('/study-sets', { method: 'POST', json: {} });
+  assert.equal(anonSet.status, 401);
+  const studSet = await stud('/study-sets', { method: 'POST', json: { lessonId: phase2Lesson.body.id, kind: 'quiz', title: 'x', items: [] } });
+  assert.equal(studSet.status, 403);
+  const badSet = await admin('/study-sets', { method: 'POST', json: { lessonId: phase2Lesson.body.id, kind: 'quiz', title: 'Q', items: [{ question: 'q', options: ['a'], correct: 3 }] } });
+  assert.equal(badSet.status, 400);
+  assert.ok(badSet.body.details.some((d) => /options/.test(d)), JSON.stringify(badSet.body));
+  const ghostLessonSet = await admin('/study-sets', { method: 'POST', json: { lessonId: 999999, kind: 'flashcards', title: 'F', items: [] } });
+  assert.equal(ghostLessonSet.status, 404);
+  // Lesson materials: teachers attach Word / PowerPoint / PDF / TXT / MD files to a lesson
+  const pdfBytes = '%PDF-1.4\n1 0 obj <<>> endobj\ntrailer <<>>\n%%EOF\n';
+  const filesForm = (entries) => {
+    const f = new FormData();
+    for (const [name, content, type] of entries) f.append('files', new Blob([content], { type: type || 'application/octet-stream' }), name);
+    return f;
+  };
+  assert.equal((await stud(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['a.pdf', pdfBytes]]) })).status, 403);
+  assert.equal((await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['virus.exe', 'MZ']]) })).status, 400);
+  const fakePdf = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['page.pdf', '<html><script>alert(1)</script></html>']]) });
+  assert.equal(fakePdf.status, 400, 'an HTML file renamed to .pdf is refused');
+  await eventually(() => lessonFileCount(uploadsDir) === 0, 'refused uploads leave no bytes behind'); // unlink runs after the reply
+  const uploaded = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([
+    ['Curs 1 – introducere.pdf', pdfBytes, 'application/pdf'],
+    ['notes.md', '# Week 2\n\n- **HTTP** basics\n- <script>alert(1)</script>', 'text/markdown'],
+    ['slides.pptx', Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3])],
+  ]) });
+  assert.equal(uploaded.status, 201, JSON.stringify(uploaded.body));
+  assert.deepEqual(uploaded.body.map((f) => [f.ext, f.viewable, f.view_as]), [['pdf', true, 'pdf'], ['md', true, 'markdown'], ['pptx', false, null]]);
+  const [p2Pdf, p2Md, p2Pptx] = uploaded.body;
+  assert.equal(p2Pdf.name, 'Curs 1 – introducere.pdf');
+  // On the road (names only) and readable by an enrolled student who reached the phase
+  const roadFiles = (await stud(`/courses/${course.body.id}`)).body.phases[1].lessons[0].files;
+  assert.deepEqual(roadFiles.map((f) => f.name), ['Curs 1 – introducere.pdf', 'notes.md', 'slides.pptx']);
+  const pdfView = await fetch(`${BASE}/lesson-files/${p2Pdf.id}/view`, { headers: { cookie: stud.cookie() } });
+  assert.equal(pdfView.status, 200);
+  assert.equal(pdfView.headers.get('content-type'), 'application/pdf');
+  assert.match(pdfView.headers.get('content-disposition'), /^inline;/);
+  assert.match(pdfView.headers.get('content-disposition'), /filename\*=UTF-8''Curs%201%20%E2%80%93%20introducere\.pdf/);
+  assert.equal(await pdfView.text(), pdfBytes);
+  const mdView = await fetch(`${BASE}/lesson-files/${p2Md.id}/view`, { headers: { cookie: stud.cookie() } });
+  assert.equal(mdView.headers.get('content-type'), 'text/plain; charset=utf-8'); // never HTML on this origin
+  assert.match(mdView.headers.get('content-security-policy'), /sandbox/);
+  assert.equal(mdView.headers.get('x-content-type-options'), 'nosniff');
+  assert.match(await mdView.text(), /# Week 2/);
+  assert.equal((await stud(`/lesson-files/${p2Pptx.id}/view`)).status, 415, 'PowerPoint is download-only');
+  const pptxDl = await fetch(`${BASE}/lesson-files/${p2Pptx.id}/download`, { headers: { cookie: stud.cookie() } });
+  assert.equal(pptxDl.status, 200);
+  assert.match(pptxDl.headers.get('content-disposition'), /^attachment; filename="slides\.pptx"/);
+  assert.equal((await anon(`/lesson-files/${p2Pdf.id}/view`)).status, 401);
+  // A stored file that cannot be read (here: replaced by a directory, so the existence check
+  // passes) is a clean 500, not an unhandled stream error that takes the server down
+  const [{ stored_name: pptxStored }] = await dbQuery('SELECT stored_name FROM lesson_files WHERE id = $1', [p2Pptx.id]);
+  const pptxPath = path.join(uploadsDir, 'lesson-files', pptxStored);
+  fs.renameSync(pptxPath, `${pptxPath}.bak`);
+  fs.mkdirSync(pptxPath);
+  const brokenDl = await fetch(`${BASE}/lesson-files/${p2Pptx.id}/download`, { headers: { cookie: stud.cookie() } });
+  assert.equal(brokenDl.status, 500);
+  assert.equal(brokenDl.headers.get('content-disposition'), null);
+  const brokenView = await fetch(`${BASE}/lesson-files/${p2Pptx.id}/view`, { headers: { cookie: stud.cookie() } });
+  assert.equal(brokenView.status, 415); // pptx has no view; the error path is shared with download
+  fs.rmdirSync(pptxPath);
+  fs.renameSync(`${pptxPath}.bak`, pptxPath);
+  assert.equal((await fetch(`${BASE}/lesson-files/${p2Pptx.id}/download`, { headers: { cookie: stud.cookie() } })).status, 200, 'the server survived the read error');
+  // The public uploads route never serves lesson materials (they follow the lesson's lock rules)
+  const storedName = fs.readdirSync(path.join(uploadsDir, 'lesson-files')).find((f) => !f.startsWith('.'));
+  assert.equal((await anon(`/uploads/lesson-files/${storedName}`)).status, 404);
+  // ...however the path is spelled (express.static decodes and normalises it after routing)
+  for (const spelled of [`lesson%2Dfiles/${storedName}`, `lesson%2dfiles/${storedName}`, `./lesson-files/${storedName}`,
+    `x/../lesson-files/${storedName}`, `%2E/lesson-files/${storedName}`, `lesson-files%2F${storedName}`, `/lesson-files/${storedName}`,
+    `%6Cesson-files/${storedName}`, `x/..%2flesson-files/${storedName}`, `x%2F..%2Flesson-files%2F${storedName}`]) {
+    assert.equal((await fetch(`${BASE}/uploads/${spelled}`)).status, 404, spelled);
+  }
+  // Rename, delete (bytes removed)
+  assert.equal((await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { order: 2147483648 } })).status, 400);
+  assert.equal((await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { name: '  ' } })).status, 400);
+  assert.equal((await admin('/study-sets', { method: 'POST', json: { lessonId: phase2Lesson.body.id, kind: 'flashcards', title: 'x', items: [], order: 2147483648 } })).status, 400);
+  const bidiName = await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { name: 'report\u202Efdp.exe' } });
+  assert.equal(bidiName.body.name, 'reportfdp.exe.md', 'bidi overrides are stripped; the extension is kept');
+  const renamedFile = await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { name: 'Week 2 notes.md' } });
+  assert.equal(renamedFile.body.name, 'Week 2 notes.md');
+  const tmp = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['tmp.txt', 'temporary']]) });
+  assert.equal(lessonFileCount(uploadsDir), 4);
+  assert.equal((await stud(`/lesson-files/${tmp.body[0].id}`, { method: 'DELETE' })).status, 403);
+  assert.equal((await admin(`/lesson-files/${tmp.body[0].id}`, { method: 'DELETE' })).status, 200);
+  await eventually(() => lessonFileCount(uploadsDir) === 3, 'deleted lesson file bytes were not removed');
+
+  const quiz = await admin('/study-sets', { method: 'POST', json: {
+    lessonId: phase2Lesson.body.id, kind: 'quiz', title: 'Phase 2 check', items: [
+      { question: 'Which HTTP status means Not Found?', options: ['200', '404', '500'], correct: 1, explanation: '4xx = client error' },
+      { question: 'Pick the HTTP verbs', options: ['GET', 'FETCH', 'POST'], correct: [2, 0] },
+    ] } });
+  assert.equal(quiz.status, 201, JSON.stringify(quiz.body));
+  assert.deepEqual(quiz.body.items[1].correct, [0, 2]); // normalised
+  const deck = await admin('/study-sets', { method: 'POST', json: {
+    lessonId: phase2Lesson.body.id, kind: 'flashcards', title: 'Terms', items: [{ front: 'SUT', back: 'System under test' }, { front: 'CI', back: 'Continuous integration' }] } });
+  assert.equal(deck.status, 201, JSON.stringify(deck.body));
+  assert.equal(deck.body.order_index, 2);
+  // Students get the questions without the answers
+  const studQuiz = await stud(`/study-sets/${quiz.body.id}`);
+  assert.equal(studQuiz.status, 200);
+  assert.equal(studQuiz.body.items[0].correct, undefined);
+  assert.equal(studQuiz.body.items[0].explanation, undefined);
+  assert.equal(studQuiz.body.items[1].multiple, true);
+  assert.equal((await admin(`/study-sets/${quiz.body.id}`)).body.items[0].explanation, '4xx = client error');
+  const lessonSets = await stud(`/lessons/${phase2Lesson.body.id}/study-sets`);
+  assert.deepEqual(lessonSets.body.map((x) => x.kind), ['quiz', 'flashcards']);
+  // The lesson listing hides the answers from students too
+  assert.equal(/"correct"|"explanation"/.test(JSON.stringify(lessonSets.body)), false);
+  assert.equal(lessonSets.body[0].items[1].multiple, true);
+  // Grading happens on the server
+  const badAttempt = await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [1] } });
+  assert.equal(badAttempt.status, 400);
+  // Answers must be option indexes of their question, at most one per option
+  for (const answers of [[7, [0]], [1, [-1]], [1, [0, 1, 2, 0, 1, 2]], [1, ['0']], [1, [0, 0]]]) {
+    assert.equal((await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers } })).status, 400, JSON.stringify(answers));
+  }
+  const attempt1 = await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [1, [0]] } });
+  assert.equal(attempt1.status, 200, JSON.stringify(attempt1.body));
+  assert.equal(attempt1.body.score, 1);
+  assert.deepEqual(attempt1.body.results.map((r) => r.correct), [true, false]);
+  assert.deepEqual(attempt1.body.results[1].correct_options, [0, 2]);
+  const attempt2 = await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [0, [2, 0]] } });
+  assert.deepEqual(attempt2.body.progress, { best_score: 1, last_score: 1, total: 2, attempts: 2 });
+  const cards = await stud(`/study-sets/${deck.body.id}/attempts`, { method: 'POST', json: { known: 2 } });
+  assert.equal(cards.status, 200);
+  assert.equal((await stud(`/study-sets/${deck.body.id}/attempts`, { method: 'POST', json: { known: 3 } })).status, 400);
+  // The road carries titles, sizes and the caller's progress (never the items)
+  const roadSets = await stud(`/courses/${course.body.id}`);
+  const p2Sets = roadSets.body.phases[1].lessons[0].study_sets;
+  assert.deepEqual(p2Sets.map((x) => [x.kind, x.item_count]), [['quiz', 2], ['flashcards', 2]]);
+  assert.equal(p2Sets[0].items, undefined);
+  assert.equal(p2Sets[1].progress.best_score, 2);
+  // Editing: items replace the list; kind is fixed
+  const editKind = await admin(`/study-sets/${deck.body.id}`, { method: 'PUT', json: { kind: 'quiz' } });
+  assert.equal(editKind.status, 400);
+  const edited = await admin(`/study-sets/${deck.body.id}`, { method: 'PUT', json: { title: 'Key terms', items: [{ front: 'QA', back: 'Quality assurance' }] } });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  assert.equal(edited.body.item_count, 1);
+  // New questions = new results: the student's best score on the old deck is gone
+  assert.equal((await stud(`/study-sets/${deck.body.id}`)).body.progress, null);
+  // Renaming alone keeps results — also when the editor re-sends the unchanged items (the stored
+  // jsonb has its keys reordered, so this must be a semantic comparison)
+  await stud(`/study-sets/${deck.body.id}/attempts`, { method: 'POST', json: { known: 1 } });
+  await admin(`/study-sets/${deck.body.id}`, { method: 'PUT', json: { title: 'Key terms (v2)' } });
+  assert.equal((await stud(`/study-sets/${deck.body.id}`)).body.progress.best_score, 1);
+  await admin(`/study-sets/${deck.body.id}`, { method: 'PUT', json: { title: 'Key terms (v3)', items: [{ front: 'QA', back: 'Quality assurance' }] } });
+  assert.equal((await stud(`/study-sets/${deck.body.id}`)).body.progress.best_score, 1);
+  const quizBefore = (await admin(`/study-sets/${quiz.body.id}`)).body;
+  await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [1, [0, 2]] } });
+  await admin(`/study-sets/${quiz.body.id}`, { method: 'PUT', json: { title: quizBefore.title, items: quizBefore.items } });
+  assert.equal((await stud(`/study-sets/${quiz.body.id}`)).body.progress.best_score, 2);
   // A third phase behind the unfinished phase 2 is locked for the 'previous' reason
   const phase3 = await admin('/paths', { method: 'POST', json: { name: 'Phase 3', course_id: course.body.id } });
   assert.equal(phase3.body.order_index, 3);
@@ -560,6 +805,16 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const dropPhase3 = await admin(`/paths/${phase3.body.id}`, { method: 'DELETE' });
   assert.equal(dropPhase3.status, 200);
   assert.equal((await admin('/courses/abc')).status, 404);
+  // Lesson-file routes share the id guard: non-numeric or out-of-range ids are a 404, never a 500
+  assert.equal((await admin('/lessons/abc/files')).status, 404);
+  assert.equal((await admin('/lesson-files/abc/view')).status, 404);
+  assert.equal((await admin('/lesson-files/99999999999/download')).status, 404);
+  assert.equal((await admin('/lesson-files/abc', { method: 'DELETE' })).status, 404);
+  assert.equal((await admin('/study-sets/99999999999')).status, 404);
+  assert.equal((await admin('/lessons/99999999999/study-sets')).status, 404);
+  for (const userId of [1.5, '1e2', 99999999999, 'abc']) {
+    assert.equal((await anon('/verify-code', { method: 'POST', json: { userId, code: '123456' } })).status, 400, String(userId));
+  }
   assert.equal((await admin('/courses/abc', { method: 'DELETE' })).status, 404);
   assert.equal((await anon('/paths/abc/details')).status, 404);
   assert.equal((await stud('/tasks/abc')).status, 404);
@@ -567,13 +822,24 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   ghostForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'ghost.txt');
   const ghostSubmit = await stud('/tasks/999999/submit', { method: 'POST', body: ghostForm });
   assert.equal(ghostSubmit.status, 404);
-  assert.ok(!fs.readdirSync(uploadsDir).some((f) => f.endsWith('ghost.txt')));
+  await eventually(() => !uploadedFiles(uploadsDir).some((f) => f.endsWith('ghost.txt')), 'the ghost upload was not removed');
   assert.equal((await admin('/paths/999999', { method: 'DELETE' })).status, 404);
   // Add a star gate on phase 2 that the student (10 stars) does not meet
   const gate = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 500 } });
   assert.equal(gate.status, 200);
   const roadGated = await stud(`/courses/${course.body.id}`);
   assert.deepEqual(roadGated.body.phases[1].lockReasons, ['stars']);
+  // …and so are its lesson materials (the list is visible, the content is not)
+  assert.equal((await stud(`/lesson-files/${p2Pdf.id}/view`)).status, 403);
+  assert.equal((await stud(`/lesson-files/${p2Pdf.id}/download`)).status, 403);
+  assert.equal((await stud(`/lessons/${phase2Lesson.body.id}/files`)).body.length, 3);
+  assert.equal((await admin(`/lesson-files/${p2Pdf.id}/view`)).status, 200);
+  // …and its study sets are closed too
+  const lockedSet = await stud(`/study-sets/${quiz.body.id}`);
+  assert.equal(lockedSet.status, 403);
+  assert.deepEqual(lockedSet.body.lockReasons, ['stars']);
+  assert.equal((await stud(`/study-sets/${quiz.body.id}/attempts`, { method: 'POST', json: { answers: [1, [0, 2]] } })).status, 403);
+  assert.equal((await admin(`/study-sets/${quiz.body.id}`)).status, 200);
   const starsForm = new FormData();
   starsForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'early.txt');
   const starsSubmit = await stud(`/tasks/${phase2Task.body.id}/submit`, { method: 'POST', body: starsForm });
@@ -620,6 +886,8 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const orphanSubmit = await stud(`/tasks/${phase2Task.body.id}/submit`, { method: 'POST', body: orphanForm });
   assert.equal(orphanSubmit.status, 403);
   assert.deepEqual(orphanSubmit.body.lockReasons, ['unpublished']);
+  assert.equal((await stud(`/lessons/${phase2Lesson.body.id}/files`)).status, 404, 'unpublished phase file names stay hidden');
+  assert.equal((await admin(`/lessons/${phase2Lesson.body.id}/files`)).status, 200);
   assert.equal((await admin(`/paths/${phase2.body.id}/details`)).body[0].tasks[0].description, 'secret brief');
   const reattach = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 0, course_id: course.body.id, order_index: 2 } });
   assert.equal(reattach.status, 200);
@@ -679,7 +947,10 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
     requires_previous: false,
     lessons: [
       { title: 'L1', description: 'first', tasks: [{ title: 'T1', xp: 5 }, { title: 'T2', type: 'optional', deadline: '2031-05-01' }] },
-      { title: 'L2', tasks: [{ title: 'T3' }] },
+      { title: 'L2', tasks: [{ title: 'T3' }], study_sets: [
+        { kind: 'quiz', title: 'L2 quiz', items: [{ question: 'Q?', options: ['a', 'b'], correct: 0 }] },
+        { kind: 'flashcards', title: 'L2 cards', items: [{ front: 'f', back: 'b' }] },
+      ] },
       { title: 'L3' },
     ],
   };
@@ -696,6 +967,17 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(imp.status, 201, JSON.stringify(impBody));
   assert.equal(impBody.counts.lessons, 3);
   assert.equal(impBody.counts.tasks, 3);
+  assert.equal(impBody.counts.study_sets, 2);
+  const badSetImport = await fetch(`${BASE}/admin/paths/import`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'x', lessons: [{ title: 'L', study_sets: [{ kind: 'poll', title: 'x', items: [] }] }] }) });
+  assert.equal(badSetImport.status, 400);
+  // The API key manages study sets like an admin session
+  const keySet = await fetch(`${BASE}/study-sets`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify({ lessonId: impBody.lessons[0].id, kind: 'flashcards', title: 'Via key', items: [{ front: 'a', back: 'b' }] }) });
+  const keySetBody = await keySet.json();
+  assert.equal(keySet.status, 201, JSON.stringify(keySetBody));
+  const keyRead = await fetch(`${BASE}/lessons/${impBody.lessons[1].id}/study-sets`, { headers: bearer });
+  const keyReadBody = await keyRead.json();
+  assert.equal(keyReadBody[0].items[0].correct[0], 0); // admin view includes the answers
+  assert.equal((await fetch(`${BASE}/study-sets/${keySetBody.id}`, { method: 'DELETE', headers: bearer })).status, 200);
   const importedPhase = (await admin('/paths')).body.find((p) => p.id === String(impBody.path.id));
   assert.equal(importedPhase.course_id, course.body.id);
   assert.equal(importedPhase.order_index, 3);
@@ -724,6 +1006,126 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(revoke.status, 200);
   const afterRevoke = await fetch(`${BASE}/admin/api-keys`, { headers: bearer });
   assert.equal(afterRevoke.status, 401);
+
+  // ---- Password security ----------------------------------------------------
+  // Weak, common, name-based and over-long (bcrypt reads only 72 bytes) passwords are refused
+  for (const [password, re] of [['Password123', /too common/], ['Pwtest2024', /based on your (name|email)/], ['a'.repeat(257), /too long/], ['zzzzzzzzzz', /too easy/]]) {
+    const r = await anon('/register', { method: 'POST', json: { name: 'Pwtest', email: 'pwtest@example.test', password } });
+    assert.equal(r.status, 400, password);
+    assert.match(r.body.error, re);
+  }
+  const pwReg = await anon('/register', { method: 'POST', json: { name: 'Pwtest', email: 'pwtest@example.test', password: 'Blue-Kettle-Morning-7' } });
+  assert.equal(pwReg.status, 201, JSON.stringify(pwReg.body));
+  assert.equal((await admin(`/users/${pwReg.body.userId}/approve`, { method: 'POST' })).status, 200);
+  // Stored sealed (scrypt hash encrypted with PASSWORD_PEPPER); the emailed code only as an HMAC
+  const [pwRow] = await dbQuery('SELECT password, login_code FROM users WHERE id = $1', [pwReg.body.userId]);
+  assert.match(pwRow.password, /^\$sealed\$v1\$[0-9a-f]{8}\$/);
+  assert.equal(/scrypt|\$2b\$/.test(pwRow.password), false);
+  // Every account in the database is sealed, including those created before this release
+  assert.deepEqual(await dbQuery("SELECT id FROM users WHERE password NOT LIKE '$sealed$v1$%'"), []);
+  const pw1 = await loginAs('PWTEST@Example.test', 'Blue-Kettle-Morning-7'); // email is case-insensitive
+  const pwOther = await loginAs('pwtest@example.test', 'Blue-Kettle-Morning-7'); // a second device
+  await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Blue-Kettle-Morning-7' } });
+  const [codeRow] = await dbQuery('SELECT login_code FROM users WHERE id = $1', [pwReg.body.userId]);
+  assert.match(codeRow.login_code, /^[0-9a-f]{64}$/);
+  assert.notEqual(codeRow.login_code, await readLoginCode('pwtest@example.test'));
+  // Unknown email and wrong password answer the same way
+  const unknown = await anon('/login', { method: 'POST', json: { email: 'nobody@example.test', password: 'Whatever-123' } });
+  const wrong = await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Whatever-123' } });
+  assert.deepEqual([unknown.status, unknown.body], [wrong.status, wrong.body]);
+  // Changing the password: needs the current one, applies the policy, signs out other devices
+  const badCurrent = await pw1('/me/password', { method: 'PUT', json: { current_password: 'nope-nope-1', new_password: 'Green-Lamp-Evening-8' } });
+  assert.equal(badCurrent.status, 400);
+  const weakNew = await pw1('/me/password', { method: 'PUT', json: { current_password: 'Blue-Kettle-Morning-7', new_password: 'password1' } });
+  assert.equal(weakNew.status, 400);
+  const changed = await pw1('/me/password', { method: 'PUT', json: { current_password: 'Blue-Kettle-Morning-7', new_password: 'Green-Lamp-Evening-8' } });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  assert.equal((await pw1('/me')).status, 200);           // this device got a fresh cookie
+  assert.equal((await pwOther('/me')).status, 401);       // the other device is signed out
+  assert.equal((await pwOther('/notifications')).status, 401);
+  await waitForOutput(child, /to=pwtest@example\.test subject="Your password was changed 🔐"/);
+  assert.equal((await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Blue-Kettle-Morning-7' } })).status, 401);
+  await loginAs('pwtest@example.test', 'Green-Lamp-Evening-8');
+  // Two concurrent changes from the same current password: exactly one wins, the other is refused
+  // (409, or 400 if it ran after the pwWinner) instead of silently overwriting it
+  const pwRacers = ['Teal-Door-Summer-31', 'Plum-Road-Winter-42'];
+  const pwRaced = await Promise.all(pwRacers.map((p) => pw1('/me/password', { method: 'PUT', json: { current_password: 'Green-Lamp-Evening-8', new_password: p } })));
+  const pwWinners = pwRaced.filter((r) => r.status === 200);
+  assert.equal(pwWinners.length, 1, JSON.stringify(pwRaced.map((r) => [r.status, r.body])));
+  assert.ok([400, 409].includes(pwRaced.find((r) => r.status !== 200).status));
+  const pwWinner = pwRacers[pwRaced.indexOf(pwWinners[0])];
+  await loginAs('pwtest@example.test', pwWinner);
+  assert.equal((await pw1('/me/password', { method: 'PUT', json: { current_password: pwWinner, new_password: 'Green-Lamp-Evening-8' } })).status, 200);
+  // 10 wrong passwords lock the account for 15 minutes, even for the right password
+  for (let i = 0; i < 10; i++) {
+    assert.equal((await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: `Wrong-guess-${i}` } })).status, 401);
+  }
+  // …and the lock answers exactly like a wrong password / unknown email (no account or guess is
+  // revealed); the owner is told by email
+  const locked = await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });
+  assert.deepEqual([locked.status, locked.body], [unknown.status, unknown.body]);
+  await waitForOutput(child, /to=pwtest@example\.test subject="Your account was locked for 15 minutes 🔒"/);
+  // An admin can lift the lock early (students cannot)
+  assert.equal((await stud(`/users/${pwReg.body.userId}/unlock`, { method: 'POST' })).status, 403);
+  assert.equal((await admin('/users/999999/unlock', { method: 'POST' })).status, 404);
+  assert.equal((await admin(`/users/${pwReg.body.userId}/unlock`, { method: 'POST' })).status, 200);
+  // A legacy bcrypt hash (as left by older releases) still logs in and is upgraded to sealed scrypt
+  const bcrypt = require('bcrypt');
+  await dbQuery('UPDATE users SET password = $1 WHERE id = $2', [bcrypt.hashSync('Green-Lamp-Evening-8', 10), pwReg.body.userId]);
+  await loginAs('pwtest@example.test', 'Green-Lamp-Evening-8');
+  const [rehashed] = await dbQuery('SELECT password, failed_login_attempts, locked_until FROM users WHERE id = $1', [pwReg.body.userId]);
+  assert.match(rehashed.password, /^\$sealed\$v1\$/);
+  assert.equal(rehashed.failed_login_attempts, 0);
+  assert.equal(rehashed.locked_until, null);
+  // Guessing the current password through "change password" (e.g. with a stolen session) counts
+  // toward the same lock, and a login code sent before the lock stops working
+  const pending2fa = session();
+  const started = await pending2fa('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });
+  assert.equal(started.status, 200);
+  const earlyCode = await readLoginCode('pwtest@example.test');
+  for (let i = 0; i < 9; i++) {
+    assert.equal((await pw1('/me/password', { method: 'PUT', json: { current_password: `nope-${i}-wrong`, new_password: 'Red-Clock-Night-99' } })).status, 400);
+  }
+  assert.equal((await pw1('/me/password', { method: 'PUT', json: { current_password: 'nope-9-wrong', new_password: 'Red-Clock-Night-99' } })).status, 429);
+  assert.equal((await pw1('/me/password', { method: 'PUT', json: { current_password: 'Green-Lamp-Evening-8', new_password: 'Red-Clock-Night-99' } })).status, 429);
+  assert.equal((await pending2fa('/verify-code', { method: 'POST', json: { userId: started.body.userId, code: earlyCode } })).status, 400);
+  assert.equal((await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } })).status, 401);
+  await dbQuery('UPDATE users SET locked_until = NULL, failed_login_attempts = 0 WHERE id = $1', [pwReg.body.userId]);
+
+  // A hash the server cannot open (sealed with another key) is a server problem: 503, not
+  // "your current password is incorrect", and it does not count toward the lock
+  const passwords = require('../passwords');
+  passwords.configure({ PASSWORD_PEPPER: require('node:crypto').randomBytes(32).toString('base64') });
+  const [beforeKeyMix] = await dbQuery('SELECT password FROM users WHERE id = $1', [pwReg.body.userId]);
+  await dbQuery('UPDATE users SET password = $1 WHERE id = $2', [await passwords.hashPassword('Green-Lamp-Evening-8'), pwReg.body.userId]);
+  const unreadable = await pw1('/me/password', { method: 'PUT', json: { current_password: 'Green-Lamp-Evening-8', new_password: 'Red-Clock-Night-99' } });
+  assert.equal(unreadable.status, 503, JSON.stringify(unreadable.body));
+  assert.equal((await dbQuery('SELECT failed_login_attempts FROM users WHERE id = $1', [pwReg.body.userId]))[0].failed_login_attempts, 0);
+  await dbQuery('UPDATE users SET password = $1 WHERE id = $2', [beforeKeyMix.password, pwReg.body.userId]);
+
+  // Un-approved between /login and /verify-code: no session
+  const unapproving = session();
+  const startedLogin = await unapproving('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });
+  assert.equal(startedLogin.status, 200);
+  const pendingCode = await readLoginCode('pwtest@example.test');
+  await dbQuery('UPDATE users SET is_approved = FALSE WHERE id = $1', [pwReg.body.userId]);
+  assert.equal((await unapproving('/verify-code', { method: 'POST', json: { userId: startedLogin.body.userId, code: pendingCode } })).status, 403);
+  await dbQuery('UPDATE users SET is_approved = TRUE WHERE id = $1', [pwReg.body.userId]);
+
+  // Parallel wrong codes cannot exceed the 5 tries per code, and the code is then void
+  const racer = session();
+  const raceLogin = await racer('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });
+  assert.equal(raceLogin.status, 200);
+  const raceCode = await readLoginCode('pwtest@example.test');
+  const wrongCode = raceCode === '000000' ? '111111' : '000000';
+  const raced = await Promise.all(Array.from({ length: 12 }, () => racer('/verify-code', { method: 'POST', json: { userId: raceLogin.body.userId, code: wrongCode } })));
+  assert.ok(raced.filter((r) => r.body.error === 'Incorrect code.').length <= 4, JSON.stringify(raced.map((r) => r.body.error)));
+  assert.equal((await racer('/verify-code', { method: 'POST', json: { userId: raceLogin.body.userId, code: raceCode } })).status, 400);
+
+  // No API response ever carries a password hash
+  for (const r of [await admin('/admin/users'), await admin('/users/directory'), await anon('/users'), await pw1('/me')]) {
+    assert.equal(/\$2b\$|\$sealed\$|scrypt/.test(JSON.stringify(r.body)), false);
+  }
 
   // Logout clears the session
   await stud('/logout', { method: 'POST' });

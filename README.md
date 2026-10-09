@@ -23,7 +23,9 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 - 🗺️ Hartă tip quest: ✕ pentru lecțiile terminate, 🚩 unde ești acum, ? pentru ce urmează; cuprins pliabil în stânga care sare la lecție
 - 👥 Pagina „Users” cu rolurile admin/student (studenții văd clasamentul, adminii gestionează conturile)
 - 📝 Task-uri cu deadline-uri; predare ca și comentariu (link la PR / ticket Jira), fișier sau ambele
-- 🔔 Notificări în timp real pentru task-uri noi
+- 🧠 Quiz-uri și flashcards sub fiecare lecție, pentru pregătire (corectate pe server, cel mai bun scor salvat; nu blochează drumul)
+- 📎 Materiale atașate lecției (PDF, Word, PowerPoint, TXT, Markdown): PDF/TXT/MD se deschid direct în aplicație, orice fișier se poate descărca
+- 🔔 Notificări în timp real și pe email (cont aprobat, task nou, submisie aprobată/respinsă, stele primite); fiecare notificare are un link direct (deep link) spre task / pagina potrivită
 - 💬 Chat în timp real cu Socket.IO
 - 🖼️ Upload de imagini și fișiere în task-uri și chat
 - 👥 Vizualizare utilizatori online
@@ -35,7 +37,9 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 - 📚 Management lecții și task-uri
 - ✅ Aprobare/respingere submisii studenți; pagina „Submissions” listează tot ce au predat studenții, cu link direct la lecție/task
 - 📜 Script de lecție (Markdown, doar pentru admin): pregătești planul lecției înainte și îl urmărești în timpul ei
-- 🔄 Notificări live pentru submisii noi
+- 🧠 Quiz-uri și flashcards per lecție: editor în aplicație (formular sau JSON) și API complet (`/api/study-sets`, vezi `docs/AGENT_API.md`)
+- 📎 Atașare fișiere la lecție (drag & drop sau buton), redenumire, ștergere; și prin API (`/api/lessons/:id/files`)
+- 🔄 Notificări live și pe email pentru utilizatori noi și submisii noi, cu link direct la submisie / utilizator
 - 📊 Monitorizare progres studenți
 
 ## 🛠️ Stack Tehnologic
@@ -96,7 +100,7 @@ DB_USER=learning
 DB_PASSWORD=learning
 JWT_SECRET=generate_with_openssl_rand_base64_48   # minim 32 caractere
 BOOTSTRAP_ADMIN_EMAIL=you@example.com             # primul cont înregistrat cu acest email devine admin
-EMAIL_USER=your_email@gmail.com                   # opțional local: fără email, codurile de login apar în consolă
+EMAIL_USER=your_email@gmail.com                   # opțional local: fără email, cu LOG_LOGIN_CODES=true codurile de login apar în consolă
 EMAIL_PASS=your_app_password
 PORT=3001
 NODE_ENV=development
@@ -190,12 +194,14 @@ docker run --rm -p 3001:3001 --env-file server/.env -e DB_HOST=host.docker.inter
 | `DB_PASSWORD` | PostgreSQL password | — |
 | `DB_SSL` | `true` dacă serverul cere TLS | nesetat |
 | `JWT_SECRET` | Secret pentru cookie-ul de sesiune (**minim 32 caractere**, altfel serverul nu pornește în producție) | `openssl rand -base64 48` |
+| `PASSWORD_PEPPER` | Cheia care criptează hash-urile parolelor (**obligatorie** peste tot în afară de `NODE_ENV=development`/`test`). Ține-o doar în Dokploy + manager de parole, niciodată în DB sau lângă backup-uri | `openssl rand -base64 32` |
+| `PASSWORD_PEPPER_PREVIOUS` | Doar la rotirea cheii: cheia veche (hash-urile sunt re-criptate la pornire) | — |
 | `BOOTSTRAP_ADMIN_EMAIL` | Primul cont înregistrat cu acest email devine admin aprobat | `you@example.com` |
 | `EMAIL_USER` | Gmail pentru coduri de login + notificări | `your@gmail.com` |
 | `EMAIL_PASS` | App password Gmail | `xxxx xxxx xxxx xxxx` |
 | `PORT` | Port server | `3001` |
 | `NODE_ENV` | Environment | `development` / `production` |
-| `FRONTEND_URL` | URL public (emailuri; origin CORS în dev) | `http://localhost:5173` |
+| `FRONTEND_URL` | URL public — baza linkurilor din emailuri (trebuie să fie adresa reală a aplicației în producție); origin CORS în dev | `http://localhost:5173` |
 | `UPLOADS_DIR` | Director pentru fișierele încărcate | `server/uploads` (Docker: `/app/server/uploads`) |
 | `MAX_UPLOAD_MB` / `MAX_IMAGE_UPLOAD_MB` | Limită dimensiune fișiere (submisii / imagini) | `25` / `10` |
 

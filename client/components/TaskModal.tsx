@@ -66,6 +66,9 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   initialMode = 'view'
 }) => {
   const [mode, setMode] = useState<'view' | 'edit' | 'submissions'>(initialMode);
+  // What the modal shows. Updated right after a save and whenever the parent passes a newer
+  // version of the task (never by mutating the prop, which the parent may recreate).
+  const [shown, setShown] = useState<Task>(task);
   const [editData, setEditData] = useState({
     title: task.title,
     type: task.type,
@@ -122,8 +125,11 @@ export const TaskModal: React.FC<TaskModalProps> = ({
     },
   });
 
-  // Update editData when task changes
+  // A newer version of the task arrived (after a save or a live update): show it, and reset the
+  // edit form only when not editing, so an update never wipes an admin's unsaved changes
   useEffect(() => {
+    setShown(task);
+    if (mode === 'edit') return;
     const data = {
       title: task.title,
       type: task.type,
@@ -260,12 +266,15 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       });
 
       if (res.ok) {
-        // Update local task object with new data
-        task.title = editData.title;
-        task.type = editData.type;
-        task.xp_reward = editData.xp_reward;
-        task.deadline = editData.deadline;
-        task.description = editData.description;
+        // Show the saved values at once; the parent's refetch then confirms them
+        setShown((prev) => ({
+          ...prev,
+          title: editData.title,
+          type: editData.type,
+          xp_reward: editData.xp_reward,
+          deadline: editData.deadline,
+          description: editData.description,
+        }));
 
         // Update originalData to reflect saved state
         setOriginalData({
@@ -597,11 +606,11 @@ export const TaskModal: React.FC<TaskModalProps> = ({
           {/* Header */}
           <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              {task.type === 'mandatory' && (
+              {shown.type === 'mandatory' && (
                 <span className="material-icons text-red-500">priority_high</span>
               )}
               <h2 className="text-2xl font-bold text-gray-800 dark:text-white">
-                {mode === 'edit' ? 'Edit Task' : task.title}
+                {mode === 'edit' ? 'Edit Task' : shown.title}
               </h2>
             </div>
             <button onClick={handleClose} className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
@@ -641,16 +650,16 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <span className="text-sm font-bold text-gray-500">TYPE</span>
-                    <p className="text-lg capitalize">{task.type}</p>
+                    <p className="text-lg capitalize">{shown.type}</p>
                   </div>
                   <div>
                     <span className="text-sm font-bold text-gray-500">XP REWARD</span>
-                    <p className="text-lg">{task.xp_reward} XP</p>
+                    <p className="text-lg">{shown.xp_reward} XP</p>
                   </div>
-                  {task.deadline && (
+                  {shown.deadline && (
                     <div className="col-span-2">
                       <span className="text-sm font-bold text-gray-500">DEADLINE</span>
-                      <p className="text-lg">{formatDate(task.deadline)}</p>
+                      <p className="text-lg">{formatDate(shown.deadline)}</p>
                     </div>
                   )}
                 </div>
@@ -661,7 +670,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                   <div
                     className="prose dark:prose-invert max-w-none bg-gray-50 dark:bg-gray-900 p-4 rounded-lg"
                     dangerouslySetInnerHTML={{
-                      __html: task.description || '<p className="text-gray-400 italic">No requirements specified yet.</p>'
+                      __html: shown.description || '<p className="text-gray-400 italic">No requirements specified yet.</p>'
                     }}
                   />
                 </div>
@@ -990,7 +999,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                             >
                               <span className="material-icons">task_alt</span>
                               <span>
-                                {task.type === 'mandatory'
+                                {shown.type === 'mandatory'
                                   ? 'Approve Task & Unlock Next Steps'
                                   : 'Approve Task & Grant XP'}
                               </span>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useSocket } from '../contexts/SocketContext';
 import { ConfirmDeleteDialog } from './ConfirmDeleteDialog';
 import { apiUrl } from '../config';
@@ -27,6 +28,18 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({ curr
   const [showDeleteAllDialog, setShowDeleteAllDialog] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { socket } = useSocket();
+  const navigate = useNavigate();
+
+  // Every notification carries an in-app path (e.g. /courses/1?lesson=2&task=3); only
+  // same-origin paths are followed.
+  const isAppLink = (link: string | null): link is string => !!link && link.startsWith('/') && !link.startsWith('//');
+  const open = (notification: Notification) => {
+    if (!notification.is_read) markAsRead(notification.id);
+    if (isAppLink(notification.link)) {
+      setIsOpen(false);
+      navigate(notification.link);
+    }
+  };
 
   // Fetch notifications
   const fetchNotifications = async () => {
@@ -71,10 +84,15 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({ curr
         
         // Optional: Show browser notification
         if ('Notification' in window && Notification.permission === 'granted') {
-          new Notification(data.notification.title, {
+          const browserNotification = new Notification(data.notification.title, {
             body: data.notification.message,
             icon: '/favicon.ico'
           });
+          browserNotification.onclick = () => {
+            window.focus();
+            if (isAppLink(data.notification.link)) navigate(data.notification.link);
+            browserNotification.close();
+          };
         }
       }
     };
@@ -84,7 +102,7 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({ curr
     return () => {
       socket.off('new_notification', handleNewNotification);
     };
-  }, [socket, currentUser]);
+  }, [socket, currentUser, navigate]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -197,7 +215,24 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({ curr
       case 'new_task': return '📝';
       case 'task_submission': return '📤';
       case 'task_graded': return '⭐';
+      case 'submission_approved': return '✅';
+      case 'submission_rejected': return '❌';
+      case 'stars_received': return '⭐';
+      case 'new_user_pending': return '👤';
+      case 'role_changed': return '🛠️';
       default: return '🔔';
+    }
+  };
+
+  const linkLabel = (n: Notification) => {
+    switch (n.type) {
+      case 'new_task': return 'Open the task';
+      case 'task_submission': return 'Review the submission';
+      case 'submission_approved':
+      case 'submission_rejected': return 'Open the task';
+      case 'new_user_pending': return 'Open in Users';
+      case 'stars_received': return 'See the leaderboard';
+      default: return 'Open';
     }
   };
 
@@ -277,9 +312,9 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({ curr
                 <div
                   key={notification.id}
                   className={`px-4 py-3 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${
-                    !notification.is_read ? 'bg-blue-50 dark:bg-blue-900/10' : ''
-                  }`}
-                  onClick={() => !notification.is_read && markAsRead(notification.id)}
+                    isAppLink(notification.link) ? 'cursor-pointer' : ''
+                  } ${!notification.is_read ? 'bg-blue-50 dark:bg-blue-900/10' : ''}`}
+                  onClick={() => open(notification)}
                 >
                   <div className="flex items-start space-x-3">
                     <span className="text-2xl flex-shrink-0">{getNotificationIcon(notification.type)}</span>
@@ -345,15 +380,11 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({ curr
                         </div>
                       )}
 
-                      {/* Link to resource - only for non-task notifications */}
-                      {notification.link && notification.type !== 'new_task' && notification.type !== 'task_submission' && (
-                        <a
-                          href={notification.link}
-                          className="text-xs text-primary hover:text-primary-dark font-semibold mt-2 inline-block"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          View details →
-                        </a>
+                      {/* The whole item opens the link; this is the visible hint */}
+                      {isAppLink(notification.link) && (
+                        <span className="text-xs text-primary-dark dark:text-primary font-semibold mt-2 inline-flex items-center">
+                          {linkLabel(notification)}<span className="material-icons text-sm ml-0.5">arrow_forward</span>
+                        </span>
                       )}
                     </div>
                   </div>

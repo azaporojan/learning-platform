@@ -16,10 +16,11 @@ interface User {
 
 interface UsersAdminTableProps {
   currentUserId: number;
+  highlightUserId?: number | null; // deep link /users?user=<id> (e.g. from a "new user" notification)
 }
 
 // Admin view of the Users page: every account with role, approval state, stars and enrolments.
-export function UsersAdminTable({ currentUserId }: UsersAdminTableProps) {
+export function UsersAdminTable({ currentUserId, highlightUserId = null }: UsersAdminTableProps) {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -32,7 +33,13 @@ export function UsersAdminTable({ currentUserId }: UsersAdminTableProps) {
 
   useEffect(() => {
     fetchUsers();
-  }, []);
+  }, [highlightUserId]);
+
+  // Scroll the deep-linked user into view once the table is there
+  useEffect(() => {
+    if (highlightUserId === null || users.length === 0) return;
+    document.querySelector(`[data-user-row="${highlightUserId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [highlightUserId, users]);
 
   const fetchUsers = async () => {
     try {
@@ -178,7 +185,8 @@ export function UsersAdminTable({ currentUserId }: UsersAdminTableProps) {
                   </thead>
                   <tbody>
                     {users.map((user) => (
-                      <tr key={user.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                      <tr key={user.id} data-user-row={user.id} className={`border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 ${
+                        user.id === highlightUserId ? 'bg-primary/10 ring-2 ring-inset ring-primary' : ''}`}>
                         <td className="py-3 px-4">
                           <img
                             src={user.avatar_url ? getFileUrl(user.avatar_url)! : `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name)}&background=random`}

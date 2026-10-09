@@ -114,6 +114,7 @@ Fields:
 | `lessons[].title` | yes | ≤ 255 chars |
 | `lessons[].description` | no | HTML is allowed (the UI uses a rich-text editor) |
 | `lessons[].tasks[]` | no | 0–50 tasks, in order |
+| `lessons[].study_sets[]` | no | 0–20 quizzes / flashcard decks, same shape as `POST /api/study-sets` without `lessonId` (see §5b) |
 | `tasks[].title` | yes | ≤ 255 chars |
 | `tasks[].description` | no | HTML allowed |
 | `tasks[].type` | no | `mandatory` (default) or `optional`. Mandatory tasks gate the next lesson |
@@ -127,9 +128,10 @@ Response `201`:
   "path": { "id": 3, "name": "Git & GitHub" },
   "lessons": [
     { "id": 10, "title": "Repositories and commits", "order_index": 1,
-      "tasks": [ { "id": 40, "title": "Install Git…", "type": "mandatory", "order_index": 1 } ] }
+      "tasks": [ { "id": 40, "title": "Install Git…", "type": "mandatory", "order_index": 1 } ],
+      "study_sets": [] }
   ],
-  "counts": { "lessons": 2, "tasks": 4 }
+  "counts": { "lessons": 2, "tasks": 4, "study_sets": 0 }
 }
 ```
 
@@ -162,6 +164,7 @@ now decided by course enrolment and the phase gates above; the call answers 404.
 | `PUT /api/tasks/:id` | `{title, type, xp?, deadline?, description?, order?, x?, y?}` | Update a task; `order`/`x`/`y` move it on the graph |
 | `DELETE /api/tasks/:id` | — | Delete a task |
 | `GET /api/admin/users` | — | All users (admin view) |
+| `POST /api/users/:id/unlock` | — | Lift a password lock (10 wrong passwords lock an account for 15 minutes) |
 | `GET /api/admin/submissions` | `?status=pending\|approved\|rejected\|all&limit=&before=` | Review inbox → `{submissions: [{id, status, submitted_at, is_viewed, file_name, file_size, comment, user_id, user_name, user_avatar, task_id, task_title, task_type, xp_reward, lesson_id, lesson_title, path_id, path_name, phase_order, course_id, course_name}], counts: {pending, approved, rejected} | null, limit, has_more, next_cursor}`. Newest first, `limit` rows per page (default 50, max 500); pass `before=<next_cursor>` for the next page (`counts` is only on the first page; a malformed `before` is a 400); `comment` is a 300-char preview (full text on `GET /api/tasks/:id/submissions`) |
 | `GET /api/admin/api-keys` | — | List keys (names/prefixes only) |
 | `POST /api/admin/api-keys` | `{name}` | Create a key (plaintext returned once) |
@@ -178,6 +181,97 @@ For the graph position convention used by `POST /lessons` / `POST /tasks`: the f
 task is at `(lesson.x + 120, lesson.y ∓ 120)` (minus for odd `order`, plus for even) and each further
 task `+150` on x. The import endpoint does this for you. (The course road in the UI is laid out from
 `order` alone; the stored positions are kept for compatibility.)
+
+## 5b. Quizzes and flashcards (study sets)
+
+A lesson can carry **study sets**: quizzes and flashcard decks for prep. They appear as extra
+bubbles under the lesson on the course road (after its tasks), purple for quizzes and pink for
+flashcards. They never lock the next lesson and grant no stars. A student sees a set as soon as
+its phase is open to them; the API answers `403 {"lockReasons":[…]}` for a set in a locked phase.
+
+| Method & path | Body | Purpose |
+|---|---|---|
+| `GET /api/lessons/:id/study-sets` | — | All sets of a lesson, with their items and the caller's `progress` |
+| `POST /api/study-sets` | `{lessonId, kind, title, description?, items, order?}` | Create a set (appended after the lesson's other sets unless `order` is given) → `201` with the set |
+| `GET /api/study-sets/:id` | — | One set with its items |
+| `PUT /api/study-sets/:id` | `{title?, description?, items?, order?}` | Update; `items` **replaces the whole list**. `kind` cannot change |
+| `DELETE /api/study-sets/:id` | — | Delete the set and the students' results on it |
+| `POST /api/study-sets/:id/attempts` | quiz: `{answers}` · flashcards: `{known}` | Record a practice run (what the app does for students) |
+
+`kind` is `"quiz"` or `"flashcards"`. Items, by kind (Markdown is allowed in every text field and
+is rendered without raw HTML, so code such as `` `final` `` or fenced blocks displays well):
+
+```json
+{ "lessonId": 12, "kind": "quiz", "title": "Java basics check", "items": [
+  { "question": "Which keyword declares a constant in Java?",
+    "options": ["`const`", "`final`", "`static`"], "correct": 1,
+    "explanation": "`final` prevents reassignment." },
+  { "question": "Which of these are primitive types?",
+    "options": ["int", "String", "boolean"], "correct": [0, 2] }
+] }
+```
+
+```json
+{ "lessonId": 12, "kind": "flashcards", "title": "Java terms", "items": [
+  { "front": "JDK", "back": "Java Development Kit: compiler + JRE + tools" }
+] }
+```
+
+| Item field | Notes |
+|---|---|
+| `question` | Required, ≤ 4000 chars |
+| `options` | 2–10 non-empty strings, ≤ 1000 chars each |
+| `correct` | 0-based index into `options`, or an array of indexes. More than one makes it a "select all that apply" question; the answer counts only when the selection matches exactly |
+| `explanation` | Optional, ≤ 4000 chars, shown after grading |
+| `front` / `back` | Required, ≤ 4000 chars each |
+
+Limits: 300 items per set, 20 sets per lesson. Validation errors come back as
+`400 {"error":"Invalid study set","details":[...]}`, one message per problem.
+
+**Who sees the answers.** Admin callers (API keys included) get every field. Students get quiz
+items as `{question, options, multiple}`: `correct` and `explanation` stay on the server, which grades
+`POST /attempts` with `{"answers": [1, [0, 2], null, …]}` (one entry per question) and returns
+`{score, total, results: [{correct, selected, correct_options, explanation}], progress}`. A flashcard
+run posts `{"known": n}`, the number of cards known on first sight (self-reported, so it is not verified; study sets award
+no stars and unlock nothing). `progress` is
+`{best_score, last_score, total, attempts}`. A set counts as mastered (✓ on the road) when
+`best_score` equals the current number of items. Quizzes are practice: every graded attempt shows
+the correct options and explanations for all questions, including ones left blank. Attempts are unlimited and every graded
+attempt returns the correct options, so a quiz is a practice tool, not an exam: a perfect
+`best_score` after several tries says the student has seen the answers, not that they knew them.
+Likewise a flashcard run's `known` is reported by the student's own browser. Neither is fit for
+ranking or grading. Changing a set's `items` deletes the students' results on it (they were earned on the old questions); renaming or reordering the set keeps them.
+
+`GET /api/courses/:id` lists each lesson's `study_sets` as `{id, lesson_id, kind, title, description,
+order_index, item_count, progress}`, without items. Read a set with `GET /api/study-sets/:id`
+before you rewrite it with `PUT`.
+
+## 5c. Lesson materials (attached files)
+
+Teachers attach files to a lesson: **PDF, Word (`.doc`/`.docx`), PowerPoint (`.ppt`/`.pptx`),
+TXT and Markdown (`.md`)**, up to 50 MB each (`MAX_LESSON_FILE_MB`) and 50 per lesson. Students open
+PDF, TXT and MD files inside the app; every type can be downloaded. Reading a file follows the
+lesson's phase gates, like task briefs: a student who has not reached the phase gets
+`403 {"lockReasons":[…]}`.
+
+| Method & path | Body | Purpose |
+|---|---|---|
+| `GET /api/lessons/:id/files` | — | The lesson's files: `[{id, lesson_id, name, ext, size, viewable, view_as, order_index}]` |
+| `POST /api/lessons/:id/files` | multipart, field `files` (1–10 files) | Attach files → `201` with the created entries |
+| `PUT /api/lesson-files/:id` | `{name?, order?}` | Rename / reorder |
+| `DELETE /api/lesson-files/:id` | — | Remove the file (and its bytes) |
+| `GET /api/lesson-files/:id/view` | — | PDF inline (`application/pdf`); TXT / MD as `text/plain`. `415` for Word / PowerPoint |
+| `GET /api/lesson-files/:id/download` | — | Any type, as an attachment with its original name |
+
+```bash
+curl -sS -X POST "$LEARNING_API_URL/lessons/12/files" \
+  -H "Authorization: Bearer $LEARNING_API_KEY" \
+  -F "files=@Week 1 – Java setup.pdf" -F "files=@cheat-sheet.md"
+```
+
+The content must match the extension (a PDF must start with `%PDF-`, Office files must be real
+Office containers, TXT/MD must be text), otherwise `400`. `GET /api/courses/:id` lists each lesson's
+`files` (names and sizes only).
 
 ## 6. Using it from a Claude agent
 
@@ -197,6 +291,13 @@ Give the agent the base URL and the key as environment variables and a short ins
 > `Authorization: Bearer $LEARNING_API_KEY`. Check the `counts` in the response and report the
 > path id. Use `GET /api/paths` first to avoid creating a path that already exists; use `pathId`
 > to add lessons to an existing one.
+
+For practice material on lessons that already exist:
+
+> Find the lesson ids with `GET $LEARNING_API_URL/courses/<courseId>` (phases → lessons; each lesson
+> lists its existing `study_sets`). For each lesson, write a 5–10 question quiz and a flashcard deck
+> covering its key terms, as described in §5b of `docs/AGENT_API.md`, and `POST /study-sets`. To
+> revise an existing set, `GET /study-sets/:id`, edit the items, then `PUT` the full `items` list.
 
 A minimal helper the agent can run (Node 18+, no dependencies):
 
