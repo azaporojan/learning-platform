@@ -41,6 +41,7 @@ The pre-deployment review found and fixed the following (all in `server/index.js
 
 | 28 | (new feature) Lesson materials must not become a way around the phase gates or a way to host pages on this origin | — | Stored under `uploads/lesson-files/`, which the public `/api/uploads` route refuses (404); read only through `/api/lesson-files/:id/view|download`, which apply the lesson's phase gates. Allow-list PDF / DOC(X) / PPT(X) / TXT / MD with a content check (PDF magic, Office container signatures, no NUL bytes in text), so an HTML file renamed `.pdf` is refused. `view` serves PDF as `application/pdf` and TXT/MD as `text/plain` with `nosniff` and a `sandbox` CSP; the app renders Markdown without raw HTML |
 | 30 | (review) Startup cleanup deleted lesson files without a DB row — after restoring an older DB backup that would destroy newer materials | Low | Such files are moved to `lesson-files/.orphaned/` and logged, never deleted |
+| 31 | (review) The public `/api/uploads` guard for lesson files matched the raw path, while `express.static` decodes it: `/api/uploads/lesson%2Dfiles/<name>` served a gated lesson file to anyone who knew its (random) stored name | Medium | The guard now checks the decoded, normalised path (`%2D`, `./`, `x/../`, `%2F`, case); tests cover each spelling |
 | 29 | Multipart file names were decoded as latin1 (`Temă` → `TemÄƒ`) | Low | Lesson files and task submissions keep UTF-8 names |
 
 ### What a stolen database does and does not give

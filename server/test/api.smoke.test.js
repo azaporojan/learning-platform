@@ -687,6 +687,11 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   // The public uploads route never serves lesson materials (they follow the lesson's lock rules)
   const storedName = fs.readdirSync(path.join(uploadsDir, 'lesson-files')).find((f) => !f.startsWith('.'));
   assert.equal((await anon(`/uploads/lesson-files/${storedName}`)).status, 404);
+  // ...however the path is spelled (express.static decodes and normalises it after routing)
+  for (const spelled of [`lesson%2Dfiles/${storedName}`, `lesson%2dfiles/${storedName}`, `./lesson-files/${storedName}`,
+    `x/../lesson-files/${storedName}`, `%2E/lesson-files/${storedName}`, `lesson-files%2F${storedName}`, `/lesson-files/${storedName}`]) {
+    assert.equal((await fetch(`${BASE}/uploads/${spelled}`)).status, 404, spelled);
+  }
   // Rename, delete (bytes removed)
   assert.equal((await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { order: 2147483648 } })).status, 400);
   assert.equal((await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { name: '  ' } })).status, 400);

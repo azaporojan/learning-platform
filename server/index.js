@@ -150,7 +150,15 @@ const INLINE_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.gif']);
 // as a page on this origin (stored XSS).
 // Lesson materials live in <uploads>/lesson-files and are only served through
 // /api/lesson-files/:id/* (which applies the lesson's lock rules) — never by the public route.
-api.use('/uploads/lesson-files', (req, res) => res.status(404).json({ error: 'Not found' }));
+// The check runs on the decoded, normalised path: express.static decodes it (lesson%2Dfiles,
+// ./lesson-files, x/../lesson-files) after routing, so matching the raw route is not enough.
+api.use('/uploads', (req, res, next) => {
+  let decoded;
+  try { decoded = decodeURIComponent(req.path); } catch { return res.status(404).json({ error: 'Not found' }); }
+  const normalised = path.posix.normalize(`/${decoded.replace(/\\/g, '/')}`).toLowerCase();
+  if (normalised === '/lesson-files' || normalised.startsWith('/lesson-files/')) return res.status(404).json({ error: 'Not found' });
+  next();
+});
 api.use('/uploads', express.static(uploadsDir, {
   index: false,
   dotfiles: 'deny',
