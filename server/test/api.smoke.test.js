@@ -795,6 +795,11 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const dropPhase3 = await admin(`/paths/${phase3.body.id}`, { method: 'DELETE' });
   assert.equal(dropPhase3.status, 200);
   assert.equal((await admin('/courses/abc')).status, 404);
+  // Lesson-file routes share the id guard: non-numeric or out-of-range ids are a 404, never a 500
+  assert.equal((await admin('/lessons/abc/files')).status, 404);
+  assert.equal((await admin('/lesson-files/abc/view')).status, 404);
+  assert.equal((await admin('/lesson-files/99999999999/download')).status, 404);
+  assert.equal((await admin('/lesson-files/abc', { method: 'DELETE' })).status, 404);
   assert.equal((await admin('/courses/abc', { method: 'DELETE' })).status, 404);
   assert.equal((await anon('/paths/abc/details')).status, 404);
   assert.equal((await stud('/tasks/abc')).status, 404);

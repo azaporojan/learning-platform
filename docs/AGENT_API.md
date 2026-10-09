@@ -233,7 +233,8 @@ items as `{question, options, multiple}`: `correct` and `explanation` stay on th
 `{score, total, results: [{correct, selected, correct_options, explanation}], progress}`. A flashcard
 run posts `{"known": n}`, the number of cards known on first sight. `progress` is
 `{best_score, last_score, total, attempts}`. A set counts as mastered (✓ on the road) when
-`best_score` equals the current number of items. Attempts are unlimited and every graded
+`best_score` equals the current number of items. Quizzes are practice: every graded attempt shows
+the correct options and explanations for all questions, including ones left blank. Attempts are unlimited and every graded
 attempt returns the correct options, so a quiz is a practice tool, not an exam: a perfect
 `best_score` after several tries says the student has seen the answers, not that they knew them.
 Likewise a flashcard run's `known` is reported by the student's own browser. Neither is fit for
