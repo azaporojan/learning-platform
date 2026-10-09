@@ -109,7 +109,13 @@ test('production refuses to run without PASSWORD_PEPPER; weak keys are rejected'
 
 test('at most two scrypt runs at once; the rest wait their turn', async () => {
   const started = Date.now();
-  const results = await Promise.all(Array.from({ length: 6 }, () => passwords.hashPassword('Blue-Kettle-Morning-7')));
+  // More work arrives as runs finish (each finished run schedules another); the cap holds
+  const extra = [];
+  const results = await Promise.all(Array.from({ length: 6 }, () => passwords.hashPassword('Blue-Kettle-Morning-7').then((h) => {
+    extra.push(passwords.hashPassword('Green-Lamp-Evening-8'));
+    return h;
+  })));
+  await Promise.all(extra);
   assert.equal(results.length, 6);
   assert.equal(new Set(results).size, 6); // distinct salts/IVs, all completed
   assert.ok(Date.now() - started < 30000);

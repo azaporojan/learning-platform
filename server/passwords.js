@@ -32,15 +32,17 @@ let scryptRunning = 0;
 const scryptStats = { peak: 0 }; // for tests
 const scryptQueue = [];
 async function scryptAsync(...args) {
+  // A finishing run hands its slot straight to the next waiter, so the count never drops while
+  // someone is queued (simpler to reason about than decrement-then-wake)
   if (scryptRunning >= SCRYPT_CONCURRENCY) await new Promise((resolve) => scryptQueue.push(resolve));
-  scryptRunning += 1;
+  else scryptRunning += 1;
   scryptStats.peak = Math.max(scryptStats.peak, scryptRunning);
   try {
     return await scryptRaw(...args);
   } finally {
-    scryptRunning -= 1;
     const next = scryptQueue.shift();
-    if (next) next();
+    if (next) next(); // slot passes on: scryptRunning unchanged
+    else scryptRunning -= 1;
   }
 }
 const SCRYPT = { N: 2 ** 16, r: 8, p: 2, keylen: 32 };

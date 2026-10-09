@@ -278,7 +278,7 @@ function registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, 
           }
           const answers = b.answers.map((a) => (a === null || a === undefined ? [] : Array.isArray(a) ? a : [a]));
           // Each answer: distinct option indexes of that question, at most one per option
-          const valid = answers.every((a, i) => a.length <= current.items[i].options.length
+          const valid = answers.every((a, i) => a.length <= current.items[i].options.length && new Set(a).size === a.length
             && a.every((v) => Number.isInteger(v) && v >= 0 && v < current.items[i].options.length));
           if (!valid) return { status: 400, body: { error: 'each answer must be an option index of its question, an array of them, or null' } };
           results = current.items.map((q, i) => ({
