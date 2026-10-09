@@ -641,7 +641,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal((await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['virus.exe', 'MZ']]) })).status, 400);
   const fakePdf = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['page.pdf', '<html><script>alert(1)</script></html>']]) });
   assert.equal(fakePdf.status, 400, 'an HTML file renamed to .pdf is refused');
-  assert.equal(lessonFileCount(uploadsDir), 0, 'refused uploads leave no bytes behind');
+  await eventually(() => lessonFileCount(uploadsDir) === 0, 'refused uploads leave no bytes behind'); // unlink runs after the reply
   const uploaded = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([
     ['Curs 1 – introducere.pdf', pdfBytes, 'application/pdf'],
     ['notes.md', '# Week 2\n\n- **HTTP** basics\n- <script>alert(1)</script>', 'text/markdown'],
@@ -679,6 +679,8 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const brokenDl = await fetch(`${BASE}/lesson-files/${p2Pptx.id}/download`, { headers: { cookie: stud.cookie() } });
   assert.equal(brokenDl.status, 500);
   assert.equal(brokenDl.headers.get('content-disposition'), null);
+  const brokenView = await fetch(`${BASE}/lesson-files/${p2Pptx.id}/view`, { headers: { cookie: stud.cookie() } });
+  assert.equal(brokenView.status, 415); // pptx has no view; the error path is shared with download
   fs.rmdirSync(pptxPath);
   fs.renameSync(`${pptxPath}.bak`, pptxPath);
   assert.equal((await fetch(`${BASE}/lesson-files/${p2Pptx.id}/download`, { headers: { cookie: stud.cookie() } })).status, 200, 'the server survived the read error');
@@ -800,6 +802,11 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal((await admin('/lesson-files/abc/view')).status, 404);
   assert.equal((await admin('/lesson-files/99999999999/download')).status, 404);
   assert.equal((await admin('/lesson-files/abc', { method: 'DELETE' })).status, 404);
+  assert.equal((await admin('/study-sets/99999999999')).status, 404);
+  assert.equal((await admin('/lessons/99999999999/study-sets')).status, 404);
+  for (const userId of [1.5, '1e2', 99999999999, 'abc']) {
+    assert.equal((await anon('/verify-code', { method: 'POST', json: { userId, code: '123456' } })).status, 400, String(userId));
+  }
   assert.equal((await admin('/courses/abc', { method: 'DELETE' })).status, 404);
   assert.equal((await anon('/paths/abc/details')).status, 404);
   assert.equal((await stud('/tasks/abc')).status, 404);

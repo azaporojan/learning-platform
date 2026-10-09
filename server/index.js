@@ -538,8 +538,11 @@ api.post('/login', authLimiter, async (req, res) => {
 
 // 2. Endpoint: Verificare Cod (Finalizează Login)
 api.post('/verify-code', authLimiter, async (req, res) => {
-  const { userId, code } = req.body || {};
-  if (!Number.isInteger(Number(userId)) || typeof code !== 'string') {
+  const { code } = req.body || {};
+  // Same id rule as route params: digits only, int4-sized (1.5, "1e2" or a huge id would reach
+  // PostgreSQL as a cast error)
+  const userId = /^\d{1,9}$/.test(String(req.body?.userId)) ? Number(req.body.userId) : NaN;
+  if (!Number.isInteger(userId) || typeof code !== 'string') {
     return res.status(400).json({ error: 'User ID and code are required.' });
   }
 

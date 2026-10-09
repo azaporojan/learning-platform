@@ -212,6 +212,7 @@ function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin
       console.error(`[GET /lesson-files/:id/${label}] Stream error:`, err.code || err.message);
       if (res.headersSent) return res.destroy();
       res.removeHeader('Content-Disposition');
+      res.removeHeader('Cache-Control');
       res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: err.code === 'ENOENT' ? 'File not found' : 'Failed to read file' });
     });
     res.on('close', () => stream.destroy()); // client went away: release the file handle
@@ -228,7 +229,8 @@ function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin
       const type = LESSON_FILE_TYPES[file.row.ext];
       if (!type || !type.view) return res.status(415).json({ error: 'This file type can only be downloaded' });
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('Cache-Control', 'private, max-age=300');
+      // Revalidated on every open: a re-locked lesson must not keep serving from the browser cache
+      res.setHeader('Cache-Control', 'private, no-cache');
       res.setHeader('Content-Type', type.view === 'pdf' ? 'application/pdf' : 'text/plain; charset=utf-8');
       res.setHeader('Content-Disposition', disposition('inline', file.row.original_name));
       if (type.view !== 'pdf') res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
