@@ -107,6 +107,16 @@ test('production refuses to run without PASSWORD_PEPPER; weak keys are rejected'
   assert.match(passwords.configure({ PASSWORD_PEPPER: crypto.randomBytes(32).toString('hex') }, { production: true }), /^[0-9a-f]{8}$/);
 });
 
+test('at most two scrypt runs at once; the rest wait their turn', async () => {
+  const started = Date.now();
+  const results = await Promise.all(Array.from({ length: 6 }, () => passwords.hashPassword('Blue-Kettle-Morning-7')));
+  assert.equal(results.length, 6);
+  assert.equal(new Set(results).size, 6); // distinct salts/IVs, all completed
+  assert.ok(Date.now() - started < 30000);
+  assert.ok(passwords._internals.scryptStats.peak <= 2, `peak ${passwords._internals.scryptStats.peak}`);
+  assert.equal(passwords._internals.scryptStats.peak, 2); // the six really did overlap, two at a time
+});
+
 test('login codes are stored as an HMAC under the pepper', () => {
   const stored = passwords.hashLoginCode('123456');
   assert.match(stored, /^[0-9a-f]{64}$/);

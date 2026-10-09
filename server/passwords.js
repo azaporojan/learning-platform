@@ -24,7 +24,25 @@ const bcrypt = require('bcrypt'); // only to verify hashes created before scrypt
 const crypto = require('crypto');
 const { promisify } = require('util');
 
-const scryptAsync = promisify(crypto.scrypt);
+const scryptRaw = promisify(crypto.scrypt);
+// Each scrypt run takes ~64 MiB: at most SCRYPT_CONCURRENCY run at once (others wait in line), so a
+// burst of logins/registrations cannot push memory to 4 × 64 MiB or hog libuv's thread pool.
+const SCRYPT_CONCURRENCY = Math.max(1, parseInt(process.env.SCRYPT_CONCURRENCY || '2', 10));
+let scryptRunning = 0;
+const scryptStats = { peak: 0 }; // for tests
+const scryptQueue = [];
+async function scryptAsync(...args) {
+  if (scryptRunning >= SCRYPT_CONCURRENCY) await new Promise((resolve) => scryptQueue.push(resolve));
+  scryptRunning += 1;
+  scryptStats.peak = Math.max(scryptStats.peak, scryptRunning);
+  try {
+    return await scryptRaw(...args);
+  } finally {
+    scryptRunning -= 1;
+    const next = scryptQueue.shift();
+    if (next) next();
+  }
+}
 const SCRYPT = { N: 2 ** 16, r: 8, p: 2, keylen: 32 };
 const SCRYPT_MAXMEM = 256 * 1024 * 1024;
 const MIN_LENGTH = 8;
@@ -244,5 +262,5 @@ function loginCodeMatches(provided, storedHash) {
 module.exports = {
   configure, passwordProblem, validateNewPassword, breachCount, hashPassword, verifyPassword,
   sealAllPasswords, hashLoginCode, loginCodeMatches,
-  _internals: { seal, unseal, isSealed, scryptHash, SCRYPT },
+  _internals: { seal, unseal, isSealed, scryptHash, SCRYPT, scryptStats },
 };

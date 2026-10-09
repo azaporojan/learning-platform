@@ -83,7 +83,9 @@ function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin
       cb(err);
     },
   });
-  const removeQuietly = (files) => (files || []).forEach((f) => fs.unlink(f.path || path.join(dir, f), () => {}));
+  const removeQuietly = (files) => (files || []).forEach((f) => fs.unlink(f.path || path.join(dir, f), (err) => {
+    if (err && err.code !== 'ENOENT') console.error('[lesson-files] Could not remove a file:', err.message);
+  }));
 
   async function lessonReasons(userId, lessonId) {
     const [rows] = await db.query('SELECT path_id FROM lessons WHERE id = ?', [lessonId]);
