@@ -709,9 +709,11 @@ api.put('/me/password', authenticateToken, passwordChangeLimiter, async (req, re
     const [updated] = await db.query(
       `UPDATE users SET password = ?, password_changed_at = NOW(), session_version = session_version + 1,
          failed_login_attempts = 0, locked_until = NULL, login_code = NULL, login_code_expires = NULL
-       WHERE id = ? RETURNING id, role, session_version, password_changed_at`,
-      [await passwords.hashPassword(next), user.id]
+       WHERE id = ? AND password = ? RETURNING id, role, session_version, password_changed_at`,
+      [await passwords.hashPassword(next), user.id, user.password]
     );
+    // Only if the password is still the one just verified: of two concurrent changes, one wins
+    if (updated.length === 0) return res.status(409).json({ error: 'Your password was changed meanwhile. Please sign in again.' });
     issueSession(res, updated[0]);
     // Close every live socket of this user. Other devices cannot reconnect (their cookie is now
     // stale); this device reconnects at once with its fresh cookie (SocketContext).

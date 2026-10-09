@@ -185,6 +185,14 @@ function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin
     }
     if (sets.length === 0) return res.status(400).json({ error: 'Nothing to update' });
     try {
+      if (name !== undefined) {
+        // The file keeps its type: a.pdf renamed to "a.exe" is saved as "a.exe.pdf"
+        const [current] = await db.query('SELECT ext FROM lesson_files WHERE id = ?', [req.params.id]);
+        if (current.length === 0) return res.status(404).json({ error: 'File not found' });
+        const i = sets.indexOf('original_name = ?');
+        const ext = current[0].ext; // stored with its dot, e.g. ".pdf"
+        if (!params[i].toLowerCase().endsWith(ext)) params[i] = `${params[i].slice(0, 255 - ext.length)}${ext}`;
+      }
       params.push(req.params.id);
       const [rows] = await db.query(`UPDATE lesson_files SET ${sets.join(', ')} WHERE id = ? RETURNING *`, params);
       if (rows.length === 0) return res.status(404).json({ error: 'File not found' });

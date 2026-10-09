@@ -692,7 +692,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal((await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { name: '  ' } })).status, 400);
   assert.equal((await admin('/study-sets', { method: 'POST', json: { lessonId: phase2Lesson.body.id, kind: 'flashcards', title: 'x', items: [], order: 2147483648 } })).status, 400);
   const bidiName = await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { name: 'report\u202Efdp.exe' } });
-  assert.equal(bidiName.body.name, 'reportfdp.exe', 'bidi overrides are stripped from file names');
+  assert.equal(bidiName.body.name, 'reportfdp.exe.md', 'bidi overrides are stripped; the extension is kept');
   const renamedFile = await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { name: 'Week 2 notes.md' } });
   assert.equal(renamedFile.body.name, 'Week 2 notes.md');
   const tmp = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['tmp.txt', 'temporary']]) });
@@ -1040,6 +1040,16 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   await waitForOutput(child, /to=pwtest@example\.test subject="Your password was changed 🔐"/);
   assert.equal((await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Blue-Kettle-Morning-7' } })).status, 401);
   await loginAs('pwtest@example.test', 'Green-Lamp-Evening-8');
+  // Two concurrent changes from the same current password: exactly one wins, the other is refused
+  // (409, or 400 if it ran after the pwWinner) instead of silently overwriting it
+  const pwRacers = ['Teal-Door-Summer-31', 'Plum-Road-Winter-42'];
+  const pwRaced = await Promise.all(pwRacers.map((p) => pw1('/me/password', { method: 'PUT', json: { current_password: 'Green-Lamp-Evening-8', new_password: p } })));
+  const pwWinners = pwRaced.filter((r) => r.status === 200);
+  assert.equal(pwWinners.length, 1, JSON.stringify(pwRaced.map((r) => [r.status, r.body])));
+  assert.ok([400, 409].includes(pwRaced.find((r) => r.status !== 200).status));
+  const pwWinner = pwRacers[pwRaced.indexOf(pwWinners[0])];
+  await loginAs('pwtest@example.test', pwWinner);
+  assert.equal((await pw1('/me/password', { method: 'PUT', json: { current_password: pwWinner, new_password: 'Green-Lamp-Evening-8' } })).status, 200);
   // 10 wrong passwords lock the account for 15 minutes, even for the right password
   for (let i = 0; i < 10; i++) {
     assert.equal((await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: `Wrong-guess-${i}` } })).status, 401);
