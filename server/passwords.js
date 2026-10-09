@@ -225,8 +225,14 @@ async function verifyPassword(password, stored) {
     return { ok: false, needsRehash: false };
   }
   let ok = false;
-  if (inner.startsWith('scrypt$')) ok = await scryptVerify(password, inner);
-  else if (/^\$2[aby]\$/.test(inner)) ok = await bcrypt.compare(password, inner);
+  try {
+    if (inner.startsWith('scrypt$')) ok = await scryptVerify(password, inner);
+    else if (/^\$2[aby]\$/.test(inner)) ok = await bcrypt.compare(password, inner);
+  } catch (err) {
+    // A corrupt stored hash (bad parameters, truncated) is a failed check, not a 500
+    console.error('[Passwords] A stored hash is malformed:', err.message || err);
+    return { ok: false, needsRehash: false, unreadable: true };
+  }
   if (!ok) return { ok: false, needsRehash: false };
   const needsRehash = !isCurrentScrypt(inner) || !isSealed(stored) || sealKeyId(stored) !== key().id;
   return { ok: true, needsRehash };

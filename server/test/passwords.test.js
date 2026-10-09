@@ -123,6 +123,14 @@ test('at most two scrypt runs at once; the rest wait their turn', async () => {
   assert.equal(passwords._internals.scryptStats.peak, 2); // the six really did overlap, two at a time
 });
 
+test('a corrupt stored hash fails cleanly instead of throwing', async () => {
+  const { seal } = passwords._internals;
+  for (const inner of ['scrypt$99$0$0$AAAA$BBBB', 'scrypt$65536', '$2b$10$short']) {
+    const res = await passwords.verifyPassword('Blue-Kettle-Morning-7', seal(inner));
+    assert.equal(res.ok, false, inner);
+  }
+});
+
 test('login codes are stored as an HMAC under the pepper', () => {
   const stored = passwords.hashLoginCode('123456');
   assert.match(stored, /^[0-9a-f]{64}$/);
