@@ -674,6 +674,9 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const storedName = fs.readdirSync(path.join(uploadsDir, 'lesson-files')).find((f) => !f.startsWith('.'));
   assert.equal((await anon(`/uploads/lesson-files/${storedName}`)).status, 404);
   // Rename, delete (bytes removed)
+  assert.equal((await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { order: 2147483648 } })).status, 400);
+  assert.equal((await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { name: '  ' } })).status, 400);
+  assert.equal((await admin('/study-sets', { method: 'POST', json: { lessonId: phase2Lesson.body.id, kind: 'flashcards', title: 'x', items: [], order: 2147483648 } })).status, 400);
   const renamedFile = await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { name: 'Week 2 notes.md' } });
   assert.equal(renamedFile.body.name, 'Week 2 notes.md');
   const tmp = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['tmp.txt', 'temporary']]) });

@@ -175,7 +175,7 @@ function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin
       sets.push('original_name = ?'); params.push(cleanName(name));
     }
     if (order !== undefined) {
-      if (!Number.isInteger(order) || order < 1) return res.status(400).json({ error: 'order must be a positive integer' });
+      if (!Number.isInteger(order) || order < 1 || order > 100000) return res.status(400).json({ error: 'order must be an integer from 1 to 100000' });
       sets.push('order_index = ?'); params.push(order);
     }
     if (sets.length === 0) return res.status(400).json({ error: 'Nothing to update' });

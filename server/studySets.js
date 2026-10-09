@@ -79,7 +79,7 @@ function validateStudySet(body, { prefix = '', partial = false, kind: fixedKind 
     if (typeof b.title !== 'string' || !b.title.trim() || b.title.length > 255) errors.push(`${at('title')} is required (max 255 chars)`);
   }
   if (!isOptionalString(b.description) || (b.description || '').length > MAX_TEXT) errors.push(`${at('description')} must be a string (max ${MAX_TEXT} chars)`);
-  if (b.order !== undefined && (!Number.isInteger(b.order) || b.order < 1)) errors.push(`${at('order')} must be a positive integer`);
+  if (b.order !== undefined && (!Number.isInteger(b.order) || b.order < 1 || b.order > 100000)) errors.push(`${at('order')} must be an integer from 1 to 100000`);
   let items;
   if (KINDS.has(kind) && (!partial || b.items !== undefined)) {
     const r = normalizeItems(kind, b.items === undefined ? [] : b.items, at('items'));
