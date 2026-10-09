@@ -670,6 +670,18 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(pptxDl.status, 200);
   assert.match(pptxDl.headers.get('content-disposition'), /^attachment; filename="slides\.pptx"/);
   assert.equal((await anon(`/lesson-files/${p2Pdf.id}/view`)).status, 401);
+  // A stored file that cannot be read (here: replaced by a directory, so the existence check
+  // passes) is a clean 500, not an unhandled stream error that takes the server down
+  const [{ stored_name: pptxStored }] = await dbQuery('SELECT stored_name FROM lesson_files WHERE id = $1', [p2Pptx.id]);
+  const pptxPath = path.join(uploadsDir, 'lesson-files', pptxStored);
+  fs.renameSync(pptxPath, `${pptxPath}.bak`);
+  fs.mkdirSync(pptxPath);
+  const brokenDl = await fetch(`${BASE}/lesson-files/${p2Pptx.id}/download`, { headers: { cookie: stud.cookie() } });
+  assert.equal(brokenDl.status, 500);
+  assert.equal(brokenDl.headers.get('content-disposition'), null);
+  fs.rmdirSync(pptxPath);
+  fs.renameSync(`${pptxPath}.bak`, pptxPath);
+  assert.equal((await fetch(`${BASE}/lesson-files/${p2Pptx.id}/download`, { headers: { cookie: stud.cookie() } })).status, 200, 'the server survived the read error');
   // The public uploads route never serves lesson materials (they follow the lesson's lock rules)
   const storedName = fs.readdirSync(path.join(uploadsDir, 'lesson-files')).find((f) => !f.startsWith('.'));
   assert.equal((await anon(`/uploads/lesson-files/${storedName}`)).status, 404);

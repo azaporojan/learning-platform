@@ -31,7 +31,16 @@ const SCRYPT_CONCURRENCY = Math.max(1, parseInt(process.env.SCRYPT_CONCURRENCY |
 let scryptRunning = 0;
 const scryptStats = { peak: 0 }; // for tests
 const scryptQueue = [];
+// Beyond this many waiters a request is turned away at once ("busy, try again") instead of
+// piling up: an unbounded line keeps every waiting request (and its socket) in memory.
+const SCRYPT_MAX_QUEUE = Math.max(1, parseInt(process.env.SCRYPT_MAX_QUEUE || '100', 10));
+function busyError() {
+  const err = new Error('Password checks are busy, please try again.');
+  err.code = 'PASSWORD_BUSY';
+  return err;
+}
 async function scryptAsync(...args) {
+  if (scryptRunning >= SCRYPT_CONCURRENCY && scryptQueue.length >= SCRYPT_MAX_QUEUE) throw busyError();
   // A finishing run hands its slot straight to the next waiter, so the count never drops while
   // someone is queued (simpler to reason about than decrement-then-wake)
   if (scryptRunning >= SCRYPT_CONCURRENCY) await new Promise((resolve) => scryptQueue.push(resolve));
@@ -229,6 +238,7 @@ async function verifyPassword(password, stored) {
     if (inner.startsWith('scrypt$')) ok = await scryptVerify(password, inner);
     else if (/^\$2[aby]\$/.test(inner)) ok = await bcrypt.compare(password, inner);
   } catch (err) {
+    if (err.code === 'PASSWORD_BUSY') throw err;
     // A corrupt stored hash (bad parameters, truncated) is a failed check, not a 500
     console.error('[Passwords] A stored hash is malformed:', err.message || err);
     return { ok: false, needsRehash: false, unreadable: true };
@@ -268,7 +278,8 @@ function loginCodeMatches(provided, storedHash) {
 }
 
 module.exports = {
+  isBusy: (err) => Boolean(err && err.code === 'PASSWORD_BUSY'),
   configure, passwordProblem, validateNewPassword, breachCount, hashPassword, verifyPassword,
   sealAllPasswords, hashLoginCode, loginCodeMatches,
-  _internals: { seal, unseal, isSealed, scryptHash, SCRYPT, scryptStats },
+  _internals: { seal, unseal, isSealed, scryptHash, SCRYPT, scryptStats, SCRYPT_MAX_QUEUE },
 };

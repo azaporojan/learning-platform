@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+process.env.SCRYPT_MAX_QUEUE = '10'; // keeps the queue-limit test short
 const passwords = require('../passwords');
 
 const KEY_A = crypto.randomBytes(32).toString('base64');
@@ -121,6 +122,17 @@ test('at most two scrypt runs at once; the rest wait their turn', async () => {
   assert.ok(Date.now() - started < 30000);
   assert.ok(passwords._internals.scryptStats.peak <= 2, `peak ${passwords._internals.scryptStats.peak}`);
   assert.equal(passwords._internals.scryptStats.peak, 2); // the six really did overlap, two at a time
+});
+
+test('a full scrypt queue turns requests away with PASSWORD_BUSY instead of growing', async () => {
+  const max = passwords._internals.SCRYPT_MAX_QUEUE;
+  const runs = Array.from({ length: max + 2 + 5 }, () => passwords.hashPassword('Blue-Kettle-Morning-7').then(() => 'ok', (err) => err));
+  const outcomes = await Promise.all(runs);
+  const busy = outcomes.filter((o) => passwords.isBusy(o));
+  assert.equal(busy.length, 5); // 2 running + `max` waiting are served, the rest are refused
+  assert.equal(outcomes.filter((o) => o === 'ok').length, max + 2);
+  // The queue drained fully: the next request is served normally
+  assert.equal((await passwords.verifyPassword('Blue-Kettle-Morning-7', await passwords.hashPassword('Blue-Kettle-Morning-7'))).ok, true);
 });
 
 test('a corrupt stored hash fails cleanly instead of throwing', async () => {

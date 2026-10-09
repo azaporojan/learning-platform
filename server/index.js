@@ -507,7 +507,12 @@ api.post('/login', authLimiter, async (req, res) => {
     // for an account that cannot log in anyway)
     if (needsRehash) {
       // Only if the hash is still the one just verified: a password changed meanwhile must win
-      await db.query('UPDATE users SET password = ? WHERE id = ? AND password = ?', [await passwords.hashPassword(password), user.id, user.password]);
+      // Best effort: when the server is busy the upgrade simply waits for the next login
+      try {
+        await db.query('UPDATE users SET password = ? WHERE id = ? AND password = ?', [await passwords.hashPassword(password), user.id, user.password]);
+      } catch (err) {
+        if (!passwords.isBusy(err)) throw err;
+      }
     }
 
     // Generează cod 6 cifre (CSPRNG)
@@ -525,6 +530,7 @@ api.post('/login', authLimiter, async (req, res) => {
     res.json({ message: 'Code sent via email.', step: 'code_required', userId: user.id });
 
   } catch (err) {
+    if (passwords.isBusy(err)) return res.status(503).json({ error: 'The server is busy, please try again in a moment.' });
     console.error(err);
     res.status(500).json({ error: 'Server error.' });
   }
@@ -717,6 +723,7 @@ api.put('/me/password', authenticateToken, passwordChangeLimiter, async (req, re
     );
     res.json({ success: true, password_changed_at: updated[0].password_changed_at });
   } catch (err) {
+    if (passwords.isBusy(err)) return res.status(503).json({ error: 'The server is busy, please try again in a moment.' });
     console.error('[PUT /me/password] Error:', err);
     res.status(500).json({ error: 'Failed to change password' });
   }
@@ -878,6 +885,7 @@ api.post('/register', authLimiter, async (req, res) => {
     });
 
   } catch (err) {
+    if (passwords.isBusy(err)) return res.status(503).json({ error: 'The server is busy, please try again in a moment.' });
     console.error('Registration Error:', err);
     res.status(500).json({ error: 'Server error.' });
   }

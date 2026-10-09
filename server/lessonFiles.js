@@ -204,6 +204,21 @@ function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin
     }
   });
 
+  // Streams a stored file. A read error (file gone from the volume, disk error) must never throw
+  // out of the stream: answer 404/500 if nothing was sent yet, otherwise just drop the connection.
+  const sendFile = (filePath, res, label) => {
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', (err) => {
+      console.error(`[GET /lesson-files/:id/${label}] Stream error:`, err.code || err.message);
+      if (res.headersSent) return res.destroy();
+      res.removeHeader('Content-Disposition');
+      res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: err.code === 'ENOENT' ? 'File not found' : 'Failed to read file' });
+    });
+    res.on('close', () => stream.destroy()); // client went away: release the file handle
+    // pipe(), not pipeline(): pipeline would destroy res on a read error before we could answer
+    stream.pipe(res);
+  };
+
   // In-browser viewing: PDF goes to the browser's PDF viewer; TXT/MD are sent as plain text (the
   // app renders Markdown itself, without raw HTML). Never served as HTML on this origin.
   api.get('/lesson-files/:id/view', authenticateToken, async (req, res) => {
@@ -217,7 +232,7 @@ function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin
       res.setHeader('Content-Type', type.view === 'pdf' ? 'application/pdf' : 'text/plain; charset=utf-8');
       res.setHeader('Content-Disposition', disposition('inline', file.row.original_name));
       if (type.view !== 'pdf') res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
-      fs.createReadStream(file.filePath).pipe(res);
+      sendFile(file.filePath, res, 'view');
     } catch (err) {
       console.error('[GET /lesson-files/:id/view] Error:', err);
       if (!res.headersSent) res.status(500).json({ error: 'Failed to open file' });
@@ -232,7 +247,7 @@ function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Content-Type', type.mime);
       res.setHeader('Content-Disposition', disposition('attachment', file.row.original_name));
-      fs.createReadStream(file.filePath).pipe(res);
+      sendFile(file.filePath, res, 'download');
     } catch (err) {
       console.error('[GET /lesson-files/:id/download] Error:', err);
       if (!res.headersSent) res.status(500).json({ error: 'Failed to download file' });
