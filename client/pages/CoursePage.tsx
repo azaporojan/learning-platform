@@ -64,6 +64,8 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
         setCourse(data);
         // Keep the open lesson modal in sync with fresh data
         setLessonModal((prev) => (prev ? data.phases.flatMap((p) => p.lessons).find((l) => l.id === prev.id) || null : prev));
+        // …and the open task modal (an edit, or a live update from another admin, shows at once)
+        setTaskModal((prev) => (prev ? data.phases.flatMap((p) => p.lessons).flatMap((l) => l.tasks).find((t) => t.id === prev.id) || null : prev));
         setPhaseInfo((prev) => (prev ? data.phases.find((p) => p.id === prev.id) || null : prev));
       }
     } catch (err) {
@@ -100,6 +102,8 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
   }, [socket, fetchCourse, currentUser.id]);
 
   const state = useMemo(() => (course ? computeRoadState(course, isAdmin) : null), [course, isAdmin]);
+  // One object per task version: a new object on every render would make TaskModal reset itself
+  const taskForModal = useMemo(() => (taskModal ? { ...taskModal, deadline: taskModal.deadline || undefined } : null), [taskModal]);
 
   // Deep link from the submissions inbox (and notifications): /courses/:id?lesson=<id>&task=<id>
   // selects the node on the road and opens the task (or the lesson), then clears the query.
@@ -316,9 +320,9 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
         onAddStudySet={isAdmin && lessonModal ? (kind) => { const l = lessonModal; setLessonModal(null); addStudySet(l, kind); } : undefined}
       />
       <StudySetModal target={studySet} isAdmin={isAdmin} onClose={() => setStudySet(null)} onChanged={fetchCourse} />
-      {taskModal && (
+      {taskForModal && (
         <TaskModal
-          task={{ ...taskModal, deadline: taskModal.deadline || undefined }}
+          task={taskForModal}
           isOpen={true}
           onClose={() => { setTaskModal(null); fetchCourse(); }}
           isAdmin={isAdmin}
