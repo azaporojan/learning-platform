@@ -109,8 +109,10 @@ function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin
 
   api.get('/lessons/:id/files', authenticateToken, async (req, res) => {
     try {
-      const [lessons] = await db.query('SELECT id FROM lessons WHERE id = ?', [req.params.id]);
-      if (lessons.length === 0) return res.status(404).json({ error: 'Lesson not found' });
+      // Names of a locked phase's files are shown (as on the road); an unpublished phase is an
+      // admin workspace and stays hidden
+      const reasons = await lessonReasons(req.user.id, req.params.id);
+      if (reasons === null || reasons.includes('unpublished')) return res.status(404).json({ error: 'Lesson not found' });
       const [rows] = await db.query('SELECT * FROM lesson_files WHERE lesson_id = ? ORDER BY order_index ASC, id ASC', [req.params.id]);
       res.json(rows.map(serialize));
     } catch (err) {

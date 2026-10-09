@@ -269,6 +269,7 @@ async function sealAllPasswords(db) {
 
 // Login codes are stored as an HMAC under the pepper, so a database copy does not expose live
 // codes (a bare hash of a 6-digit number is reversed instantly).
+// (Migration 008's header says "SHA-256 of the code": it is this HMAC-SHA-256, same 64 hex chars.)
 const hashLoginCode = (code) => crypto.createHmac('sha256', key().key).update(`login-code:${code}`).digest('hex');
 function loginCodeMatches(provided, storedHash) {
   if (typeof provided !== 'string' || typeof storedHash !== 'string') return false;

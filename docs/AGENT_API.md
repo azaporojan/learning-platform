@@ -231,7 +231,8 @@ Limits: 300 items per set, 20 sets per lesson. Validation errors come back as
 items as `{question, options, multiple}`: `correct` and `explanation` stay on the server, which grades
 `POST /attempts` with `{"answers": [1, [0, 2], null, …]}` (one entry per question) and returns
 `{score, total, results: [{correct, selected, correct_options, explanation}], progress}`. A flashcard
-run posts `{"known": n}`, the number of cards known on first sight. `progress` is
+run posts `{"known": n}`, the number of cards known on first sight (self-reported, so it is not verified; study sets award
+no stars and unlock nothing). `progress` is
 `{best_score, last_score, total, attempts}`. A set counts as mastered (✓ on the road) when
 `best_score` equals the current number of items. Quizzes are practice: every graded attempt shows
 the correct options and explanations for all questions, including ones left blank. Attempts are unlimited and every graded

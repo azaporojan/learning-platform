@@ -880,6 +880,8 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const orphanSubmit = await stud(`/tasks/${phase2Task.body.id}/submit`, { method: 'POST', body: orphanForm });
   assert.equal(orphanSubmit.status, 403);
   assert.deepEqual(orphanSubmit.body.lockReasons, ['unpublished']);
+  assert.equal((await stud(`/lessons/${phase2Lesson.body.id}/files`)).status, 404, 'unpublished phase file names stay hidden');
+  assert.equal((await admin(`/lessons/${phase2Lesson.body.id}/files`)).status, 200);
   assert.equal((await admin(`/paths/${phase2.body.id}/details`)).body[0].tasks[0].description, 'secret brief');
   const reattach = await admin(`/paths/${phase2.body.id}`, { method: 'PUT', json: { name: 'Phase 2', stars_required: 0, course_id: course.body.id, order_index: 2 } });
   assert.equal(reattach.status, 200);
