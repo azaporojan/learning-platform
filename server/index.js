@@ -933,6 +933,21 @@ api.post('/users/:id/approve', authenticateToken, async (req, res) => {
   }
 });
 
+// Clear a password lock early (admin only): the 15-minute lock after 10 wrong passwords can be
+// triggered by anyone who knows the email, so an admin can lift it for the owner
+api.post('/users/:id/unlock', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      'UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ? RETURNING id', [req.params.id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[Unlock User] Error:', error);
+    res.status(500).json({ error: 'Failed to unlock user' });
+  }
+});
+
 // Reject user (admin only)
 api.post('/users/:id/reject', authenticateToken, async (req, res) => {
   try {

@@ -1049,7 +1049,10 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const locked = await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Green-Lamp-Evening-8' } });
   assert.deepEqual([locked.status, locked.body], [unknown.status, unknown.body]);
   await waitForOutput(child, /to=pwtest@example\.test subject="Your account was locked for 15 minutes 🔒"/);
-  await dbQuery('UPDATE users SET locked_until = NOW() - INTERVAL \'1 second\' WHERE id = $1', [pwReg.body.userId]);
+  // An admin can lift the lock early (students cannot)
+  assert.equal((await stud(`/users/${pwReg.body.userId}/unlock`, { method: 'POST' })).status, 403);
+  assert.equal((await admin('/users/999999/unlock', { method: 'POST' })).status, 404);
+  assert.equal((await admin(`/users/${pwReg.body.userId}/unlock`, { method: 'POST' })).status, 200);
   // A legacy bcrypt hash (as left by older releases) still logs in and is upgraded to sealed scrypt
   const bcrypt = require('bcrypt');
   await dbQuery('UPDATE users SET password = $1 WHERE id = $2', [bcrypt.hashSync('Green-Lamp-Evening-8', 10), pwReg.body.userId]);

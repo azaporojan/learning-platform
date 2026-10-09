@@ -164,6 +164,7 @@ now decided by course enrolment and the phase gates above; the call answers 404.
 | `PUT /api/tasks/:id` | `{title, type, xp?, deadline?, description?, order?, x?, y?}` | Update a task; `order`/`x`/`y` move it on the graph |
 | `DELETE /api/tasks/:id` | — | Delete a task |
 | `GET /api/admin/users` | — | All users (admin view) |
+| `POST /api/users/:id/unlock` | — | Lift a password lock (10 wrong passwords lock an account for 15 minutes) |
 | `GET /api/admin/submissions` | `?status=pending\|approved\|rejected\|all&limit=&before=` | Review inbox → `{submissions: [{id, status, submitted_at, is_viewed, file_name, file_size, comment, user_id, user_name, user_avatar, task_id, task_title, task_type, xp_reward, lesson_id, lesson_title, path_id, path_name, phase_order, course_id, course_name}], counts: {pending, approved, rejected} | null, limit, has_more, next_cursor}`. Newest first, `limit` rows per page (default 50, max 500); pass `before=<next_cursor>` for the next page (`counts` is only on the first page; a malformed `before` is a 400); `comment` is a 300-char preview (full text on `GET /api/tasks/:id/submissions`) |
 | `GET /api/admin/api-keys` | — | List keys (names/prefixes only) |
 | `POST /api/admin/api-keys` | `{name}` | Create a key (plaintext returned once) |
