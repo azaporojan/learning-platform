@@ -45,7 +45,10 @@ const utf8Name = (name) => {
   const decoded = Buffer.from(String(name || ''), 'latin1').toString('utf8');
   return decoded.includes('\uFFFD') ? String(name || '') : decoded;
 };
-const cleanName = (name) => path.basename(String(name || 'file')).replace(/[\u0000-\u001f\u007f/\\]/g, '').trim().slice(0, 255) || 'file';
+// Control characters, path separators and bidi overrides/isolates (U+202E would let
+// "report\u202Efdp.exe" display as "reportexe.pdf") are dropped
+const cleanName = (name) => path.basename(String(name || 'file'))
+  .replace(/[\u0000-\u001f\u007f/\\\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim().slice(0, 255) || 'file';
 // RFC 6266 / 5987 filename for Content-Disposition (non-ASCII names survive)
 const disposition = (type, name) =>
   `${type}; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`;
