@@ -237,18 +237,29 @@ function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin
     }
   });
 
-  // Files of deleted lessons (lesson or phase deletes cascade the rows): remove their bytes.
-  async function removeOrphanFiles() {
+  // At startup: files on the volume that no row points at are MOVED to lesson-files/.orphaned/,
+  // never deleted. Normal deletes remove their bytes themselves (filesOf); an orphan usually means
+  // the database was restored from an older backup while the volume was kept, and those files
+  // must stay recoverable (move them back and re-attach them, or delete the folder by hand).
+  async function quarantineOrphanFiles() {
     try {
       const [rows] = await db.query('SELECT stored_name FROM lesson_files');
       const known = new Set(rows.map((r) => r.stored_name));
+      const trash = path.join(dir, '.orphaned');
+      let moved = 0;
       for (const name of fs.readdirSync(dir)) {
-        // a file younger than a minute may belong to an upload still in flight
+        if (name.startsWith('.') || known.has(name)) continue;
         const full = path.join(dir, name);
-        if (!known.has(name) && Date.now() - fs.statSync(full).mtimeMs > 60 * 1000) fs.unlink(full, () => {});
+        const stat = fs.statSync(full);
+        // a file younger than a minute may belong to an upload still in flight
+        if (!stat.isFile() || Date.now() - stat.mtimeMs < 60 * 1000) continue;
+        fs.mkdirSync(trash, { recursive: true });
+        fs.renameSync(full, path.join(trash, name));
+        moved += 1;
       }
+      if (moved > 0) console.warn(`[lesson-files] ${moved} file(s) without a database row were moved to ${trash} (not deleted)`);
     } catch (err) {
-      console.error('[lesson-files] Orphan cleanup failed:', err.message || err);
+      console.error('[lesson-files] Orphan check failed:', err.message || err);
     }
   }
 
@@ -261,7 +272,7 @@ function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin
     return () => removeQuietly(rows.map((r) => r.stored_name));
   }
 
-  return { removeOrphanFiles, filesOf, serialize };
+  return { quarantineOrphanFiles, filesOf, serialize };
 }
 
 module.exports = { registerLessonFileRoutes, serializeLessonFile: serialize, LESSON_FILE_TYPES, utf8Name };

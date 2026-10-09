@@ -133,6 +133,9 @@ async function waitForOutput(child, pattern) {
   assert.fail(`server output never matched ${pattern}:\n${child.getOutput().slice(-2000)}`);
 }
 
+// Lesson material bytes (the .orphaned/ folder aside)
+const lessonFileCount = (dir) => fs.readdirSync(path.join(dir, 'lesson-files')).filter((f) => !f.startsWith('.')).length;
+
 // Files in the uploads root (lesson materials live in their own subfolder)
 const uploadedFiles = (dir) => fs.readdirSync(dir).filter((f) => fs.statSync(path.join(dir, f)).isFile());
 
@@ -162,10 +165,19 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   }
   await resetDb();
   const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-uploads-'));
+  // A lesson file whose row is gone (e.g. the DB was restored from an older backup) is set aside
+  // at startup, never deleted
+  fs.mkdirSync(path.join(uploadsDir, 'lesson-files'), { recursive: true });
+  const stray = path.join(uploadsDir, 'lesson-files', '1700000000000-abc.pdf');
+  fs.writeFileSync(stray, '%PDF-1.4 stray');
+  fs.utimesSync(stray, new Date(Date.now() - 3600e3), new Date(Date.now() - 3600e3));
   const child = startServer(uploadsDir);
   serverOutput = child.getOutput;
   t.after(() => { child.kill('SIGTERM'); fs.rmSync(uploadsDir, { recursive: true, force: true }); });
   await waitForHealth(child);
+  await eventually(() => fs.existsSync(path.join(uploadsDir, 'lesson-files', '.orphaned', '1700000000000-abc.pdf')), 'the orphaned file was not set aside');
+  assert.equal(fs.readFileSync(path.join(uploadsDir, 'lesson-files', '.orphaned', '1700000000000-abc.pdf'), 'utf8'), '%PDF-1.4 stray');
+  assert.equal(lessonFileCount(uploadsDir), 0);
 
   const anon = session();
 
@@ -629,7 +641,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal((await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['virus.exe', 'MZ']]) })).status, 400);
   const fakePdf = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['page.pdf', '<html><script>alert(1)</script></html>']]) });
   assert.equal(fakePdf.status, 400, 'an HTML file renamed to .pdf is refused');
-  assert.equal(fs.readdirSync(path.join(uploadsDir, 'lesson-files')).length, 0, 'refused uploads leave no bytes behind');
+  assert.equal(lessonFileCount(uploadsDir), 0, 'refused uploads leave no bytes behind');
   const uploaded = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([
     ['Curs 1 – introducere.pdf', pdfBytes, 'application/pdf'],
     ['notes.md', '# Week 2\n\n- **HTTP** basics\n- <script>alert(1)</script>', 'text/markdown'],
@@ -659,16 +671,16 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.match(pptxDl.headers.get('content-disposition'), /^attachment; filename="slides\.pptx"/);
   assert.equal((await anon(`/lesson-files/${p2Pdf.id}/view`)).status, 401);
   // The public uploads route never serves lesson materials (they follow the lesson's lock rules)
-  const storedName = fs.readdirSync(path.join(uploadsDir, 'lesson-files'))[0];
+  const storedName = fs.readdirSync(path.join(uploadsDir, 'lesson-files')).find((f) => !f.startsWith('.'));
   assert.equal((await anon(`/uploads/lesson-files/${storedName}`)).status, 404);
   // Rename, delete (bytes removed)
   const renamedFile = await admin(`/lesson-files/${p2Md.id}`, { method: 'PUT', json: { name: 'Week 2 notes.md' } });
   assert.equal(renamedFile.body.name, 'Week 2 notes.md');
   const tmp = await admin(`/lessons/${phase2Lesson.body.id}/files`, { method: 'POST', body: filesForm([['tmp.txt', 'temporary']]) });
-  assert.equal(fs.readdirSync(path.join(uploadsDir, 'lesson-files')).length, 4);
+  assert.equal(lessonFileCount(uploadsDir), 4);
   assert.equal((await stud(`/lesson-files/${tmp.body[0].id}`, { method: 'DELETE' })).status, 403);
   assert.equal((await admin(`/lesson-files/${tmp.body[0].id}`, { method: 'DELETE' })).status, 200);
-  await eventually(() => fs.readdirSync(path.join(uploadsDir, 'lesson-files')).length === 3, 'deleted lesson file bytes were not removed');
+  await eventually(() => lessonFileCount(uploadsDir) === 3, 'deleted lesson file bytes were not removed');
 
   const quiz = await admin('/study-sets', { method: 'POST', json: {
     lessonId: phase2Lesson.body.id, kind: 'quiz', title: 'Phase 2 check', items: [

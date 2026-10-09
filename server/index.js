@@ -3225,7 +3225,7 @@ if (fs.existsSync(path.join(publicDir, 'index.html'))) {
     console.error('[FATAL] Database migration failed:', err.message || err);
     process.exit(1);
   }
-  lessonFiles.removeOrphanFiles(); // bytes of lesson files whose rows were deleted while offline
+  lessonFiles.quarantineOrphanFiles(); // files without a row are set aside (never deleted)
 
   // Encrypt any hash not yet sealed with the current key (first start after this release,
   // or after rotating PASSWORD_PEPPER)

@@ -110,6 +110,30 @@ deploying the old image, run inside the current container:
 not logged in since the upgrade get their bcrypt hash back; accounts that did (scrypt) are listed
 and can log in again once a current release is redeployed, which re-seals everything at startup.
 
+### If the password key is wrong or lost
+
+The container refuses to start with `Some password hashes are sealed with a key this server does
+not have` (it stops on purpose: running on would refuse every login).
+
+- **Key was changed by mistake / mistyped:** put the correct value back in `PASSWORD_PEPPER` and
+  redeploy. Nothing else is needed.
+- **Key was rotated on purpose:** keep the new one in `PASSWORD_PEPPER` and add the old one to
+  `PASSWORD_PEPPER_PREVIOUS`; the next start re-seals every hash with the new key, after which the
+  old one can be removed.
+- **Key is truly lost** (no copy in the password manager): existing passwords cannot be verified
+  any more. Set a new `PASSWORD_PEPPER`, then reset the affected accounts: an admin deletes and
+  re-approves them, or sets a temporary password directly in the database with a hash produced by
+  the server (`node -e "require('./passwords').configure(process.env,{production:true});require('./passwords').hashPassword('Temp-Pass-123').then(console.log)"`
+  inside the container), and the user changes it from their profile. `npm run passwords:unseal`
+  does not help here — it needs the key too.
+
+### Lesson materials without a database row
+
+At startup, files in `uploads/lesson-files/` that no `lesson_files` row points at are moved to
+`uploads/lesson-files/.orphaned/` (logged as `… file(s) without a database row were moved …`),
+never deleted. That happens after restoring the database from a backup older than the files:
+move them back and re-attach them, or delete the folder once you are sure they are not needed.
+
 ## Day-2 operations
 
 - **Redeploy the current `:latest` manually:** Dokploy → *Learning Platform* → **Deploy**, or
