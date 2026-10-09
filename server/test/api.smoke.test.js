@@ -689,7 +689,8 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal((await anon(`/uploads/lesson-files/${storedName}`)).status, 404);
   // ...however the path is spelled (express.static decodes and normalises it after routing)
   for (const spelled of [`lesson%2Dfiles/${storedName}`, `lesson%2dfiles/${storedName}`, `./lesson-files/${storedName}`,
-    `x/../lesson-files/${storedName}`, `%2E/lesson-files/${storedName}`, `lesson-files%2F${storedName}`, `/lesson-files/${storedName}`]) {
+    `x/../lesson-files/${storedName}`, `%2E/lesson-files/${storedName}`, `lesson-files%2F${storedName}`, `/lesson-files/${storedName}`,
+    `%6Cesson-files/${storedName}`, `x/..%2flesson-files/${storedName}`, `x%2F..%2Flesson-files%2F${storedName}`]) {
     assert.equal((await fetch(`${BASE}/uploads/${spelled}`)).status, 404, spelled);
   }
   // Rename, delete (bytes removed)
