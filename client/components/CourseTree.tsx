@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { CourseDetail, Phase, RoadLesson, RoadStudySet, RoadTask, StudySetKind } from '../types';
-import { RoadState, NodeStatus, shortPhaseName, lockReasonText } from '../roadState';
+import { RoadState, NodeStatus, TeachStatus, shortPhaseName, lockReasonText } from '../roadState';
 import { RoadSelection } from './QuestRoad';
 
 interface CourseTreeProps {
@@ -24,6 +24,7 @@ interface CourseTreeProps {
   onAddLesson?: (phase: Phase) => void;
   onAddTask?: (lesson: RoadLesson, phase: Phase) => void;
   onOpenScript?: (lesson: RoadLesson, phase: Phase) => void;
+  onToggleTaught?: (lesson: RoadLesson) => void;
   onAddStudySet?: (lesson: RoadLesson, kind: StudySetKind) => void;
 }
 
@@ -32,7 +33,7 @@ interface CourseTreeProps {
 export const CourseTree: React.FC<CourseTreeProps> = ({
   course, state, isAdmin, selected, collapsed, onToggleCollapse,
   onSelectPhase, onSelectLesson, onSelectTask, onOpenLesson, onOpenTask, onOpenPhase,
-  onAddPhase, onEditPhase, onAddLesson, onAddTask, onOpenScript, onSelectStudySet, onOpenStudySet, onAddStudySet,
+  onAddPhase, onEditPhase, onAddLesson, onAddTask, onOpenScript, onToggleTaught, onSelectStudySet, onOpenStudySet, onAddStudySet,
 }) => {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [initialised, setInitialised] = useState(false);
@@ -40,7 +41,9 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
   // Expand the phase the student is on (or the first one) the first time the course loads
   useEffect(() => {
     if (initialised || course.phases.length === 0) return;
-    const first = state.currentPhaseId ?? course.phases[0].id;
+    // Admin: the phase of the lesson being taught now
+    const teaching = isAdmin ? course.phases.find((p) => p.lessons.some((l) => state.teach.get(l.id) === 'current')) : undefined;
+    const first = teaching?.id ?? state.currentPhaseId ?? course.phases[0].id;
     setExpanded(new Set([first]));
     setInitialised(true);
   }, [course, state, initialised]);
@@ -143,15 +146,19 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
                       lessonNumber += 1;
                       const n = lessonNumber;
                       const lst = state.lessons.get(lesson.id) || 'open';
+                      const teach = isAdmin ? state.teach.get(lesson.id) : undefined;
                       const canOpen = true; // a locked lesson can be read (summary + task titles); its tasks stay locked
                       return (
                         <li key={lesson.id}>
-                          <div className={`group flex items-center gap-1.5 rounded-lg px-1.5 py-1 ${isSel('lesson', lesson.id) ? 'bg-primary/15' : 'hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
-                            <StatusDot status={lst} isAdmin={isAdmin} kind="lesson" number={n} />
+                          <div className={`group flex items-center gap-1.5 rounded-lg px-1.5 py-1 ${isSel('lesson', lesson.id) ? 'bg-primary/15' : teach === 'current' ? 'bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30' : 'hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
+                            {isAdmin ? <TeachDot status={teach} number={n} onToggle={onToggleTaught ? () => onToggleTaught(lesson) : undefined} /> : <StatusDot status={lst} isAdmin={isAdmin} kind="lesson" number={n} />}
                             <button onClick={() => onSelectLesson(lesson, phase)} className="flex-1 min-w-0 text-left" title={lesson.title}>
-                              <span className={`block text-[13px] leading-tight font-semibold line-clamp-2 ${lst === 'locked' ? 'text-gray-400' : lst === 'completed' ? 'text-green-700 dark:text-green-300' : 'text-gray-700 dark:text-gray-200'}`}>
+                              <span className={`block text-[13px] leading-tight font-semibold line-clamp-2 ${isAdmin ? teachTextClasses(teach) : lst === 'locked' ? 'text-gray-400' : lst === 'completed' ? 'text-green-700 dark:text-green-300' : 'text-gray-700 dark:text-gray-200'}`}>
                                 {lesson.title}
                               </span>
+                              {(teach === 'current' || teach === 'next') && (
+                                <span className={`block whitespace-nowrap text-[9px] font-extrabold uppercase tracking-wider ${teach === 'current' ? 'text-green-600 dark:text-green-400' : 'text-blue-500 dark:text-blue-400'}`}>{teach === 'current' ? 'Teaching now' : 'Up next'}</span>
+                              )}
                             </button>
                             {(lesson.files || []).length > 0 && (
                               <span title={`${(lesson.files || []).length} attached file(s)`} className="flex items-center text-[10px] font-bold text-gray-400 flex-shrink-0">
@@ -272,6 +279,10 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
       <div className="px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] font-semibold text-gray-500 dark:text-gray-400">
         {isAdmin ? (
           <>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-gray-300 dark:bg-gray-600 inline-block" />Taught</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-green-500 inline-block" />Teaching now</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-blue-500 inline-block" />Up next</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full border-2 border-gray-300 inline-block" />Later</span>
             <span className="flex items-center gap-1"><span className="material-icons text-sm text-blue-500">assignment</span>Mandatory task</span>
             <span className="flex items-center gap-1"><span className="material-icons text-sm text-yellow-500">stars</span>Optional task</span>
             <span className="flex items-center gap-1"><span className="material-icons text-sm text-purple-500">quiz</span>Quiz</span>
@@ -323,4 +334,32 @@ const TaskDot: React.FC<{ status: NodeStatus; type: 'mandatory' | 'optional'; is
   return type === 'mandatory'
     ? <span className={`${base} bg-blue-50 border-blue-400 text-blue-500`}><span className="material-icons text-[11px]">assignment</span></span>
     : <span className={`${base} bg-yellow-50 border-yellow-300 text-yellow-500`}><span className="material-icons text-[11px]">stars</span></span>;
+};
+
+// Admin teaching progress: taught lessons fade to grey, the current one is green, the next one blue.
+export const teachTextClasses = (status?: TeachStatus) =>
+  status === 'done' || status === 'previous' ? 'text-gray-400 dark:text-gray-500'
+  : status === 'current' ? 'text-green-700 dark:text-green-300'
+  : status === 'next' ? 'text-blue-700 dark:text-blue-300'
+  : 'text-gray-700 dark:text-gray-200';
+
+// The dot doubles as the toggle: click it to mark the lesson as taught (or undo).
+const TeachDot: React.FC<{ status?: TeachStatus; number: number; onToggle?: () => void }> = ({ status, number, onToggle }) => {
+  const taught = status === 'done' || status === 'previous';
+  if (onToggle) {
+    return (
+      <button type="button" onClick={onToggle} title={taught ? 'Taught — click to mark as not taught' : 'Click to mark as taught'} className="group/dot flex-shrink-0 rounded-full hover:ring-2 hover:ring-green-400 transition-shadow">
+        <span className={taught ? 'flex' : 'flex group-hover/dot:hidden'}><TeachDot status={status} number={number} /></span>
+        {!taught && <span className="hidden group-hover/dot:flex w-5 h-5 rounded-full border-2 border-green-500 bg-green-50 text-green-600 items-center justify-center"><span className="material-icons text-xs">check</span></span>}
+      </button>
+    );
+  }
+  const base = 'flex-shrink-0 flex items-center justify-center rounded-full border-2 w-5 h-5 text-[10px] font-extrabold';
+  switch (status) {
+    case 'done': return <span className={`${base} bg-gray-200 border-gray-300 text-gray-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-400`}><span className="material-icons text-xs">check</span></span>;
+    case 'previous': return <span title="Previous lesson" className={`${base} bg-gray-300 border-gray-400 text-gray-600 dark:bg-gray-600 dark:border-gray-500 dark:text-gray-200`}><span className="material-icons text-xs">check</span></span>;
+    case 'current': return <span className={`${base} bg-green-500 border-green-600 text-white`}>{number}</span>;
+    case 'next': return <span className={`${base} bg-blue-500 border-blue-600 text-white`}>{number}</span>;
+    default: return <span className={`${base} bg-white border-gray-300 text-gray-500 dark:bg-gray-900 dark:border-gray-600 dark:text-gray-300`}>{number}</span>;
+  }
 };

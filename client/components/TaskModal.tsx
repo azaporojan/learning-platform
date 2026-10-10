@@ -1,12 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { useEditor, EditorContent } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
-import Image from '@tiptap/extension-image';
-import Link from '@tiptap/extension-link';
 import { useDialog } from '../hooks/useDialog';
 import { AlertDialog } from './AlertDialog';
 import { apiUrl } from '../config';
 import { ConfirmDialog } from './ConfirmDialog';
+import { MarkdownEditor, MarkdownContent, toMarkdown } from './MarkdownEditor';
 
 interface Task {
   id: number;
@@ -74,14 +71,14 @@ export const TaskModal: React.FC<TaskModalProps> = ({
     type: task.type,
     xp_reward: task.xp_reward,
     deadline: task.deadline || '',
-    description: task.description || ''
+    description: toMarkdown(task.description || '')
   });
   const [originalData, setOriginalData] = useState({
     title: task.title,
     type: task.type,
     xp_reward: task.xp_reward,
     deadline: task.deadline || '',
-    description: task.description || ''
+    description: toMarkdown(task.description || '')
   });
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
@@ -105,26 +102,6 @@ export const TaskModal: React.FC<TaskModalProps> = ({
     handleConfirm
   } = useDialog();
 
-  // Initialize Tiptap editor
-  const editor = useEditor({
-    extensions: [
-      StarterKit,
-      Image.configure({
-        HTMLAttributes: {
-          class: 'max-w-full h-auto rounded-lg my-4',
-        },
-      }),
-      Link.configure({
-        openOnClick: false,
-      }),
-    ],
-    content: editData.description || '',
-    editable: mode === 'edit',
-    onUpdate: ({ editor }) => {
-      setEditData({ ...editData, description: editor.getHTML() });
-    },
-  });
-
   // A newer version of the task arrived (after a save or a live update): show it, and reset the
   // edit form only when not editing, so an update never wipes an admin's unsaved changes
   useEffect(() => {
@@ -135,21 +112,11 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       type: task.type,
       xp_reward: task.xp_reward,
       deadline: task.deadline || '',
-      description: task.description || ''
+      description: toMarkdown(task.description || '')
     };
     setEditData(data);
     setOriginalData(data);
-    if (editor) {
-      editor.commands.setContent(task.description || '');
-    }
   }, [task]);
-
-  // Update editor editable state when mode changes
-  useEffect(() => {
-    if (editor) {
-      editor.setEditable(mode === 'edit');
-    }
-  }, [mode, editor]);
 
   // Check if there are unsaved changes
   const hasUnsavedChanges = () => {
@@ -175,39 +142,6 @@ export const TaskModal: React.FC<TaskModalProps> = ({
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [editData, originalData, mode, isOpen]);
-
-  // Handle image upload for Tiptap
-  const addImage = async () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.onchange = async (e: any) => {
-      const file = e.target.files[0];
-      if (file && editor) {
-        const formData = new FormData();
-        formData.append('image', file);
-
-        try {
-          const response = await fetch(apiUrl('/upload-image'), {
-            method: 'POST',
-            credentials: 'include',
-            body: formData
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            editor.chain().focus().setImage({ src: data.url }).run();
-          } else {
-            showAlert('Error', 'Failed to upload image', 'danger');
-          }
-        } catch (error) {
-          console.error('Image upload error:', error);
-          showAlert('Error', 'Error uploading image', 'danger');
-        }
-      }
-    };
-    input.click();
-  };
 
   useEffect(() => {
     if (isOpen) {
@@ -325,9 +259,6 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   // Confirm discard changes
   const handleDiscardChanges = () => {
     setEditData(originalData);
-    if (editor) {
-      editor.commands.setContent(originalData.description || '');
-    }
     setShowUnsavedWarning(false);
     if (pendingAction) {
       pendingAction();
@@ -667,12 +598,11 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                 {/* Description */}
                 <div>
                   <span className="text-sm font-bold text-gray-500 mb-2 block">REQUIREMENTS</span>
-                  <div
-                    className="prose dark:prose-invert max-w-none bg-gray-50 dark:bg-gray-900 p-4 rounded-lg"
-                    dangerouslySetInnerHTML={{
-                      __html: shown.description || '<p className="text-gray-400 italic">No requirements specified yet.</p>'
-                    }}
-                  />
+                  {shown.description?.trim() ? (
+                    <MarkdownContent text={shown.description} className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg" />
+                  ) : (
+                    <p className="text-gray-400 italic bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">No requirements specified yet.</p>
+                  )}
                 </div>
 
                 {/* Student Upload Section */}
@@ -863,62 +793,12 @@ export const TaskModal: React.FC<TaskModalProps> = ({
 
                 <div>
                   <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Requirements</label>
-                  {editor && (
-                    <div className="rounded-xl overflow-hidden border border-gray-200 dark:border-gray-600">
-                      {/* Toolbar */}
-                      <div className="bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-2 flex flex-wrap gap-1">
-                        <button
-                          onClick={() => editor.chain().focus().toggleBold().run()}
-                          className={`px-3 py-1 rounded ${editor.isActive('bold') ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                          type="button"
-                        >
-                          <strong>B</strong>
-                        </button>
-                        <button
-                          onClick={() => editor.chain().focus().toggleItalic().run()}
-                          className={`px-3 py-1 rounded ${editor.isActive('italic') ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                          type="button"
-                        >
-                          <em>I</em>
-                        </button>
-                        <button
-                          onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-                          className={`px-3 py-1 rounded ${editor.isActive('heading', { level: 2 }) ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                          type="button"
-                        >
-                          H2
-                        </button>
-                        <button
-                          onClick={() => editor.chain().focus().toggleBulletList().run()}
-                          className={`px-3 py-1 rounded ${editor.isActive('bulletList') ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                          type="button"
-                        >
-                          • List
-                        </button>
-                        <button
-                          onClick={() => editor.chain().focus().toggleOrderedList().run()}
-                          className={`px-3 py-1 rounded ${editor.isActive('orderedList') ? 'bg-primary text-white' : 'bg-white dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                          type="button"
-                        >
-                          1. List
-                        </button>
-                        <button
-                          onClick={addImage}
-                          className="px-3 py-1 rounded bg-green-500 hover:bg-green-600 text-white flex items-center gap-1"
-                          type="button"
-                        >
-                          <span className="material-icons text-sm">image</span>
-                          Image
-                        </button>
-                      </div>
-
-                      {/* Editor Content */}
-                      <EditorContent
-                        editor={editor}
-                        className="prose dark:prose-invert max-w-none p-4 min-h-[300px] focus:outline-none"
-                      />
-                    </div>
-                  )}
+                  <MarkdownEditor
+                    value={editData.description}
+                    onChange={(description) => setEditData((prev) => ({ ...prev, description }))}
+                    onError={(message) => showAlert('Error', message, 'danger')}
+                    placeholder={'Describe what the student has to do. Markdown works: **bold**, - lists, ## headings, ```code```.\n\nPaste (Ctrl+V) or drop a screenshot to embed it.'}
+                  />
                 </div>
               </div>
             )}

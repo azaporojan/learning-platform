@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CourseDetail, Phase, RoadLesson, RoadStudySet, RoadTask } from '../types';
-import { RoadState, NodeStatus, shortPhaseName, lockReasonText } from '../roadState';
+import { RoadState, NodeStatus, TeachStatus, shortPhaseName, lockReasonText } from '../roadState';
 
 export type RoadSelection = { type: 'phase' | 'lesson' | 'task' | 'study'; id: number } | null;
 
@@ -97,7 +97,12 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
 
   // Index of the stop the student is on (the road is painted green up to here)
   const currentIndex = useMemo(() => {
-    if (isAdmin) return -1;
+    if (isAdmin) {
+      // Teaching progress: painted up to the lesson being taught (or to the end when all are taught)
+      const teaching = stops.findIndex((s) => s.kind === 'lesson' && state.teach.get(s.lesson!.id) === 'current');
+      if (teaching !== -1) return teaching;
+      return stops.some((s) => s.kind === 'lesson') && stops.every((s) => s.kind !== 'lesson' || s.lesson!.taught_at) ? stops.length - 1 : -1;
+    }
     if (state.currentLessonId !== null) return stops.findIndex((s) => s.kind === 'lesson' && s.lesson!.id === state.currentLessonId);
     // Nothing current: either everything is done, or everything is locked
     let last = -1;
@@ -184,6 +189,7 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
 
           const lesson = stop.lesson!;
           const status = state.lessons.get(lesson.id) || 'open';
+          const teach = isAdmin ? state.teach.get(lesson.id) : undefined;
           const sel = isSelected('lesson', lesson.id);
           const unviewed = isAdmin ? lesson.tasks.reduce((n, t) => n + (t.unviewed_count || 0), 0) : 0;
           const hasNew = !isAdmin && lesson.tasks.some((t) => t.is_new && !t.completed) && status !== 'locked';
@@ -192,7 +198,12 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
               {/* Label above the node */}
               <div className="absolute left-1/2 -translate-x-1/2 pointer-events-none" style={{ bottom: LESSON_SIZE / 2 + 6, width: labelWidth }}>
                 <div className={`mx-auto text-center text-[11px] leading-[14px] font-bold px-1.5 py-1 rounded-lg border shadow-sm line-clamp-2 ${
-                  status === 'locked' ? 'bg-white/90 text-gray-400 border-gray-200 dark:bg-gray-900 dark:border-gray-800'
+                  isAdmin ? (
+                    teach === 'done' || teach === 'previous' ? 'bg-white/90 text-gray-400 border-gray-200 dark:bg-gray-900 dark:text-gray-500 dark:border-gray-800'
+                    : teach === 'current' ? 'bg-white text-green-700 border-green-500 dark:bg-gray-900 dark:text-green-300'
+                    : teach === 'next' ? 'bg-white text-blue-700 border-blue-400 dark:bg-gray-900 dark:text-blue-300'
+                    : 'bg-white text-gray-700 border-gray-200 dark:bg-gray-900 dark:text-gray-200 dark:border-gray-700')
+                  : status === 'locked' ? 'bg-white/90 text-gray-400 border-gray-200 dark:bg-gray-900 dark:border-gray-800'
                   : status === 'completed' ? 'bg-white text-green-700 border-green-200 dark:bg-gray-900 dark:text-green-300 dark:border-green-900'
                   : status === 'current' ? 'bg-white text-gray-900 border-primary dark:bg-gray-900 dark:text-white'
                   : 'bg-white text-gray-700 border-gray-200 dark:bg-gray-900 dark:text-gray-200 dark:border-gray-700'
@@ -208,15 +219,16 @@ export const QuestRoad: React.FC<QuestRoadProps> = ({ course, state, isAdmin, se
                   data-road-node={`lesson-${lesson.id}`}
                   onClick={() => onOpenLesson(lesson, stop.phase)}
                   title={lesson.title}
-                  className={`relative flex items-center justify-center rounded-full shadow-md border-[3px] transition-transform hover:scale-110 cursor-pointer ${lessonClasses(status, isAdmin)} ${sel ? 'ring-4 ring-primary/50 scale-110' : ''}`}
+                  className={`relative flex items-center justify-center rounded-full shadow-md border-[3px] transition-transform hover:scale-110 cursor-pointer ${lessonClasses(status, isAdmin, teach)} ${sel ? 'ring-4 ring-primary/50 scale-110' : ''}`}
                   style={{ width: LESSON_SIZE, height: LESSON_SIZE }}
                 >
-                  {isAdmin ? <span className="font-extrabold text-sm">{stop.lessonNumber}</span>
+                  {isAdmin ? (teach === 'done' || teach === 'previous' ? <span className="material-icons text-xl">check</span> : <span className="font-extrabold text-sm">{stop.lessonNumber}</span>)
                     : status === 'completed' ? <span className="material-icons text-2xl font-black">close</span>
                     : status === 'current' ? <span className="material-icons text-xl">flag</span>
                     : status === 'locked' ? <span className="font-extrabold text-lg">?</span>
                     : <span className="font-extrabold text-sm">{stop.lessonNumber}</span>}
                   {status === 'current' && <span className="absolute inset-0 rounded-full bg-primary/40 animate-ping" />}
+                  {teach === 'current' && <span className="absolute inset-0 rounded-full bg-green-400/40 animate-ping" />}
                   {unviewed > 0 && (
                     <span className="absolute -top-2 -right-2 min-w-[20px] h-5 px-1 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white shadow z-10 animate-bounce">
                       {unviewed}
@@ -324,8 +336,16 @@ function phaseClasses(status: NodeStatus): string {
   }
 }
 
-function lessonClasses(status: NodeStatus, isAdmin: boolean): string {
-  if (isAdmin) return 'bg-blue-50 border-blue-400 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200';
+function lessonClasses(status: NodeStatus, isAdmin: boolean, teach?: TeachStatus): string {
+  if (isAdmin) {
+    switch (teach) {
+      case 'done': return 'bg-gray-200 border-gray-300 text-gray-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-400';
+      case 'previous': return 'bg-gray-300 border-gray-400 text-gray-600 dark:bg-gray-600 dark:border-gray-500 dark:text-gray-200';
+      case 'current': return 'bg-green-500 border-green-600 text-white';
+      case 'next': return 'bg-blue-500 border-blue-600 text-white';
+      default: return 'bg-white border-gray-300 text-gray-600 dark:bg-gray-900 dark:border-gray-600 dark:text-gray-300';
+    }
+  }
   switch (status) {
     case 'locked': return 'bg-gray-100 border-gray-300 text-gray-400 dark:bg-gray-800 dark:border-gray-600';
     case 'completed': return 'bg-green-500 border-green-600 text-white';
