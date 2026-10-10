@@ -43,7 +43,7 @@ const uploadImage = async (file: File): Promise<string> => {
   const res = await fetch(apiUrl('/upload-image'), { method: 'POST', credentials: 'include', body: formData });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.url) throw new Error(data.error || 'Failed to upload image');
-  return getFileUrl(data.url) || data.url;
+  return data.url; // stored relative (/uploads/…); fileSrc resolves it against the API at render time
 };
 
 // Markdown source next to a live preview (same format as the lesson script). Screenshots can be
@@ -96,7 +96,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ value, onChange,
     const ta = ref.current;
     const v = valueRef.current;
     const s = ta.selectionStart;
-    const tokens = images.map((f, i) => `![Uploading ${f.name || 'image'} #${Date.now()}-${i}…]()`);
+    const tokens = images.map((f, i) => `![Uploading ${(f.name || 'image').replace(/[[\]]/g, '')} #${Date.now()}-${i}…]()`);
     const before = v.slice(0, s);
     const lead = before && !before.endsWith('\n') ? '\n' : '';
     const inserted = lead + tokens.join('\n') + '\n';
@@ -113,7 +113,15 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ value, onChange,
       } finally {
         setUploads((n) => n - 1);
       }
-      setText(valueRef.current.replace(replacement ? tokens[i] : tokens[i] + '\n', replacement));
+      const current = valueRef.current;
+      const token = replacement ? tokens[i] : tokens[i] + '\n';
+      if (!current.includes(token)) {
+        // The placeholder was edited away while uploading: say so rather than drop the image silently
+        if (replacement) onError?.(`The image was uploaded but its placeholder was removed, so it was not inserted: ${replacement}`);
+        return;
+      }
+      // Function replacer: a file name containing $& or $1 must be inserted literally
+      setText(current.replace(token, () => replacement));
     }));
   };
 
@@ -138,10 +146,11 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ value, onChange,
     const files = Array.from(e.dataTransfer.files || []);
     if (files.some((f) => f.type.startsWith('image/'))) {
       e.preventDefault();
-      // Drop where the pointer is when the browser can tell, else at the cursor
-      const doc = document as any;
-      const pos = doc.caretPositionFromPoint?.(e.clientX, e.clientY)?.offset ?? doc.caretRangeFromPoint?.(e.clientX, e.clientY)?.startOffset;
-      if (typeof pos === 'number' && ref.current) ref.current.setSelectionRange(pos, pos);
+      // Drop where the pointer is when the browser reports a text offset inside the textarea
+      // (caretPositionFromPoint); otherwise at the cursor. caretRangeFromPoint is not used: its
+      // offset is a DOM-node index, not a character position in a textarea.
+      const caret = (document as any).caretPositionFromPoint?.(e.clientX, e.clientY);
+      if (caret && caret.offsetNode === ref.current && typeof caret.offset === 'number') ref.current!.setSelectionRange(caret.offset, caret.offset);
       insertImages(files);
     }
   };

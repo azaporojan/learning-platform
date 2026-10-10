@@ -385,6 +385,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   // Teaching progress: admins mark lessons as taught; only admins see it on the road
   assert.equal((await admin(`/lessons/${lesson.body.id}/taught`, { method: 'PUT', json: { taught: 'yes' } })).status, 400);
   assert.equal((await admin('/lessons/999999/taught', { method: 'PUT', json: { taught: true } })).status, 404);
+  assert.equal((await admin('/lessons/abc/taught', { method: 'PUT', json: { taught: true } })).status, 404);
   assert.equal((await stud(`/lessons/${lesson.body.id}/taught`, { method: 'PUT', json: { taught: true } })).status, 403);
   const taught = await admin(`/lessons/${lesson.body.id}/taught`, { method: 'PUT', json: { taught: true } });
   assert.equal(taught.status, 200, JSON.stringify(taught.body));
