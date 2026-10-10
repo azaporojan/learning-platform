@@ -1693,6 +1693,24 @@ api.put('/lessons/:id', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
+// Mark a lesson as taught (or not) — admin teaching progress shown on the course outline.
+api.put('/lessons/:id/taught', authenticateToken, requireAdmin, async (req, res) => {
+  const { taught } = req.body || {};
+  if (typeof taught !== 'boolean') return res.status(400).json({ error: 'taught must be a boolean' });
+  try {
+    const [rows] = await db.query(
+      `UPDATE lessons SET taught_at = ${taught ? 'COALESCE(taught_at, NOW())' : 'NULL'} WHERE id = ? RETURNING taught_at`,
+      [req.params.id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Lesson not found' });
+    io.emit('lesson:updated', { lessonId: Number(req.params.id) });
+    res.json({ success: true, taught_at: rows[0].taught_at });
+  } catch (err) {
+    console.error('[PUT /lessons/:id/taught] Error:', err);
+    res.status(500).json({ error: 'Failed to update lesson' });
+  }
+});
+
 // Lesson script (Admin only): the teacher's Markdown notes for a lesson. Never sent to students —
 // the course/road endpoints do not select this column, and /paths/:id/details strips it.
 const MAX_SCRIPT_CHARS = 200000;

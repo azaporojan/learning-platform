@@ -120,6 +120,7 @@ export interface RoadLesson {
   position_x: number;
   position_y: number;
   completed: boolean;
+  taught_at?: string | null; // admin only: when the teacher marked the lesson as taught
   tasks: RoadTask[];
   study_sets?: RoadStudySet[];
   files?: LessonFile[];

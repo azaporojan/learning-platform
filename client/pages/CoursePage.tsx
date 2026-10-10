@@ -101,6 +101,24 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
     };
   }, [socket, fetchCourse, currentUser.id]);
 
+  // Admin teaching progress: mark a lesson as taught (or undo). Shown at once, then confirmed by a refetch.
+  const toggleTaught = useCallback(async (lesson: RoadLesson) => {
+    const taught = !lesson.taught_at;
+    const patch = (c: CourseDetail | null) => c && ({
+      ...c,
+      phases: c.phases.map((p) => ({ ...p, lessons: p.lessons.map((l) => (l.id === lesson.id ? { ...l, taught_at: taught ? new Date().toISOString() : null } : l)) })),
+    });
+    setCourse(patch);
+    setLessonModal((prev) => (prev && prev.id === lesson.id ? { ...prev, taught_at: taught ? new Date().toISOString() : null } : prev));
+    try {
+      const res = await fetch(apiUrl(`/lessons/${lesson.id}/taught`), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ taught }) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to update lesson');
+    } catch (err: any) {
+      showAlert('Error', err?.message || 'Failed to update lesson', 'danger');
+    }
+    fetchCourse();
+  }, [fetchCourse, showAlert]);
+
   const state = useMemo(() => (course ? computeRoadState(course, isAdmin) : null), [course, isAdmin]);
   // One object per task version: a new object on every render would make TaskModal reset itself
   const taskForModal = useMemo(() => (taskModal ? { ...taskModal, deadline: taskModal.deadline || undefined } : null), [taskModal]);
@@ -203,6 +221,10 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
 
   const currentPhase = course.phases.find((p) => p.id === state.currentPhaseId) || null;
   const currentLesson = currentPhase?.lessons.find((l) => l.id === state.currentLessonId) || null;
+  const allLessons = course.phases.flatMap((p) => p.lessons);
+  const teachingNow = isAdmin ? allLessons.find((l) => state.teach.get(l.id) === 'current') || null : null;
+  const upNext = isAdmin ? allLessons.find((l) => state.teach.get(l.id) === 'next') || null : null;
+  const taughtCount = allLessons.filter((l) => l.taught_at).length;
   const firstLocked = course.phases.find((p) => p.locked) || null;
   const firstLockedIndex = firstLocked ? course.phases.indexOf(firstLocked) : -1;
   const totalMandatory = course.phases.flatMap((p) => p.lessons).flatMap((l) => l.tasks).filter((t) => t.type === 'mandatory');
@@ -231,6 +253,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
         onAddLesson={isAdmin ? (phase) => setAddLesson(phase) : undefined}
         onAddTask={isAdmin ? (lesson, phase) => setAddTask({ lesson, phase }) : undefined}
         onOpenScript={isAdmin ? (lesson) => navigate(`/courses/${course.id}/lessons/${lesson.id}/script`) : undefined}
+        onToggleTaught={isAdmin ? toggleTaught : undefined}
         onSelectStudySet={(set) => setSelected({ type: 'study', id: set.id })}
         onOpenStudySet={openStudySet}
         onAddStudySet={isAdmin ? addStudySet : undefined}
@@ -246,7 +269,13 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
             <h2 className="text-xl font-extrabold italic text-gray-800 dark:text-white truncate">{course.name}</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
               {isAdmin
-                ? `${course.phases.length} phases · ${course.phases.reduce((n, p) => n + p.lessons.length, 0)} lessons · click a phase to edit it, use the outline to add content`
+                ? teachingNow
+                  ? <>Teaching now: <span className="font-bold text-green-700 dark:text-green-300">{teachingNow.title}</span>
+                      {upNext && <> · next: <span className="font-bold text-blue-600 dark:text-blue-300">{upNext.title}</span></>}
+                      {' '}· {taughtCount}/{allLessons.length} taught</>
+                  : allLessons.length > 0 && taughtCount === allLessons.length
+                    ? `All ${allLessons.length} lessons taught`
+                    : `${course.phases.length} phases · ${allLessons.length} lessons · click a phase to edit it, use the outline to add content`
                 : !course.enrolled
                   ? 'Enrol to start the road.'
                   : currentLesson
@@ -314,6 +343,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
         onChanged={fetchCourse}
         onOpenTask={(task) => { setLessonModal(null); openTask(task); }}
         onOpenScript={isAdmin && lessonModal ? () => navigate(`/courses/${course.id}/lessons/${lessonModal.id}/script`) : undefined}
+        onToggleTaught={isAdmin && lessonModal ? () => toggleTaught(lessonModal) : undefined}
         studySetStatus={(set) => state.studySets.get(set.id) || 'open'}
         phaseLocked={!isAdmin && lessonModal !== null && course.phases.some((p) => p.locked && p.lessons.some((l) => l.id === lessonModal.id))}
         onOpenStudySet={(set) => { setLessonModal(null); openStudySet(set); }}

@@ -382,6 +382,21 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
     }
   }
   assert.equal((await admin('/lessons/abc/script')).status, 404);
+  // Teaching progress: admins mark lessons as taught; only admins see it on the road
+  assert.equal((await admin(`/lessons/${lesson.body.id}/taught`, { method: 'PUT', json: { taught: 'yes' } })).status, 400);
+  assert.equal((await admin('/lessons/999999/taught', { method: 'PUT', json: { taught: true } })).status, 404);
+  assert.equal((await stud(`/lessons/${lesson.body.id}/taught`, { method: 'PUT', json: { taught: true } })).status, 403);
+  const taught = await admin(`/lessons/${lesson.body.id}/taught`, { method: 'PUT', json: { taught: true } });
+  assert.equal(taught.status, 200, JSON.stringify(taught.body));
+  assert.ok(taught.body.taught_at);
+  // Marking again keeps the original date
+  assert.equal((await admin(`/lessons/${lesson.body.id}/taught`, { method: 'PUT', json: { taught: true } })).body.taught_at, taught.body.taught_at);
+  assert.equal((await admin(`/courses/${course.body.id}`)).body.phases[0].lessons[0].taught_at, taught.body.taught_at);
+  assert.equal('taught_at' in (await stud(`/courses/${course.body.id}`)).body.phases[0].lessons[0], false);
+  assert.equal('taught_at' in (await anon(`/courses/${course.body.id}`)).body.phases[0].lessons[0], false);
+  const untaught = await admin(`/lessons/${lesson.body.id}/taught`, { method: 'PUT', json: { taught: false } });
+  assert.equal(untaught.body.taught_at, null);
+  assert.equal((await admin(`/courses/${course.body.id}`)).body.phases[0].lessons[0].taught_at, null);
   const viewed = await stud(`/tasks/${task.body.id}/mark-viewed`, { method: 'POST' });
   assert.equal(viewed.status, 200);
   const viewedAgain = await stud(`/tasks/${task.body.id}/mark-viewed`, { method: 'POST' }); // upsert path

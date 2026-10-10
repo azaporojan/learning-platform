@@ -8,6 +8,13 @@ import { CourseDetail, Phase, RoadLesson, RoadStudySet, RoadTask } from './types
 //   locked    — not reached yet (?) or behind a phase gate
 export type NodeStatus = 'completed' | 'current' | 'open' | 'locked';
 
+// Admin only: teaching progress over the whole course, from the lessons marked as taught.
+//   done     — taught (not the latest one)
+//   previous — the last taught lesson before the current one
+//   current  — the first lesson not taught yet
+//   next     — the lesson after the current one
+export type TeachStatus = 'done' | 'previous' | 'current' | 'next';
+
 export interface RoadState {
   lessons: Map<number, NodeStatus>;
   tasks: Map<number, NodeStatus>;
@@ -16,6 +23,7 @@ export interface RoadState {
   currentPhaseId: number | null;
   currentLessonId: number | null;
   currentTaskId: number | null;
+  teach: Map<number, TeachStatus>;
 }
 
 export const studySetMastered = (set: RoadStudySet) =>
@@ -32,6 +40,7 @@ export function computeRoadState(course: CourseDetail, isAdmin: boolean): RoadSt
     currentPhaseId: null,
     currentLessonId: null,
     currentTaskId: null,
+    teach: new Map(),
   };
 
   for (const phase of course.phases) {
@@ -99,7 +108,21 @@ export function computeRoadState(course: CourseDetail, isAdmin: boolean): RoadSt
     state.phases.set(phase.id, phaseStatus);
   }
 
+  if (isAdmin) state.teach = computeTeachState(course);
   return state;
+}
+
+export function computeTeachState(course: CourseDetail): Map<number, TeachStatus> {
+  const teach = new Map<number, TeachStatus>();
+  const lessons = course.phases.flatMap((p) => p.lessons);
+  const current = lessons.findIndex((l) => !l.taught_at);
+  lessons.forEach((l) => { if (l.taught_at) teach.set(l.id, 'done'); });
+  if (current === -1) return teach; // everything taught
+  if (current > 0) teach.set(lessons[current - 1].id, 'previous');
+  teach.set(lessons[current].id, 'current');
+  const next = lessons.findIndex((l, i) => i > current && !l.taught_at);
+  if (next !== -1) teach.set(lessons[next].id, 'next');
+  return teach;
 }
 
 // "Phase 3 — Selenium, Page Objects…" → "Phase 3"; otherwise a short prefix of the name.
