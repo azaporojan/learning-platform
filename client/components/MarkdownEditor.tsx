@@ -24,11 +24,11 @@ const markdownComponents = {
   a: ({ node, ...props }: any) => <a target="_blank" rel="noopener noreferrer" {...props} />,
 };
 
-// Read-only rendering of a description: Markdown (no raw HTML), or legacy HTML as it was saved.
-export const MarkdownContent: React.FC<{ text: string; className?: string }> = ({ text, className = '' }) =>
-  isLegacyHtml(text)
-    ? <div className={`${PROSE} ${className}`} dangerouslySetInnerHTML={{ __html: text.replace(/(src=["'])\/uploads\//g, `$1${getFileUrl('/uploads/')}`) }} />
-    : <div className={`${PROSE} ${className}`}><ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{text}</ReactMarkdown></div>;
+// Read-only rendering of a description. Legacy HTML is converted to Markdown first, so nothing
+// is ever rendered as raw HTML (react-markdown escapes it).
+export const MarkdownContent: React.FC<{ text: string; className?: string }> = ({ text, className = '' }) => (
+  <div className={`${PROSE} ${className}`}><ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{toMarkdown(text)}</ReactMarkdown></div>
+);
 
 interface MarkdownEditorProps {
   value: string;
