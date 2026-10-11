@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { FlashcardItem, QuizItem, QuizResult, RoadStudySet, StudySet, StudySetKind } from '../types';
@@ -307,6 +307,10 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
   const [knownFirst, setKnownFirst] = useState(0);
   const [done, setDone] = useState(false);
   const [deal, setDeal] = useState(0);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // A dealt card replaces the old one: give it the focus so keyboard users keep their place
+  useEffect(() => { if (deal > 0) cardRef.current?.focus({ preventScroll: true }); }, [deal]);
 
   const start = (order: number[]) => { setQueue(order); setFlipped(false); setSeen(new Set()); setKnownFirst(0); setDone(false); setDeal((d) => d + 1); };
 
@@ -382,8 +386,10 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
           {queue.length > 2 && <div aria-hidden className="absolute inset-0 rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm translate-y-3 rotate-[2.5deg]" />}
           {queue.length > 1 && <div aria-hidden className="absolute inset-0 rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow translate-y-1.5 -rotate-[1.5deg]" />}
           <div className="flashcard-scene relative">
-            <button type="button" onClick={() => setFlipped((f) => !f)} aria-label={flipped ? 'Show question' : 'Show answer'}
-              className={`flashcard w-full text-left rounded-2xl focus:outline-none focus-visible:ring-4 focus-visible:ring-pink-300 ${flipped ? 'is-flipped' : ''}`}>
+            {/* A div, not a <button>: the faces hold block Markdown, and their text must stay readable by screen readers */}
+            <div ref={cardRef} role="button" tabIndex={0} onClick={() => setFlipped((f) => !f)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setFlipped((f) => !f); } }}
+              className={`flashcard cursor-pointer w-full text-left rounded-2xl focus:outline-none focus-visible:ring-4 focus-visible:ring-pink-300 ${flipped ? 'is-flipped' : ''}`}>
               <div aria-hidden={flipped} className="flashcard-face min-h-[300px] rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl overflow-hidden flex flex-col">
                 <div className="h-2 bg-gradient-to-r from-pink-400 to-fuchsia-500" />
                 <div className="px-6 pt-4 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-gray-400">
@@ -393,7 +399,7 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
                   <Md className="prose-lg text-gray-800 dark:text-gray-100">{card.front}</Md>
                 </div>
                 <div className="pb-4 flex items-center justify-center gap-1 text-xs font-semibold text-gray-400">
-                  <span className="material-icons text-sm">autorenew</span>Click or press space to flip
+                  <span aria-hidden className="material-icons text-sm">autorenew</span>Click or press space to flip
                 </div>
               </div>
               <div aria-hidden={!flipped} className="flashcard-face flashcard-back min-h-[300px] rounded-2xl border border-pink-200 dark:border-pink-800 bg-gradient-to-br from-pink-50 to-white dark:from-pink-900/30 dark:to-gray-900 shadow-xl overflow-hidden flex flex-col">
@@ -405,7 +411,7 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
                   <Md className="text-gray-800 dark:text-gray-100">{card.back}</Md>
                 </div>
               </div>
-            </button>
+            </div>
           </div>
         </div>
       </div>
