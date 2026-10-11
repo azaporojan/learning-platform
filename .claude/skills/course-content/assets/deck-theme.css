@@ -1,0 +1,159 @@
+/* Course deck theme — matches the existing lesson decks (QA Automation · Урок N.N):
+   off-white slides with a teal top bar, dark navy cover/section slides, teal + amber accents,
+   tinted "QA-мостик" callouts, dark terminal blocks. 1280×720 px per slide (16:9). */
+
+:root {
+  --bg: #fafaf7;
+  --ink: #1f2933;
+  --muted: #52606d;
+  --faint: #9aa5b1;
+  --line: #d9dee3;
+  --teal: #0f766e;
+  --teal-2: #14b8a6;
+  --teal-tint: #e6f2f0;
+  --amber: #d97706;
+  --amber-2: #fbbf24;
+  --red: #b91c1c;
+  --red-tint: #fdecec;
+  --green: #15803d;
+  --navy: #1f2933;
+  --navy-2: #2d3a46;
+  --card: #ffffff;
+  --sans: "Inter", "Aptos", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "Consolas", ui-monospace, monospace;
+}
+
+@page { size: 1280px 720px; margin: 0; }
+/* Only slides print: Mermaid (and other libraries) append measuring nodes to <body>, which would add a blank page */
+@media print { body > :not(section.slide) { display: none !important; } }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #777; }
+body { font-family: var(--sans); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+/* ---- slide frame ------------------------------------------------------------------------ */
+.slide {
+  position: relative; width: 1280px; height: 720px; overflow: hidden;
+  background: var(--bg); padding: 64px 58px 70px; page-break-after: always; break-after: page;
+  display: flex; flex-direction: column; gap: 22px; font-size: 21px; line-height: 1.4;
+}
+.slide::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 7px; background: var(--teal); }
+.slide > .footer {
+  position: absolute; left: 58px; right: 58px; bottom: 22px; display: flex; justify-content: space-between;
+  font-size: 12px; color: var(--muted);
+}
+.slide h2 { margin: 0 0 6px; font-size: 38px; line-height: 1.15; font-weight: 800; letter-spacing: -0.01em; }
+.slide h3 { margin: 0; font-size: 23px; font-weight: 700; }
+.slide p { margin: 0; }
+.slide ul { margin: 0; padding-left: 1.1em; }
+.slide li { margin: 4px 0; }
+.slide li::marker { color: var(--teal); }
+.slide a { color: var(--teal); text-decoration: underline; text-underline-offset: 3px; }
+.slide code { font-family: var(--mono); font-size: 0.9em; background: rgba(15, 118, 110, .09); padding: 1px 6px; border-radius: 5px; }
+.slide b, .slide strong { font-weight: 700; }
+.hl { color: var(--amber); font-weight: 700; }
+.muted { color: var(--muted); }
+.small { font-size: 16px; }
+.grow { flex: 1; min-height: 0; }
+
+/* A slide with little content: larger type so it fills the frame instead of floating at the top */
+.slide.roomy { font-size: 26px; gap: 30px; }
+.slide.roomy h3 { font-size: 28px; }
+.slide.roomy .card { padding: 26px 28px; gap: 12px; }
+.slide.roomy .callout { font-size: 22px; }
+.slide.roomy .terminal { font-size: 21px; }
+.slide.roomy table { font-size: 22px; }
+
+/* Dark slides: cover, section dividers, big statements */
+.slide.dark { background: var(--navy); color: #f5f7fa; justify-content: center; }
+.slide.dark::before { background: var(--teal-2); }
+.slide.dark > .footer { color: var(--faint); }
+.slide.dark h1 { margin: 0; font-size: 56px; line-height: 1.1; font-weight: 800; letter-spacing: -0.015em; max-width: 1000px; }
+.slide.dark h1 .accent, .slide.dark .accent { color: var(--amber-2); }
+.slide.dark .lead { font-size: 22px; color: #cbd2d9; max-width: 820px; }
+.slide.dark .big-num { font-size: 120px; font-weight: 800; color: var(--teal-2); line-height: 1; }
+.slide.dark .kicker { color: var(--teal-2); }
+.slide.dark code { background: rgba(255, 255, 255, .1); }
+.slide.dark a { color: var(--teal-2); }
+
+/* ---- type helpers ------------------------------------------------------------------------ */
+.kicker { font-size: 14px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--teal); }
+.kicker.amber { color: var(--amber); }
+.label { font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+
+/* ---- layout ------------------------------------------------------------------------------ */
+.cols { display: grid; grid-template-columns: repeat(var(--n, 2), minmax(0, 1fr)); gap: 24px; align-items: start; }
+.cols.c3 { --n: 3; } .cols.c4 { --n: 4; } .cols.c5 { --n: 5; }
+.cols.w-60-40 { grid-template-columns: 3fr 2fr; } .cols.w-40-60 { grid-template-columns: 2fr 3fr; }
+.stack { display: flex; flex-direction: column; gap: 14px; }
+.center { align-items: center; justify-content: center; text-align: center; }
+
+/* ---- cards ------------------------------------------------------------------------------- */
+.card { background: var(--card); border: 1.5px solid var(--line); border-radius: 14px; padding: 20px 22px; display: flex; flex-direction: column; gap: 8px; }
+.card.teal { background: var(--teal-tint); border-color: var(--teal); }
+.card.dark { background: var(--navy); border-color: var(--navy); color: #f5f7fa; }
+.card.dark .label { color: var(--teal-2); }
+.card.amber { border-color: var(--amber); }
+.card.bad { background: var(--red-tint); border-color: var(--red); }
+.card.good { border-color: var(--green); }
+.card .icon { width: 30px; height: 30px; color: var(--teal); }
+.card.dark .icon { color: var(--teal-2); }
+.num { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--teal); color: #fff; font-weight: 800; font-size: 17px; flex: none; }
+.numbered { display: flex; gap: 14px; align-items: flex-start; }
+
+/* ---- callouts ---------------------------------------------------------------------------- */
+.callout { background: var(--teal-tint); border-radius: 12px; padding: 18px 22px; font-size: 19px; }
+.callout > b:first-child, .callout > strong:first-child { color: var(--teal); }
+.callout.amber { background: #fdf3e2; } .callout.amber > b:first-child { color: var(--amber); }
+.callout.red { background: var(--red-tint); } .callout.red > b:first-child { color: var(--red); }
+/* A callout or source line placed directly on the slide sits at the bottom, like the takeaway bar of the course decks */
+.slide > :is(.callout, .source) { margin-top: auto; }
+.slide > :is(.callout, .source) ~ :is(.callout, .source) { margin-top: 0; }
+
+/* ---- quotes and sources ------------------------------------------------------------------ */
+.quote { background: var(--navy); color: #f5f7fa; border-radius: 16px; padding: 30px 34px; display: flex; flex-direction: column; gap: 14px; }
+.quote blockquote { margin: 0; font-size: 30px; line-height: 1.3; font-weight: 500; }
+.quote blockquote::before { content: "\201C"; } .quote blockquote::after { content: "\201D"; }
+.quote .src { font-size: 15px; color: #cbd2d9; } .quote .src a { color: var(--teal-2); }
+.quote.light { background: var(--card); color: var(--ink); border-left: 6px solid var(--teal); border-radius: 8px; }
+.quote.light .src { color: var(--muted); } .quote.light .src a { color: var(--teal); }
+.source { font-size: 13px; color: var(--muted); } .source::before { content: "Источник: "; font-weight: 700; }
+html[lang="en"] .source::before { content: "Source: "; }
+.std { display: inline-block; font-size: 13px; font-weight: 700; color: var(--teal); border: 1.5px solid var(--teal); border-radius: 999px; padding: 1px 10px; }
+
+/* ---- code / terminal --------------------------------------------------------------------- */
+.terminal { background: var(--navy); color: #e4e7eb; border-radius: 12px; padding: 18px 22px; font-family: var(--mono); font-size: 17px; line-height: 1.5; white-space: pre; overflow: hidden; }
+.terminal .c { color: #7b8794; } .terminal .k { color: #5eead4; } .terminal .s { color: #fbbf24; } .terminal .e { color: #f87171; } .terminal .ok { color: #4ade80; }
+.terminal[data-title]::before { content: attr(data-title); display: block; font-family: var(--sans); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--teal-2); margin-bottom: 8px; }
+
+/* ---- process flow: boxes joined by arrows ------------------------------------------------- */
+.flow { display: flex; align-items: stretch; gap: 0; }
+.flow > .card { flex: 1; }
+.flow > .arrow { flex: none; width: 34px; display: grid; place-items: center; color: var(--faint); font-size: 22px; }
+.flow > .arrow::before { content: "\2192"; }
+
+/* ---- tables ------------------------------------------------------------------------------ */
+.slide table { border-collapse: collapse; width: 100%; font-size: 18px; }
+.slide th { text-align: left; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--teal); border-bottom: 2px solid var(--teal); padding: 8px 10px; }
+.slide td { border-bottom: 1px solid var(--line); padding: 9px 10px; vertical-align: top; }
+
+/* ---- timeline / lesson plan (Gantt-like) -------------------------------------------------- */
+.plan { display: grid; grid-template-columns: 90px 260px 1fr; row-gap: 7px; align-items: center; font-size: 16px; }
+.plan .t { color: var(--teal); font-weight: 700; }
+.plan .bar { height: 16px; background: var(--line); border-radius: 3px; position: relative; }
+.plan .bar > span { position: absolute; top: 0; bottom: 0; background: var(--teal); border-radius: 3px; left: var(--from); width: var(--len); }
+.plan .bar.practice > span { background: var(--amber); }
+
+/* ---- icons and diagrams ------------------------------------------------------------------ */
+svg.lucide { width: 1.2em; height: 1.2em; vertical-align: -0.2em; stroke-width: 2; }
+.card > svg.lucide:first-child { width: 32px; height: 32px; color: var(--teal); }
+.card.dark > svg.lucide:first-child { color: var(--teal-2); }
+.diagram { display: flex; justify-content: center; align-items: center; flex: 1; min-height: 0; }
+.diagram svg { width: 100%; height: 100%; max-width: none !important; }
+.diagram > pre.mermaid { width: 100%; height: 100%; display: flex; justify-content: center; }
+pre.mermaid { margin: 0; background: none; font-family: var(--sans); }
+.diagram .label { text-transform: none; letter-spacing: 0; font-size: inherit; font-weight: inherit; color: inherit; } /* Mermaid's own .label */
+
+/* ---- references slide -------------------------------------------------------------------- */
+ol.refs { margin: 0; padding-left: 1.3em; font-size: 17px; columns: 2; column-gap: 40px; }
+ol.refs li { break-inside: avoid; margin: 0 0 10px; }
+ol.refs .what { display: block; color: var(--muted); font-size: 14px; }
