@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -16,32 +16,36 @@ import remarkGfm from 'remark-gfm';
 
 const EXPECTED_HEADER = /^\s*(expected|ожидаем|aștept|astept)/i;
 
-// Cells of a table row, split on unescaped pipes (GFM allows `\|` inside a cell)
-const splitRow = (line: string) => {
-  let row = line.trim();
-  if (row.startsWith('|')) row = row.slice(1);
-  if (row.endsWith('|') && !row.endsWith('\\|')) row = row.slice(0, -1);
-  return row.split(/(?<!\\)\|/).map((cell) => cell.replace(/\\\|/g, '|').trim());
+// The GFM delimiter row under the header, e.g. `|---|:---:|`
+const DELIMITER_ROW = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+// Number of test cases: the rows after the delimiter row
+export const countTestRows = (source: string) => {
+  const lines = source.split('\n').filter((line) => line.trim());
+  const delimiter = lines.findIndex((line) => DELIMITER_ROW.test(line));
+  return delimiter >= 0 ? lines.length - delimiter - 1 : 0;
 };
 
-export const parseTestTable = (source: string) => {
-  const lines = source.split('\n').filter((line) => line.trim());
-  const headers = lines.length ? splitRow(lines[0]) : [];
-  const found = headers.findIndex((h) => EXPECTED_HEADER.test(h.replace(/[*_`]/g, '')));
-  const rows = lines.filter((line, i) => i > 0 && !/^\s*\|?\s*:?-{1,}/.test(line)).length;
-  return { expectedIndex: found >= 0 ? found : headers.length - 1, rows };
+const hastText = (node: any): string =>
+  node?.type === 'text' ? node.value : (node?.children || []).map(hastText).join('');
+
+// Index of the masked column among the header cells of the table as remark parsed it
+export const expectedColumn = (headers: string[]) => {
+  const found = headers.findIndex((h) => EXPECTED_HEADER.test(h));
+  return found >= 0 ? found : headers.length - 1;
 };
 
 // Bumping `version` re-applies `all` to every cell, so "Reveal all" / "Hide all" win over
 // cells toggled one by one before it.
 const RevealContext = createContext({ all: false, version: 0 });
+const ColumnContext = createContext(-1);
 
-const SpoilerCell: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
+const SpoilerCell: React.FC<{ children?: React.ReactNode; style?: React.CSSProperties }> = ({ children, style }) => {
   const { all, version } = useContext(RevealContext);
   const [open, setOpen] = useState(all);
   useEffect(() => setOpen(all), [all, version]);
   return (
-    <td className="align-top">
+    <td className="align-top" style={style}>
       {open ? (
         <button type="button" onClick={() => setOpen(false)} title="Click to hide" className="text-left cursor-pointer">
           {children}
@@ -61,27 +65,40 @@ const SpoilerCell: React.FC<{ children?: React.ReactNode }> = ({ children }) => 
   );
 };
 
-const tableComponents = (expectedIndex: number) => ({
-  // Mark the expected cell of each body row; header cells (th) are left as they are
-  tr: ({ node, children, ...props }: any) => {
-    let col = -1;
-    const cells = React.Children.map(children, (child) => {
-      if (!React.isValidElement(child)) return child;
-      col += 1;
-      return col === expectedIndex && child.type === 'td'
-        ? <SpoilerCell>{(child.props as any).children}</SpoilerCell>
-        : child;
-    });
-    return <tr {...props}>{cells}</tr>;
+const tableComponents = {
+  // The masked column is found from the header cells remark actually parsed, so it always
+  // matches the cells the rows render
+  table: ({ node, children, ...props }: any) => {
+    const headRow = node?.children?.find((c: any) => c.tagName === 'thead')?.children?.find((c: any) => c.tagName === 'tr');
+    const headers = (headRow?.children || []).filter((c: any) => c.tagName === 'th').map(hastText);
+    return (
+      <ColumnContext.Provider value={expectedColumn(headers)}>
+        <table {...props}>{children}</table>
+      </ColumnContext.Provider>
+    );
   },
-});
+  // Mark the expected cell of each body row; header cells (th) are left as they are
+  tr: ({ node, children, ...props }: any) => <TestRow {...props}>{children}</TestRow>,
+};
+
+const TestRow: React.FC<{ children?: React.ReactNode }> = ({ children, ...props }) => {
+  const expectedIndex = useContext(ColumnContext);
+  let col = -1;
+  const cells = React.Children.map(children, (child) => {
+    if (!React.isValidElement(child)) return child;
+    col += 1;
+    const cell = child.props as any;
+    return col === expectedIndex && child.type === 'td'
+      ? <SpoilerCell style={cell.style}>{cell.children}</SpoilerCell>
+      : child;
+  });
+  return <tr {...props}>{cells}</tr>;
+};
 
 export const TestCasesBlock: React.FC<{ source: string; title?: string }> = ({ source, title }) => {
   const [expanded, setExpanded] = useState(false);
   const [reveal, setReveal] = useState({ all: false, version: 0 });
-  const { expectedIndex, rows } = parseTestTable(source);
-  // Stable renderers: a new `tr` type on every render would remount the cells and hide them again
-  const components = useMemo(() => tableComponents(expectedIndex), [expectedIndex]);
+  const rows = countTestRows(source);
   const toggleAll = () => setReveal((r) => ({ all: !r.all, version: r.version + 1 }));
 
   return (
@@ -110,7 +127,7 @@ export const TestCasesBlock: React.FC<{ source: string; title?: string }> = ({ s
       {expanded && (
         <RevealContext.Provider value={reveal}>
           <div className="prose dark:prose-invert max-w-none prose-th:bg-gray-100 dark:prose-th:bg-gray-800 prose-th:px-3 prose-td:px-3 px-3 overflow-x-auto">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{source}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={tableComponents}>{source}</ReactMarkdown>
           </div>
         </RevealContext.Provider>
       )}
