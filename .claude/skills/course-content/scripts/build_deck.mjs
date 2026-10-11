@@ -70,7 +70,7 @@ if (hasMermaid) {
         secondaryColor: '#ffffff', tertiaryColor: '#fafaf7', clusterBkg: '#ffffff', clusterBorder: '#d9dee3',
         noteBkgColor: '#fdf3e2', noteBorderColor: '#d97706', actorBkg: '#e6f2f0', actorBorder: '#0f766e' } });
     window.addEventListener('load', () => mermaid.run().then(() => { window.__mermaidDone = true; },
-      (e) => { window.__mermaidError = String(e); window.__mermaidDone = true; }));
+      (e) => { window.__mermaidError = (e && (e.message || e.str)) || JSON.stringify(e); window.__mermaidDone = true; }));
   </script>`);
 }
 html = html.includes('</head>') ? html.replace('</head>', `${head.join('\n')}\n</head>`) : head.join('\n') + html;
@@ -126,6 +126,8 @@ const report = await page.evaluate(() => {
 });
 
 await page.pdf({ path: pdfPath, width: '1280px', height: '720px', printBackground: true, preferCSSPageSize: true });
+const pages = (readFileSync(pdfPath, 'latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+if (pages !== report.count) problems.push(`PDF has ${pages} pages for ${report.count} slides (something outside <section class="slide"> is printing)`);
 
 // ---- 3. previews -------------------------------------------------------------------------------
 if (pngDir || sheet) {

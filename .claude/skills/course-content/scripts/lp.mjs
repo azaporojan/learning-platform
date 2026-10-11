@@ -9,6 +9,7 @@
 //   node lp.mjs script-get <lessonId> [out.md]  lesson script (Markdown) → stdout or file
 //   node lp.mjs script-put <lessonId> <file.md> save a lesson script; refuses to overwrite a newer server copy
 //   node lp.mjs upload <lessonId> <file>...     attach PDF/DOCX/PPTX/TXT/MD files to a lesson
+//   node lp.mjs download <fileId> <out>         save a lesson file (e.g. an existing deck to study)
 //
 // Env: LEARNING_API_KEY (required), LEARNING_API_URL (default https://learning.bsf.md/api).
 // Node's fetch passes the site's Cloudflare check; Python's urllib does not (error 1010), so use
@@ -88,7 +89,14 @@ switch (cmd) {
     print(await call('POST', `/lessons/${args[0]}/files`, fd));
     break;
   }
+  case 'download': {
+    const res = await fetch(`${API}/lesson-files/${args[0]}/download`, { headers: auth });
+    if (!res.ok) { console.error(`download ${args[0]} → ${res.status}`); process.exit(1); }
+    writeFileSync(args[1], Buffer.from(await res.arrayBuffer()));
+    console.error(`saved ${args[1]}`);
+    break;
+  }
   default:
-    console.error(readFileSync(new URL(import.meta.url), 'utf8').split('\n').slice(1, 14).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
+    console.error(readFileSync(new URL(import.meta.url), 'utf8').split('\n').slice(1, 15).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
     process.exit(cmd ? 2 : 0);
 }

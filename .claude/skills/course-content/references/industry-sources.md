@@ -14,10 +14,12 @@ point depends on the revision.
 | Topic | Source | URL |
 |---|---|---|
 | CTFL syllabus (chapters 1–6, learning objectives, sample exams; exam = 40 questions, 60 min, pass 65%) | ISTQB Certified Tester Foundation Level v4.0 | https://www.istqb.org/certifications/certified-tester-foundation-level-ctfl-v4-0/ |
+| The syllabus PDF itself (cite for § quotes) | ISTQB CTFL Syllabus v4.0.1 (2024) | https://www.istqb.org/wp-content/uploads/2024/11/ISTQB_CTFL_Syllabus_v4.0.1.pdf |
 | Term definitions | ISTQB Glossary | https://glossary.istqb.org/ |
 | Agile testing | CTFL v4.0 already covers agile basics (ch. 2, 5). The separate CTFL Agile Tester is being retired (English exams end 6 May 2027); don't recommend it to students | https://istqb.org/certifications/agile-tester |
 | Test automation | ISTQB Certified Tester Test Automation Engineering (CTAL-TAE) | search istqb.org for "Test Automation Engineering" (verify the current version) |
-| Software testing processes, documentation, techniques | ISO/IEC/IEEE 29119 series (parts 1–5) | iso.org — search "ISO/IEC/IEEE 29119"; cite the part, e.g. 29119-4 test techniques (verify the standard page) |
+| Software testing concepts and vocabulary | ISO/IEC/IEEE 29119-1:2022 General concepts | https://www.iso.org/standard/81291.html |
+| Test processes, documentation, techniques | ISO/IEC/IEEE 29119-2 / -3 / -4 | iso.org — search "ISO/IEC/IEEE 29119-4" etc.; cite the part (verify the standard page) |
 | Product quality model (functional suitability, performance efficiency, usability, security…) | ISO/IEC 25010 | iso.org — search "ISO/IEC 25010" (verify the edition; 2023 is current) |
 | Vocabulary used by the ISTQB glossary | ISO/IEC/IEEE 24765 Systems and software engineering — Vocabulary | iso.org (verify) |
 

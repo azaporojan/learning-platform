@@ -24,6 +24,8 @@
 }
 
 @page { size: 1280px 720px; margin: 0; }
+/* Only slides print: Mermaid (and other libraries) append measuring nodes to <body>, which would add a blank page */
+@media print { body > :not(section.slide) { display: none !important; } }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: #777; }
 body { font-family: var(--sans); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -52,6 +54,14 @@ body { font-family: var(--sans); color: var(--ink); -webkit-print-color-adjust: 
 .muted { color: var(--muted); }
 .small { font-size: 16px; }
 .grow { flex: 1; min-height: 0; }
+
+/* A slide with little content: larger type so it fills the frame instead of floating at the top */
+.slide.roomy { font-size: 26px; gap: 30px; }
+.slide.roomy h3 { font-size: 28px; }
+.slide.roomy .card { padding: 26px 28px; gap: 12px; }
+.slide.roomy .callout { font-size: 22px; }
+.slide.roomy .terminal { font-size: 21px; }
+.slide.roomy table { font-size: 22px; }
 
 /* Dark slides: cover, section dividers, big statements */
 .slide.dark { background: var(--navy); color: #f5f7fa; justify-content: center; }
