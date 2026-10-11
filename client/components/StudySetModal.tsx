@@ -326,7 +326,8 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
 
   // Not known: turn the same card back to its question
   const again = () => {
-    setMissed((prev) => new Set(prev).add(order[pos]));
+    // A card already learned keeps its first-try credit when revisited
+    if (!learned.has(order[pos])) setMissed((prev) => new Set(prev).add(order[pos]));
     setFlipped(false);
     cardRef.current?.focus({ preventScroll: true });
   };
@@ -352,7 +353,9 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
   // Keyboard: space flips, ← / → move through the deck; once flipped, 1 = Again and 2 = Got it
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (done) return;
+      // Leave browser shortcuts (Alt+← is "back") and typing in form fields alone
+      const target = e.target as HTMLElement | null;
+      if (done || e.altKey || e.ctrlKey || e.metaKey || target?.closest('input, textarea, select, [contenteditable="true"]')) return;
       if (e.key === ' ') { e.preventDefault(); setFlipped((f) => !f); }
       else if (e.key === 'ArrowLeft') goTo(pos - 1);
       else if (e.key === 'ArrowRight') goTo(pos + 1);
@@ -379,6 +382,7 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
   }
 
   const card = cards[order[pos]];
+  if (!card) return <div className="p-10 text-center text-gray-500">This deck has no cards yet.</div>;
   const toGo = cards.length - learned.size;
   const isLearned = learned.has(order[pos]);
   return (
