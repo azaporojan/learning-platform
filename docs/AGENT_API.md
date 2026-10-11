@@ -273,6 +273,26 @@ The content must match the extension (a PDF must start with `%PDF-`, Office file
 Office containers, TXT/MD must be text), otherwise `400`. `GET /api/courses/:id` lists each lesson's
 `files` (names and sizes only).
 
+## 5d. Test cases in task descriptions
+
+Task descriptions are Markdown. A fenced block with the language `tests` holds a Markdown table of
+test cases; the app shows it as a collapsible panel (collapsed by default) and masks the
+**Expected** column as `*****` until the student clicks a cell, or **Reveal all** for that block.
+The text after `tests` is the panel title. The masked column is the first header starting with
+`Expected` (or `Ожидаемый` / `Așteptat`); without one, the last column. Use `\|` for a pipe inside a cell.
+
+````markdown
+```tests FizzBuzz — test cases
+| # | Input | Expected     |
+|---|-------|--------------|
+| 1 | `3`   | `"Fizz"`     |
+| 2 | `15`  | `"FizzBuzz"` |
+```
+````
+
+The **Tests** button of the description editor inserts a template. The block only hides the
+answers in the UI: they are part of the task text the API returns, so it is a study aid, not a secret.
+
 ## 6. Using it from a Claude agent
 
 **Review before students see it.** Imported content goes live immediately, and lesson/task
