@@ -296,15 +296,17 @@ const QuizPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ set, 
 };
 
 // ---------------------------------------------------------------------------
-// Flashcards: flip, then "Got it" or "Again" (the card comes back at the end of the round).
-// The score is the number of cards known on first sight.
+// Flashcards: flip, then "Got it" (the card is learned, go to the next one still to learn) or
+// "Again" (flip back to the question and try once more). ‹ / › move through the whole deck.
+// The score is the number of cards marked "Got it" without an "Again" before.
 // ---------------------------------------------------------------------------
 const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ set, onRecorded }) => {
   const cards = set.items as FlashcardItem[];
-  const [queue, setQueue] = useState<number[]>(() => cards.map((_, i) => i));
+  const [order, setOrder] = useState<number[]>(() => cards.map((_, i) => i));
+  const [pos, setPos] = useState(0);
   const [flipped, setFlipped] = useState(false);
-  const [seen, setSeen] = useState<Set<number>>(new Set());
-  const [knownFirst, setKnownFirst] = useState(0);
+  const [learned, setLearned] = useState<Set<number>>(new Set());
+  const [missed, setMissed] = useState<Set<number>>(new Set());
   const [done, setDone] = useState(false);
   const [deal, setDeal] = useState(0);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -312,49 +314,59 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
   // A dealt card replaces the old one: give it the focus so keyboard users keep their place
   useEffect(() => { if (deal > 0) cardRef.current?.focus({ preventScroll: true }); }, [deal]);
 
-  const start = (order: number[]) => { setQueue(order); setFlipped(false); setSeen(new Set()); setKnownFirst(0); setDone(false); setDeal((d) => d + 1); };
-
-  const answer = async (known: boolean) => {
-    const current = queue[0];
-    const firstSight = !seen.has(current);
-    const nextKnown = knownFirst + (known && firstSight ? 1 : 0);
-    setSeen((prev) => new Set(prev).add(current));
-    setKnownFirst(nextKnown);
-    const rest = known ? queue.slice(1) : [...queue.slice(1), current];
-    setFlipped(false);
-    setDeal((d) => d + 1);
-    if (rest.length === 0) {
-      setDone(true);
-      setQueue([]);
-      try {
-        await fetch(apiUrl(`/study-sets/${set.id}/attempts`), {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-          body: JSON.stringify({ known: nextKnown }),
-        });
-        onRecorded();
-      } catch { /* the practice itself still counted for the student */ }
-    } else {
-      setQueue(rest);
-    }
+  const start = (next: number[]) => {
+    setOrder(next); setPos(0); setFlipped(false); setLearned(new Set()); setMissed(new Set()); setDone(false); setDeal((d) => d + 1);
   };
 
-  // Keyboard: space flips, → / ← answer once flipped
+  // Show another card (a new deal mounts it on the question side)
+  const goTo = (nextPos: number) => {
+    if (nextPos < 0 || nextPos >= order.length || nextPos === pos) return;
+    setPos(nextPos); setFlipped(false); setDeal((d) => d + 1);
+  };
+
+  // Not known: turn the same card back to its question
+  const again = () => {
+    setMissed((prev) => new Set(prev).add(order[pos]));
+    setFlipped(false);
+    cardRef.current?.focus({ preventScroll: true });
+  };
+
+  const knownFirstTry = (learnedNow: Set<number>) => [...learnedNow].filter((i) => !missed.has(i)).length;
+
+  const gotIt = async () => {
+    const nextLearned = new Set(learned).add(order[pos]);
+    setLearned(nextLearned);
+    // The next card still to learn after this one, wrapping round to the start of the deck
+    const ahead = [...order.keys()].map((k) => (pos + 1 + k) % order.length).find((k) => !nextLearned.has(order[k]));
+    if (ahead !== undefined) { goTo(ahead); return; }
+    setDone(true);
+    try {
+      await fetch(apiUrl(`/study-sets/${set.id}/attempts`), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ known: knownFirstTry(nextLearned) }),
+      });
+      onRecorded();
+    } catch { /* the practice itself still counted for the student */ }
+  };
+
+  // Keyboard: space flips, ← / → move through the deck; once flipped, 1 = Again and 2 = Got it
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (done || queue.length === 0) return;
+      if (done) return;
       if (e.key === ' ') { e.preventDefault(); setFlipped((f) => !f); }
-      else if (flipped && e.key === 'ArrowRight') answer(true);
-      else if (flipped && e.key === 'ArrowLeft') answer(false);
+      else if (e.key === 'ArrowLeft') goTo(pos - 1);
+      else if (e.key === 'ArrowRight') goTo(pos + 1);
+      else if (flipped && e.key === '1') again();
+      else if (flipped && e.key === '2') gotIt();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }); // eslint-disable-line react-hooks/exhaustive-deps
-
   if (done) {
     return (
       <div className="p-10 flex flex-col items-center text-center">
         <span className="material-icons text-6xl text-pink-500">emoji_events</span>
-        <div className="text-3xl font-black text-gray-800 dark:text-white mt-2">{knownFirst} / {cards.length}</div>
+        <div className="text-3xl font-black text-gray-800 dark:text-white mt-2">{knownFirstTry(learned)} / {cards.length}</div>
         <div className="text-sm font-semibold text-gray-500 mt-1">known on first sight</div>
         <div className="flex gap-3 mt-6">
           <button onClick={() => start(cards.map((_, i) => i))} className="px-5 py-2.5 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 font-bold rounded-lg">Start over</button>
@@ -366,12 +378,13 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
     );
   }
 
-  const card = cards[queue[0]];
-  const learned = cards.length - queue.length;
+  const card = cards[order[pos]];
+  const toGo = cards.length - learned.size;
+  const isLearned = learned.has(order[pos]);
   return (
     <>
       <div className="px-6 pt-4 flex items-center justify-between text-xs font-bold text-gray-500">
-        <span>{learned} of {cards.length} learned · {queue.length} to go</span>
+        <span>{learned.size} of {cards.length} learned · {toGo} to go</span>
         <span className="flex items-center gap-3">
           {set.progress && set.progress.total === cards.length && <span>best {set.progress.best_score}/{set.progress.total}</span>}
           <button onClick={() => start(shuffled(cards.map((_, i) => i)))} className="flex items-center gap-1 text-pink-600 hover:underline">
@@ -383,8 +396,8 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
         {/* Keyed by deal so a new card mounts face up instead of flipping back and showing its answer */}
         <div key={deal} className="relative max-w-xl mx-auto flashcard-deal">
           {/* The rest of the deck peeking out behind the current card */}
-          {queue.length > 2 && <div aria-hidden className="absolute inset-0 rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm translate-y-3 rotate-[2.5deg]" />}
-          {queue.length > 1 && <div aria-hidden className="absolute inset-0 rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow translate-y-1.5 -rotate-[1.5deg]" />}
+          {toGo > 2 && <div aria-hidden className="absolute inset-0 rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm translate-y-3 rotate-[2.5deg]" />}
+          {toGo > 1 && <div aria-hidden className="absolute inset-0 rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow translate-y-1.5 -rotate-[1.5deg]" />}
           <div className="flashcard-scene relative">
             {/* A div, not a <button>: the faces hold block Markdown, and their text must stay readable by screen readers */}
             <div ref={cardRef} role="button" tabIndex={0} onClick={() => setFlipped((f) => !f)}
@@ -393,7 +406,7 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
               <div aria-hidden={flipped} className="flashcard-face min-h-[300px] rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl overflow-hidden flex flex-col">
                 <div className="h-2 bg-gradient-to-r from-pink-400 to-fuchsia-500" />
                 <div className="px-6 pt-4 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                  <span>Question</span><span>{queue[0] + 1} / {cards.length}</span>
+                  <span>Question{isLearned && <span className="ml-1 text-green-600">· learned ✓</span>}</span><span>{pos + 1} / {cards.length}</span>
                 </div>
                 <div className="flex-1 flex items-center justify-center px-8 py-6 text-center">
                   <Md className="prose-lg text-gray-800 dark:text-gray-100">{card.front}</Md>
@@ -405,7 +418,7 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
               <div aria-hidden={!flipped} className="flashcard-face flashcard-back min-h-[300px] rounded-2xl border border-pink-200 dark:border-pink-800 bg-gradient-to-br from-pink-50 to-white dark:from-pink-900/30 dark:to-gray-900 shadow-xl overflow-hidden flex flex-col">
                 <div className="h-2 bg-gradient-to-r from-fuchsia-500 to-pink-400" />
                 <div className="px-6 pt-4 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-pink-500">
-                  <span>Answer</span><span>{queue[0] + 1} / {cards.length}</span>
+                  <span>Answer</span><span>{pos + 1} / {cards.length}</span>
                 </div>
                 <div className="flex-1 px-7 py-4">
                   <Md className="text-gray-800 dark:text-gray-100">{card.back}</Md>
@@ -415,19 +428,29 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
           </div>
         </div>
       </div>
-      <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-center gap-3">
-        {flipped ? (
-          <>
-            <button onClick={() => answer(false)} className="px-5 py-2.5 bg-amber-100 hover:bg-amber-200 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 font-bold rounded-lg flex items-center gap-1">
-              <span className="material-icons text-base">replay</span>Again
-            </button>
-            <button onClick={() => answer(true)} className="px-5 py-2.5 bg-green-500 hover:bg-green-600 text-white font-bold rounded-lg flex items-center gap-1">
-              <span className="material-icons text-base">check</span>Got it
-            </button>
-          </>
-        ) : (
-          <button onClick={() => setFlipped(true)} className="px-6 py-2.5 bg-pink-500 hover:bg-pink-600 text-white font-bold rounded-lg">Show answer</button>
-        )}
+      <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
+        <button onClick={() => goTo(pos - 1)} disabled={pos === 0} title="Previous card (←)" aria-label="Previous card"
+          className="p-2 rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 flex items-center">
+          <span className="material-icons">chevron_left</span>
+        </button>
+        <div className="flex items-center justify-center gap-3">
+          {flipped ? (
+            <>
+              <button onClick={again} title="Flip back to the question and try again (1)" className="px-5 py-2.5 bg-amber-100 hover:bg-amber-200 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 font-bold rounded-lg flex items-center gap-1">
+                <span className="material-icons text-base">replay</span>Again
+              </button>
+              <button onClick={gotIt} title="I knew it: go to the next card (2)" className="px-5 py-2.5 bg-green-500 hover:bg-green-600 text-white font-bold rounded-lg flex items-center gap-1">
+                <span className="material-icons text-base">check</span>Got it
+              </button>
+            </>
+          ) : (
+            <button onClick={() => setFlipped(true)} className="px-6 py-2.5 bg-pink-500 hover:bg-pink-600 text-white font-bold rounded-lg">Show answer</button>
+          )}
+        </div>
+        <button onClick={() => goTo(pos + 1)} disabled={pos === order.length - 1} title="Next card (→)" aria-label="Next card"
+          className="p-2 rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 flex items-center">
+          <span className="material-icons">chevron_right</span>
+        </button>
       </div>
     </>
   );
