@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import TurndownService from 'turndown';
 import { apiUrl, getFileUrl } from '../config';
+import { PreWithTestCases } from './TestCases';
 
 // Older task descriptions were saved as HTML by the previous rich-text editor. They always start
 // with a block tag; Markdown that merely mentions a tag (`List<String>`) does not.
@@ -22,6 +23,7 @@ const markdownComponents = {
     ? <img src={fileSrc(src)} alt={alt} loading="lazy" {...props} />
     : <span className="inline-block text-sm text-gray-400 italic">{alt}</span>, // e.g. a screenshot still uploading
   a: ({ node, ...props }: any) => <a target="_blank" rel="noopener noreferrer" {...props} />,
+  pre: PreWithTestCases, // ```tests blocks: collapsible test cases with hidden expected results
 };
 
 // Read-only rendering of a description. Legacy HTML is converted to Markdown first, so nothing
@@ -167,6 +169,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ value, onChange,
         <button type="button" className={btn} title="Numbered list" onClick={() => prefixLines((i) => `${i + 1}. `)}>1. List</button>
         <button type="button" className={`${btn} font-mono`} title="Inline code" onClick={() => wrap('`', '`', 'code')}>{'</>'}</button>
         <button type="button" className={btn} title="Code block" onClick={() => wrap('\n```\n', '\n```\n', 'code')}>{'```'}</button>
+        <button type="button" className={btn} title="Test cases: collapsible table, the Expected column stays hidden until clicked" onClick={() => wrap('\n```tests Test cases\n| # | Input | Expected |\n|---|-------|----------|\n', '\n```\n', '| 1 | `1` | `"1"` |')}>Tests</button>
         <button type="button" className={btn} title="Link" onClick={() => wrap('[', '](https://)', 'link text')}>Link</button>
         <button type="button" onClick={pickImage} className="px-3 py-1 rounded bg-green-500 hover:bg-green-600 text-white flex items-center gap-1 text-sm">
           <span className="material-icons text-sm">image</span>Image
