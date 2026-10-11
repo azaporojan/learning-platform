@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Урок 2.1 — Что такое тестирование</title>
+<!-- Theme, fonts, icons, Mermaid and footers are injected by scripts/build_deck.mjs. -->
+</head>
+<body data-footer="QA Automation · Урок 2.1">
+
+<!-- 1. Cover (dark) -->
+<section class="slide dark" data-no-footer>
+  <div class="kicker">QA Automation Engineer · Урок 2.1 · 60 минут</div>
+  <h1>Что такое тестирование<br><span class="accent">и зачем оно нужно</span></h1>
+  <p class="lead">ISTQB CTFL 4.0 §1.1–1.2: цели тестирования, testing vs debugging, error → defect → failure, QA vs QC.</p>
+</section>
+
+<!-- 2. Lesson plan: headline states the point; .plan bars use --from/--len as % of the lesson -->
+<section class="slide">
+  <h2>План: 60 минут, вторая половина — говоришь и пишешь ты</h2>
+  <div class="plan">
+    <span class="t">0–7</span><span>English warm-up</span><div class="bar practice"><span style="--from:0%;--len:12%"></span></div>
+    <span class="t">7–20</span><span>Что такое тестирование</span><div class="bar"><span style="--from:12%;--len:21%"></span></div>
+    <span class="t">20–30</span><span>Testing vs debugging</span><div class="bar"><span style="--from:33%;--len:17%"></span></div>
+    <span class="t">30–45</span><span>Error → defect → failure</span><div class="bar practice"><span style="--from:50%;--len:25%"></span></div>
+  </div>
+  <div class="callout"><b>QA-мостик:</b> amber-полосы — практика, ты за клавиатурой.</div>
+</section>
+
+<!-- 3. Section divider -->
+<section class="slide dark">
+  <div class="big-num">01</div>
+  <h1>Что такое тестирование</h1>
+  <p class="lead">§1.1.1 — цели тестирования · 7–20 мин</p>
+</section>
+
+<!-- 4. Numbered cards with icons -->
+<section class="slide">
+  <h2>Тестирование — это не только «искать баги»</h2>
+  <div class="cols c3">
+    <div class="card"><i data-icon="bug"></i><h3>Найти дефекты</h3><p>Вызвать отказы (динамически) или найти дефекты напрямую (статически).</p></div>
+    <div class="card teal"><i data-icon="gauge"></i><h3>Оценить качество</h3><p>Дать стейкхолдерам информацию для решения «выпускать или нет».</p></div>
+    <div class="card dark"><i data-icon="shield-alert"></i><h3>Снизить риск</h3><p>Reduce the level of risk of inadequate software quality.</p></div>
+  </div>
+  <p class="source"><a href="https://www.istqb.org/certifications/certified-tester-foundation-level-ctfl-v4-0/">ISTQB CTFL Syllabus v4.0, §1.1.1 Test Objectives</a></p>
+</section>
+
+<!-- 5. Quote: exact words + named, linked source -->
+<section class="slide">
+  <h2>Тестирование показывает наличие дефектов, но не их отсутствие</h2>
+  <div class="quote">
+    <blockquote>Program testing can be used to show the presence of bugs, but never to show their absence!</blockquote>
+    <div class="src">Edsger W. Dijkstra, <i>Notes on Structured Programming</i> (EWD249), 1970 · <a href="https://www.cs.utexas.edu/~EWD/transcriptions/EWD02xx/EWD249/EWD249.html">cs.utexas.edu/~EWD</a></div>
+  </div>
+  <div class="callout"><b>На тесте ISTQB:</b> вариант «prove that the software has no defects» — всегда неверный.</div>
+</section>
+
+<!-- 6. Flow diagram from cards (no Mermaid needed for simple chains) -->
+<section class="slide">
+  <h2>Ошибка человека становится дефектом, дефект — отказом</h2>
+  <div class="flow">
+    <div class="card"><span class="label">Error · mistake</span><h3>в голове</h3><p>Забыл, что результат дробный.</p></div><div class="arrow"></div>
+    <div class="card teal"><span class="label">Defect · bug · fault</span><h3>в коде</h3><p><code>int interest = …</code></p></div><div class="arrow"></div>
+    <div class="card dark"><span class="label">Failure</span><h3>на экране</h3><p>52 вместо 52.50</p></div>
+  </div>
+  <div class="callout"><b>Root cause</b> — почему человек ошибся (неясное требование, спешка), а не «строка 12».</div>
+</section>
+
+<!-- 7. Mermaid diagram -->
+<section class="slide">
+  <h2>После фикса: confirmation, потом regression</h2>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  T[Tester: test fails] --> R[Defect report]
+  R --> D[Developer: reproduce → diagnose → fix]
+  D --> C[Tester: confirmation test]
+  C --> G[Regression tests]
+</pre>
+  </div>
+  <p class="source">ISTQB CTFL v4.0 §1.1.2 Testing and Debugging</p>
+</section>
+
+<!-- 8. Terminal + table side by side -->
+<section class="slide">
+  <h2>Тот же дефект в коде и в таблице</h2>
+  <div class="cols w-40-60">
+    <div class="terminal" data-title="SimpleInterest.java">int interest = amount * rate
+    * years / 100;  <span class="c">// int!</span>
+<span class="e">52</span>   <span class="c">// expected 52.50</span></div>
+    <table>
+      <tr><th>Понятие</th><th>Где</th><th>Пример</th></tr>
+      <tr><td>Error</td><td>голова</td><td>не учёл дробь</td></tr>
+      <tr><td>Defect</td><td>код</td><td><code>int</code> вместо <code>double</code></td></tr>
+      <tr><td>Failure</td><td>экран</td><td>52 вместо 52.50</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- 9. References: every source used in the deck, with what it supports -->
+<section class="slide">
+  <h2>Источники</h2>
+  <ol class="refs">
+    <li><a href="https://www.istqb.org/certifications/certified-tester-foundation-level-ctfl-v4-0/">ISTQB CTFL Syllabus v4.0</a><span class="what">§1.1–1.2: цели, debugging, QA vs QC</span></li>
+    <li><a href="https://glossary.istqb.org/">ISTQB Glossary</a><span class="what">определения error, defect, failure, root cause</span></li>
+    <li><a href="https://www.cs.utexas.edu/~EWD/transcriptions/EWD02xx/EWD249/EWD249.html">Dijkstra, EWD249 (1970)</a><span class="what">цитата о наличии/отсутствии дефектов</span></li>
+  </ol>
+</section>
+
+</body>
+</html>
