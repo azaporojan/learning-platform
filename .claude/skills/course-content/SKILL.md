@@ -1,6 +1,6 @@
 ---
 name: course-content
-description: Create and publish teaching content on the Learning Platform (learning.bsf.md, the "QA Automation Engineer" course) through its admin API — new phases and lessons, homework tasks, quizzes, flashcard decks, Russian lesson scripts for the teacher, and lesson presentation decks (PDF with diagrams, icons, quotes and linked industry standards such as ISTQB, ISO/IEC/IEEE 29119, Scrum Guide). Use this whenever the user mentions a lesson, week, phase, homework, quiz, flashcards, lesson script/сценарий, slides/deck/презентация for the course, ISTQB material for students, or asks to add, fix, review or attach anything on learning.bsf.md — even if they don't say "skill" or "API".
+description: Create and publish teaching content on the Learning Platform (learning.bsf.md, the "QA Automation Engineer" course) through its admin API — new phases and lessons, homework tasks, quizzes, flashcard decks, Russian lesson scripts for the teacher, and lesson presentation decks (PDF with diagrams, icons, quotes and linked industry standards such as ISTQB, ISO/IEC/IEEE 29119, Scrum Guide). Works with direct API access (Claude Code on the repo) or, without it (claude.ai), by producing paste-ready content for the admin UI. Use this whenever the user mentions a lesson, week, phase, homework, quiz, flashcards, lesson script/сценарий, slides/deck/презентация for the course, ISTQB material for students, or asks to add, fix, review or attach anything on learning.bsf.md — even if they don't say "skill" or "API".
 ---
 
 # Course content for the Learning Platform
@@ -12,18 +12,33 @@ with quizzes and flashcards under lessons and attached PDFs. Students follow it 
 publish is seen immediately and must be correct by industry standards — wrong definitions cost them
 exam and interview points later.
 
-## Before anything
+## Before anything: which mode are you in?
 
-1. API access: `LEARNING_API_KEY` must be set (it usually is; `LEARNING_API_URL` defaults to
-   `https://learning.bsf.md/api`). Never print the key.
-2. Look at the current state — ids, titles, what already exists:
+Check whether you can reach the platform API — `LEARNING_API_KEY` is set and this succeeds:
+```bash
+node .claude/skills/course-content/scripts/lp.mjs get /courses
+```
+(Paths are relative to the repo root; if the skill lives elsewhere, use the directory this file is in.)
+
+- **API mode** (Claude Code on the learning-platform repo, key set): read on, and publish directly.
+- **Browser mode** (claude.ai, no key, no network to learning.bsf.md, or no Node): read
+  `references/browser-mode.md`. You do the same work to the same standards, but ask the user for
+  the lesson script and hand over paste-ready pieces with the exact place each one goes in the
+  admin UI. The content rules, templates and sources below apply unchanged.
+
+Never print the key. `LEARNING_API_URL` defaults to `https://learning.bsf.md/api`.
+
+In API mode:
+
+1. Look at the current state — ids, titles, what already exists:
    ```bash
    node .claude/skills/course-content/scripts/lp.mjs tree 1
    ```
-3. Read the lesson's script (`lp.mjs script-get <lessonId> /tmp/…/script.md`) and its homework task
+2. Read the lesson's script (`lp.mjs script-get <lessonId> /tmp/…/script.md`) and its homework task
    (`lp.mjs get /tasks/<id>`, id from the tree). Scripts are long; search them for the block
-   headings, the homework section and the appendix (a quiz draft often lives there). The script names the examples, the homework, and the exact topics;
-   everything you make for that lesson should tell the same story.
+   headings, the homework section and the appendix (a quiz draft often lives there). The script
+   names the examples, the homework, and the exact topics; everything you make for that lesson
+   should tell the same story.
 
 Read `references/platform-api.md` for the endpoints and the traps (several calls destroy student
 results or email students). `docs/AGENT_API.md` is the full API reference.
@@ -63,6 +78,7 @@ results or email students). `docs/AGENT_API.md` is the full API reference.
 |---|---|
 | `scripts/lp.mjs` | API helper: `tree`, `get/post/put/delete`, `script-get/script-put`, `upload` |
 | `scripts/check_study_set.py` | Validates quiz/flashcard JSON: API limits + course quality rules (answer balance, giveaway options, explanations, question-form fronts, examples) |
+| `scripts/standalone_deck.py` | Browser mode: the same deck HTML → one self-contained HTML (CDN fonts/icons/Mermaid) the teacher prints to PDF from Chrome. Python 3 only |
 | `scripts/build_deck.mjs` | Slide HTML → PDF with the course theme, local fonts, Lucide icons, Mermaid diagrams, footers; reports overflow and lists links; `--sheet`/`--png` previews. Needs `npm install --prefix .claude/skills/course-content/scripts` once |
 
 Use the user's scratchpad / a temp directory for drafts (JSON, scripts, decks); nothing you draft
