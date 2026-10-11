@@ -21,7 +21,8 @@ exam and interview points later.
    node .claude/skills/course-content/scripts/lp.mjs tree 1
    ```
 3. Read the lesson's script (`lp.mjs script-get <lessonId> /tmp/…/script.md`) and its homework task
-   (`lp.mjs get /tasks/<id>`). The script names the examples, the homework, and the exact topics;
+   (`lp.mjs get /tasks/<id>`, id from the tree). Scripts are long; search them for the block
+   headings, the homework section and the appendix (a quiz draft often lives there). The script names the examples, the homework, and the exact topics;
    everything you make for that lesson should tell the same story.
 
 Read `references/platform-api.md` for the endpoints and the traps (several calls destroy student
@@ -33,7 +34,7 @@ results or email students). `docs/AGENT_API.md` is the full API reference.
 |---|---|---|
 | New phase / lessons / reorder | `references/platform-api.md`, `references/lesson-script-template.md` (course rhythm, title patterns) | Prefer `POST /admin/paths/import` (one transaction, no student emails). Show the user the planned titles/dates before creating a whole phase. |
 | Homework task | `references/content-standards.md` § Homework | `GET /tasks/:id` before `PUT`; keep the script's homework section in sync |
-| Quiz / flashcards | `references/content-standards.md` | Draft JSON → `scripts/check_study_set.py` → verify facts → `POST /study-sets` → read back |
+| Quiz / flashcards | `references/content-standards.md` | Check the script's appendix for a teacher draft → draft JSON → `scripts/check_study_set.py` → verify facts → `POST /study-sets` → read back |
 | Lesson script | `references/lesson-script-template.md` + one neighbouring script | Russian, minute-by-minute; save with `lp.mjs script-put` (it refuses to overwrite a newer copy) |
 | Presentation | `references/presentations.md`, `references/industry-sources.md` | Build with `scripts/build_deck.mjs`, look at every slide, verify links, send the PDF; upload when asked |
 

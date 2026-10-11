@@ -11,14 +11,19 @@ CTFL exam: anything we teach that differs from industry usage costs them points 
   definition as written; put your simplification in a separate "In simple words" line, never inside
   the quoted definition.
 - **Verify before publishing.** Use WebSearch/WebFetch to confirm definitions, numbers, versions,
-  and quotes you are not certain of. The sandbox proxy often blocks istqb.org/glossary.istqb.org; if
-  so, confirm through two independent mirrors and say so in your report ("confirmed via third-party
-  copies of the glossary; official site unreachable from here").
+  and quotes you are not certain of. The sandbox often cannot fetch istqb.org or glossary.istqb.org
+  (proxy/DNS), and sometimes WebFetch reaches nothing at all. Then verify through WebSearch results
+  (ideally two independent ones agreeing) and **label each fact in your report by how it was
+  checked**: *official source*, *search results / third-party copies*, or *from memory, unverified*.
+  Name the least certain items so the teacher can check them in a minute. Don't present a fact
+  checked only from memory as an exact quote.
 - **Flag the classic traps** in explanations: "QA = tester" (in ISTQB, testing is QC), "testing
   proves there are no defects", "testers debug", "every defect causes a failure", verification vs
   validation. Job-market usage and ISTQB usage sometimes differ; say which is which.
 - When the teacher supplies questions, check each answer key against the syllabus. Fix wrong keys and
-  ambiguous wording, and tell the user exactly what you changed and why.
+  ambiguous wording, and tell the user exactly what you changed and why. **Lesson scripts often end
+  with an appendix holding the teacher's quiz draft** (e.g. "Приложение: квиз …"): look for it before
+  writing a quiz; it is the teacher's material, so start from it and report your changes.
 
 ## Language and examples
 
@@ -41,9 +46,12 @@ CTFL exam: anything we teach that differs from industry usage costs them points 
 
 ## Quizzes (`kind: "quiz"`)
 
-- Usually 10–20 questions, 4 options, one correct (use `correct: [..]` only for genuine
+- Question count: what the user asks for; otherwise what the homework task and the script promise
+  (usually 10–20). If the user's number differs from what the homework/script say, follow the user
+  and offer to update the task text and the script to match (ask before the `PUT`).
+- 4 options, one correct (use `correct: [..]` only for genuine
   "select all that apply"). Title: `Self-quiz: ISTQB §X.Y–X.Z (N questions)` or similar.
-- Description states the scope, the pass mark (e.g. "14 / 20 (70%)"), "answer from memory first",
+- Description states the scope, the pass mark (70% rounded up: `ceil(0.7 × n)`, e.g. 14 / 20, 11 / 15, 7 / 10), "answer from memory first",
   and what to attach to which homework task.
 - **Balance answer positions**: each letter correct roughly equally often, in an irregular order.
   A teacher's draft often has the right answer mostly in (b); shuffle and say so.

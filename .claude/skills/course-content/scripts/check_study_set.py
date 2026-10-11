@@ -28,6 +28,7 @@ def check(doc, kind):
 
     if kind == "quiz":
         positions = Counter()
+        longest_correct = 0
         for n, it in enumerate(items, 1):
             q, opts, cor = it.get("question", ""), it.get("options"), it.get("correct")
             if not str(q).strip():
@@ -54,9 +55,14 @@ def check(doc, kind):
             if any(re.search(r"\b(all|none) of the above\b", str(o), re.I) for o in opts):
                 warnings.append(f"Q{n}: 'all/none of the above' (ISTQB exams do not use it; reorder-safe options only)")
             longest = max(len(str(o)) for o in opts)
+            if len(idx) == 1 and len(str(opts[idx[0]])) == longest:
+                longest_correct += 1
             if len(idx) == 1 and len(str(opts[idx[0]])) == longest and longest > 1.6 * sorted(len(str(o)) for o in opts)[-2]:
                 warnings.append(f"Q{n}: the correct option is by far the longest (a giveaway)")
         single = sum(positions.values())
+        if single >= 8 and longest_correct > 0.35 * single:
+            warnings.append(f"the correct option is the longest one in {longest_correct}/{single} questions; "
+                            "students learn to pick the longest answer (aim for at most ~1/3)")
         if single >= 8:
             top_pos, top = positions.most_common(1)[0]
             if top > 0.4 * single:
