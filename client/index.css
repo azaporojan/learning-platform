@@ -104,3 +104,49 @@
 .dark .prose :where(code):not(:where(pre code)) {
   background: rgba(255, 255, 255, 0.1);
 }
+
+/* Flashcards: a 3D card that flips on its vertical axis. Both faces share one grid cell,
+   so the card is as tall as its longer side and never jumps when flipped. */
+.flashcard-scene {
+  perspective: 1400px;
+}
+.flashcard {
+  display: grid;
+  transform-style: preserve-3d;
+  transition: transform 0.6s cubic-bezier(0.3, 0.7, 0.3, 1);
+}
+.flashcard.is-flipped {
+  transform: rotateY(180deg);
+}
+.flashcard-face {
+  grid-area: 1 / 1;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+.flashcard-back {
+  transform: rotateY(180deg);
+}
+
+/* Each new card is dealt in from the deck */
+@keyframes flashcard-deal {
+  0% {
+    transform: translateY(16px) rotate(-2deg) scale(0.96);
+    opacity: 0;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+.flashcard-deal {
+  animation: flashcard-deal 0.35s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flashcard {
+    transition: none;
+  }
+  .flashcard-deal {
+    animation: none;
+  }
+}

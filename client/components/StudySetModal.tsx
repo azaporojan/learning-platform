@@ -306,8 +306,9 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
   const [seen, setSeen] = useState<Set<number>>(new Set());
   const [knownFirst, setKnownFirst] = useState(0);
   const [done, setDone] = useState(false);
+  const [deal, setDeal] = useState(0);
 
-  const start = (order: number[]) => { setQueue(order); setFlipped(false); setSeen(new Set()); setKnownFirst(0); setDone(false); };
+  const start = (order: number[]) => { setQueue(order); setFlipped(false); setSeen(new Set()); setKnownFirst(0); setDone(false); setDeal((d) => d + 1); };
 
   const answer = async (known: boolean) => {
     const current = queue[0];
@@ -317,6 +318,7 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
     setKnownFirst(nextKnown);
     const rest = known ? queue.slice(1) : [...queue.slice(1), current];
     setFlipped(false);
+    setDeal((d) => d + 1);
     if (rest.length === 0) {
       setDone(true);
       setQueue([]);
@@ -373,13 +375,39 @@ const FlashcardPlayer: React.FC<{ set: StudySet; onRecorded: () => void }> = ({ 
           </button>
         </span>
       </div>
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
-        <button type="button" onClick={() => setFlipped((f) => !f)}
-          className={`w-full min-h-[260px] rounded-2xl border-2 shadow-sm p-8 flex flex-col items-center justify-center text-center transition-colors ${flipped ? 'border-pink-400 bg-pink-50 dark:bg-pink-900/20' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-pink-300'}`}>
-          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-3">{flipped ? 'Answer' : 'Question'}</span>
-          <Md className="prose-lg text-gray-800 dark:text-gray-100">{flipped ? card.back : card.front}</Md>
-          {!flipped && <span className="mt-6 text-xs font-semibold text-gray-400">Click or press space to flip</span>}
-        </button>
+      <div className="flex-1 overflow-y-auto custom-scrollbar px-6 pt-6 pb-8">
+        {/* Keyed by deal so a new card mounts face up instead of flipping back and showing its answer */}
+        <div key={deal} className="relative max-w-xl mx-auto flashcard-deal">
+          {/* The rest of the deck peeking out behind the current card */}
+          {queue.length > 2 && <div aria-hidden className="absolute inset-0 rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm translate-y-3 rotate-[2.5deg]" />}
+          {queue.length > 1 && <div aria-hidden className="absolute inset-0 rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow translate-y-1.5 -rotate-[1.5deg]" />}
+          <div className="flashcard-scene relative">
+            <button type="button" onClick={() => setFlipped((f) => !f)} aria-label={flipped ? 'Show question' : 'Show answer'}
+              className={`flashcard w-full text-left rounded-2xl focus:outline-none focus-visible:ring-4 focus-visible:ring-pink-300 ${flipped ? 'is-flipped' : ''}`}>
+              <div aria-hidden={flipped} className="flashcard-face min-h-[300px] rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl overflow-hidden flex flex-col">
+                <div className="h-2 bg-gradient-to-r from-pink-400 to-fuchsia-500" />
+                <div className="px-6 pt-4 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                  <span>Question</span><span>{queue[0] + 1} / {cards.length}</span>
+                </div>
+                <div className="flex-1 flex items-center justify-center px-8 py-6 text-center">
+                  <Md className="prose-lg text-gray-800 dark:text-gray-100">{card.front}</Md>
+                </div>
+                <div className="pb-4 flex items-center justify-center gap-1 text-xs font-semibold text-gray-400">
+                  <span className="material-icons text-sm">autorenew</span>Click or press space to flip
+                </div>
+              </div>
+              <div aria-hidden={!flipped} className="flashcard-face flashcard-back min-h-[300px] rounded-2xl border border-pink-200 dark:border-pink-800 bg-gradient-to-br from-pink-50 to-white dark:from-pink-900/30 dark:to-gray-900 shadow-xl overflow-hidden flex flex-col">
+                <div className="h-2 bg-gradient-to-r from-fuchsia-500 to-pink-400" />
+                <div className="px-6 pt-4 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-pink-500">
+                  <span>Answer</span><span>{queue[0] + 1} / {cards.length}</span>
+                </div>
+                <div className="flex-1 px-7 py-4">
+                  <Md className="text-gray-800 dark:text-gray-100">{card.back}</Md>
+                </div>
+              </div>
+            </button>
+          </div>
+        </div>
       </div>
       <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-center gap-3">
         {flipped ? (
