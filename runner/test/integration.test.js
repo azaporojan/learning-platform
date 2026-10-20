@@ -17,7 +17,9 @@ test('sandbox end to end', { skip: !enabled && 'set RUNNER_IT=1 to run against D
   await new Promise((r) => gateServer.listen(0, '127.0.0.1', r));
   const gate = new GateClient({ url: `http://127.0.0.1:${gateServer.address().port}`, token: process.env.GATE_TOKEN });
   const limits = { runTimeoutMs: 6000, checkTimeoutMs: 30000, maxCheckTimeoutMs: 60000, queueWaitMs: 30000, checkQueueWaitMs: 60000, jshellMemoryMb: 384, checkMemoryMb: 512, maxSessions: 1, sessionIdleMs: 60000 };
-  const pool = new Pool({ makeSandbox: (p) => new Sandbox(gate, p), maxContainers: 3, warmTarget: 1 });
+  // Every sandbox this pool makes, so the leak check ignores other runners on the same host
+  const made = [];
+  const pool = new Pool({ makeSandbox: (p) => { const sb = new Sandbox(gate, p); made.push(sb); return sb; }, maxContainers: 3, warmTarget: 1 });
   const executor = new Executor({ pool, limits });
   const sessions = new Sessions({ pool, limits });
   pool.schedule();
@@ -130,10 +132,14 @@ test('sandbox end to end', { skip: !enabled && 'set RUNNER_IT=1 to run against D
 
   await t.test('nothing is left behind', async () => {
     for (let i = 0; i < 60 && pool.stats().bootingWarm > 0; i++) await new Promise((r) => setTimeout(r, 500)); // replacement warm boot
-    const live = (await gate.list()).length;
-    assert.strictEqual(live, pool.stats().live, 'every container on the host is one the pool counts');
-    assert.ok(live <= 1, `${live} sandboxes still exist (1 warm is expected)`);
+    const ours = async () => {
+      const ids = new Set(made.map((sb) => sb.id).filter(Boolean));
+      return (await gate.list()).filter((s) => ids.has(s.id));
+    };
+    const live = (await ours()).length;
+    assert.strictEqual(live, pool.stats().live, 'every sandbox this pool made and still exists is one it counts');
+    assert.ok(live <= 1, `${live} of our sandboxes still exist (1 warm is expected)`);
     await pool.shutdown();
-    assert.strictEqual((await gate.list()).length, 0, 'shutdown removes the warm container');
+    assert.strictEqual((await ours()).length, 0, 'shutdown removes the warm container');
   });
 });
