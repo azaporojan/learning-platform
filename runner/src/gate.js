@@ -7,7 +7,7 @@
 // image, the command, mounts, networks or privileges, nor touch any container it did not create.
 //
 //   GET    /health
-//   POST   /sandboxes                {profile: "jshell" | "check"}  -> {id}
+//   POST   /sandboxes                {profile: "jshell" | "check"}  -> {id}   (429 at GATE_MAX_SANDBOXES)
 //   POST   /sandboxes/:id/attach     HTTP upgrade: raw Docker attach stream (stdin + stdout/stderr)
 //   POST   /sandboxes/:id/start
 //   GET    /sandboxes/:id            {running, exitCode, oomKilled, profile, createdAt}
@@ -24,7 +24,11 @@ const crypto = require('crypto');
 const DOCKER_SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 const PORT = parseInt(process.env.GATE_PORT || '2376', 10);
 const TOKEN = process.env.GATE_TOKEN || '';
+const HOST = process.env.GATE_HOST || '0.0.0.0';
 const MAX_AGE_MS = parseInt(process.env.GATE_MAX_AGE_MS || String(2 * 60 * 60 * 1000), 10);
+// A ceiling of its own, independent of the runner's pool: even a broken or compromised runner
+// cannot fill the host with sandboxes.
+const MAX_SANDBOXES = Math.max(1, parseInt(process.env.GATE_MAX_SANDBOXES || '6', 10));
 const LABEL = 'lp.runner';
 const LABEL_VALUE = 'sandbox';
 
@@ -189,6 +193,13 @@ function readJson(req, limit = 4096) {
   });
 }
 
+async function listSandboxes() {
+  const filters = encodeURIComponent(JSON.stringify({ label: [`${LABEL}=${LABEL_VALUE}`] }));
+  const r = await docker('GET', `/containers/json?all=1&filters=${filters}`);
+  // Docker already filters by label; checking again keeps a misbehaving daemon from widening it
+  return (Array.isArray(r.json) ? r.json : []).filter((c) => c.Labels && c.Labels[LABEL] === LABEL_VALUE);
+}
+
 async function removeSandbox(id) {
   const r = await docker('DELETE', `/containers/${id}?force=1&v=1`);
   return r.status === 204 || r.status === 404;
@@ -206,15 +217,15 @@ function createGate({ image }) {
       if (parts.length === 1 && req.method === 'POST') {
         const body = await readJson(req);
         if (!Object.prototype.hasOwnProperty.call(PROFILES, body.profile)) return send(res, 400, { error: 'profile must be jshell or check' });
+        const existing = await listSandboxes();
+        if (existing.length >= MAX_SANDBOXES) return send(res, 429, { error: `at most ${MAX_SANDBOXES} sandboxes at a time` });
         const name = `lp-sandbox-${crypto.randomBytes(6).toString('hex')}`;
         const r = await docker('POST', `/containers/create?name=${name}`, sandboxSpec(image, body.profile));
         if (r.status !== 201) return send(res, 502, { error: 'create failed', detail: r.json && r.json.message });
         return send(res, 201, { id: r.json.Id });
       }
       if (parts.length === 1 && req.method === 'GET') {
-        const filters = encodeURIComponent(JSON.stringify({ label: [`${LABEL}=${LABEL_VALUE}`] }));
-        const r = await docker('GET', `/containers/json?all=1&filters=${filters}`);
-        const list = (r.json || []).map((c) => ({
+        const list = (await listSandboxes()).map((c) => ({
           id: c.Id,
           profile: (c.Labels && c.Labels['lp.profile']) || null,
           createdAt: new Date(c.Created * 1000).toISOString(),
@@ -281,10 +292,8 @@ function createGate({ image }) {
 // Safety net independent of the runner: nothing lives longer than GATE_MAX_AGE_MS.
 async function sweep() {
   try {
-    const filters = encodeURIComponent(JSON.stringify({ label: [`${LABEL}=${LABEL_VALUE}`] }));
-    const r = await docker('GET', `/containers/json?all=1&filters=${filters}`);
     const now = Date.now();
-    for (const c of r.json || []) {
+    for (const c of await listSandboxes()) {
       if (now - c.Created * 1000 > MAX_AGE_MS) {
         await removeSandbox(c.Id);
         console.warn(`[gate] removed sandbox ${c.Id.slice(0, 12)} older than ${Math.round(MAX_AGE_MS / 60000)} min`);
@@ -302,7 +311,7 @@ async function main() {
   }
   const image = await resolveImage();
   const server = createGate({ image });
-  server.listen(PORT, () => console.log(`[gate] listening on ${PORT}, sandbox image ${image.slice(0, 19)}`));
+  server.listen(PORT, HOST, () => console.log(`[gate] listening on ${HOST}:${PORT}, sandbox image ${image.slice(0, 19)}, at most ${MAX_SANDBOXES} sandboxes`));
   setInterval(sweep, 60 * 1000).unref();
   sweep();
   const stop = () => server.close(() => process.exit(0));
@@ -312,4 +321,4 @@ async function main() {
 
 if (require.main === module) main().catch((err) => { console.error('[gate] fatal:', err.message || err); process.exit(1); });
 
-module.exports = { sandboxSpec, kernelCommand, PROFILES, createGate, authorized };
+module.exports = { sandboxSpec, kernelCommand, PROFILES, createGate, authorized, sweep, MAX_SANDBOXES };

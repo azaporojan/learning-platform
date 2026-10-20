@@ -30,11 +30,21 @@ One image (`ghcr.io/azaporojan/learning-platform-runner`) plays all three roles:
 The image ships JUnit 5 (console standalone 1.11.4), AssertJ 3.27.3 and Byte Buddy, pinned by
 SHA-256. AssertJ's `assertThat` is imported in every notebook.
 
-Messages from the kernel carry a per-run nonce that the kernel reads from stdin before any
-student code runs, so text a student prints to the real stdout cannot pose as a result.
-Student code still runs in the same JVM as the kernel; a determined student could find the
-nonce in memory. Treat check results as a strong signal, and keep auto-approve off for tasks
-where a forged pass would matter.
+How a check keeps its verdict honest:
+
+- **The hidden tests never touch the sandbox's filesystem.** They arrive over stdin, are compiled
+  in memory, and are defined by a class loader that serves no resources; their bytes are dropped
+  once loaded. Student code cannot list, read or decompile them.
+- **Results carry a per-run nonce** that the kernel reads from stdin before any student code
+  runs and keeps only in local variables, never in a static field, so reflection from student
+  code has no path to it. Text a student prints cannot pose as a result.
+- **Only planned tests count.** The test plan is fixed by discovery before student code runs; each
+  planned test is counted once, a `@Test` the student writes is never run, and a planned test
+  that never reports counts as failed.
+
+Student code still shares the kernel's JVM, so someone determined enough to scan the process
+memory could in theory forge a verdict. Treat check results as a strong signal, and keep
+auto-approve off where a forged pass would matter.
 
 ## Sandbox limits
 
@@ -86,6 +96,8 @@ Check status: `passed`, `failed`, `compile_error`, `no_tests`, `timeout`, `oom`,
 | `RUNNER_RUN_TIMEOUT_MS`, `RUNNER_CHECK_TIMEOUT_MS`, `RUNNER_SESSION_IDLE_MS` | runner | 15000, 30000, 600000 |
 | `GATE_JSHELL_MEMORY_MB`, `GATE_CHECK_MEMORY_MB`, `GATE_SANDBOX_CPUS` | gate | 384, 512, 1 |
 | `SANDBOX_IMAGE` | gate | the gate's own image |
+| `GATE_MAX_SANDBOXES` | gate | 6; the gate's own ceiling, independent of the runner's pool |
+| `HOST` / `GATE_HOST` | runner / gate | `0.0.0.0`; keep both on an internal network with no published port or domain |
 | `GATE_MAX_AGE_MS` | gate | 2 h; no sandbox outlives it |
 
 ## Deployment (Dokploy)

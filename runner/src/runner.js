@@ -127,7 +127,7 @@ function createRunner({ executor, sessions, pool, token }) {
         const tests = validFiles(body.tests, 'tests');
         const total = [...files, ...tests].reduce((n, f) => n + f.content.length, 0);
         if (total > MAX_CHECK_CHARS) throw new HttpError(400, 'The files are too large');
-        const timeoutMs = Number.isInteger(body.timeoutMs) ? body.timeoutMs : undefined;
+        const timeoutMs = Number.isInteger(body.timeoutMs) && body.timeoutMs > 0 ? body.timeoutMs : undefined;
         return send(res, 200, await executor.runCheck(files, tests, { timeoutMs }));
       }
       if (parts[0] === 'sessions') {
@@ -199,7 +199,8 @@ async function main() {
 
   const server = createRunner({ executor, sessions, pool, token });
   const port = int('PORT', 8080);
-  server.listen(port, () => console.log(`[runner] listening on ${port}; limits ${JSON.stringify(LIMITS)}`));
+  const host = process.env.HOST || '0.0.0.0';
+  server.listen(port, host, () => console.log(`[runner] listening on ${port}; limits ${JSON.stringify(LIMITS)}`));
 
   setInterval(() => {
     sessions.sweep();

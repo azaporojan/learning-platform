@@ -87,6 +87,35 @@ test('sandbox end to end', { skip: !enabled && 'set RUNNER_IT=1 to run against D
     assert.strictEqual(r.tests.failed[0].name, 'CalculatorTest.negative');
   });
 
+  await t.test('student code cannot read the hidden tests or reach the result nonce', async () => {
+    // The "student" probes from a static initialiser, which runs when the hidden test first uses it
+    const probe = [
+      'package shop;',
+      'import java.nio.file.*; import java.lang.reflect.*; import java.util.stream.*;',
+      'public class Spy {',
+      '  public static String report = "";',
+      '  static {',
+      '    StringBuilder r = new StringBuilder();',
+      '    try (Stream<Path> s = Files.walk(Path.of("/work"))) { r.append("files=").append(s.map(Path::toString).filter(p -> p.contains("Test")).toList()); } catch (Exception e) { r.append("files=err"); }',
+      '    try { Class<?> t = Class.forName("shop.SpyTest", false, Thread.currentThread().getContextClassLoader());',
+      '          r.append(" resource=").append(t.getClassLoader().getResource("shop/SpyTest.class")); } catch (Throwable e) { r.append(" resource=err:" + e); }',
+      '    try { Class<?> k = Class.forName("lp.Kernel"); for (Field f : k.getDeclaredFields()) { if (Modifier.isStatic(f.getModifiers())) { f.setAccessible(true); Object v = f.get(null); if (v instanceof String) r.append(" static=").append(v); } } } catch (Throwable e) { r.append(" reflect=err:" + e); }',
+      '    report = r.toString();',
+      '  }',
+      '  public int answer() { return 42; }',
+      '}',
+    ].join("\n");
+    const r = await executor.runCheck(
+      [{ path: 'shop/Spy.java', content: probe }],
+      [{ path: 'shop/SpyTest.java', content: 'package shop; import org.junit.jupiter.api.*; class SpyTest { @Test void probe() { Assertions.fail("REPORT " + Spy.report); } @Test void answers() { Assertions.assertEquals(42, new Spy().answer()); } }' }],
+    );
+    assert.strictEqual(r.tests.total, 2, JSON.stringify(r));
+    const report = r.tests.failed.find((f) => f.name === 'SpyTest.probe').message;
+    assert.match(report, /files=\[\]/, 'no hidden test file on disk');
+    assert.match(report, /resource=null/, 'hidden test bytes are not readable as a resource');
+    assert.doesNotMatch(report, /static=[0-9a-f]{32}/, 'no static field holds the nonce');
+  });
+
   await t.test('a teacher session keeps state between calls', async () => {
     const s = await sessions.open('teacher-1');
     const a = await sessions.run(s.id, 'teacher-1', 'int counter = 41;');

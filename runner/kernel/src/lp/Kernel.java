@@ -11,6 +11,7 @@ import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
@@ -18,6 +19,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -29,8 +32,12 @@ import java.util.stream.Stream;
 
 import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
+import javax.tools.FileObject;
+import javax.tools.ForwardingJavaFileManager;
+import javax.tools.JavaFileManager;
 import javax.tools.JavaCompiler;
 import javax.tools.JavaFileObject;
+import javax.tools.SimpleJavaFileObject;
 import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
 
@@ -48,6 +55,7 @@ import org.junit.platform.launcher.Launcher;
 import org.junit.platform.launcher.LauncherDiscoveryRequest;
 import org.junit.platform.launcher.TestExecutionListener;
 import org.junit.platform.launcher.TestIdentifier;
+import org.junit.platform.launcher.TestPlan;
 import org.junit.platform.launcher.core.LauncherDiscoveryRequestBuilder;
 import org.junit.platform.launcher.core.LauncherFactory;
 
@@ -78,11 +86,31 @@ public final class Kernel {
     private static final Path LIBS = Path.of(System.getProperty("lp.libs", "/opt/lp/libs"));
     private static final Path WORK = Path.of(System.getProperty("lp.work", "/work"));
 
-    private static final PrintStream PROTO =
-        new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8);
-    private static String nonce = "";
-
     private Kernel() {}
+
+    /**
+     * The result channel. It is only ever held in local variables of the kernel's own frames
+     * (never in a static field), so student code running in this JVM has no reference path to
+     * the nonce through reflection.
+     */
+    private static final class Channel {
+        private final PrintStream out = new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8);
+        private final String prefix;
+
+        Channel(String nonce) { this.prefix = "\u001eLP " + nonce + " "; }
+
+        synchronized void emit(Map<String, ?> message) {
+            out.print(prefix);
+            out.println(Json.write(message));
+            out.flush();
+        }
+    }
+
+    private static Channel open(BufferedReader in) throws IOException {
+        String first = in.readLine();
+        if (first == null || !first.startsWith("NONCE ")) return null;
+        return new Channel(first.substring(6).trim());
+    }
 
     public static void main(String[] args) throws Exception {
         BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
@@ -94,40 +122,28 @@ public final class Kernel {
             return;
         }
         if ("check".equals(mode)) {
-            String first = in.readLine();
-            if (first == null || !first.startsWith("NONCE ")) return;
-            nonce = first.substring(6).trim();
-            runCheck(in);
-            return;
+            Channel channel = open(in);
+            if (channel != null) runCheck(in, channel);
+            Runtime.getRuntime().halt(0);
         }
         // jshell: boot and warm up before the nonce arrives, so a pre-started container answers fast
         try (Notebook nb = new Notebook()) {
-            String first = in.readLine();
-            if (first == null || !first.startsWith("NONCE ")) return;
-            nonce = first.substring(6).trim();
-            emit(Map.of("type", "ready"));
+            Channel channel = open(in);
+            if (channel == null) return;
+            channel.emit(Map.of("type", "ready"));
             String line;
             while ((line = in.readLine()) != null) {
                 if (line.equals("END")) break;
-                if (line.equals("PING")) { emit(Map.of("type", "pong")); continue; }
+                if (line.equals("PING")) { channel.emit(Map.of("type", "pong")); continue; }
                 if (!line.startsWith("CELL ")) continue;
                 String[] parts = line.split(" ", 3);
                 if (parts.length < 3) continue;
                 String source = new String(Base64.getDecoder().decode(parts[2].trim()), StandardCharsets.UTF_8);
-                emit(nb.run(parts[1], source));
+                channel.emit(nb.run(parts[1], source));
             }
         }
-        PROTO.flush();
         // A stray non-daemon thread started by a cell must not keep the container alive
         Runtime.getRuntime().halt(0);
-    }
-
-    static void emit(Map<String, ?> message) {
-        synchronized (PROTO) {
-            PROTO.print("\u001eLP " + nonce + " ");
-            PROTO.println(Json.write(message));
-            PROTO.flush();
-        }
     }
 
     /** Builds the AppCDS archive at image build time and proves the image works. */
@@ -381,30 +397,35 @@ public final class Kernel {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Check: compile the student's files, then the hidden tests against them, run the tests
+    // Check: compile the student's files, then the hidden tests against them, run the tests.
+    // The hidden tests never touch the filesystem: they are compiled in memory, defined by a
+    // loader that serves no resources, and their bytes are dropped once loaded. Only the tests
+    // discovered before any student code runs are counted, each exactly once.
     // ------------------------------------------------------------------------------------------
-    private static void runCheck(BufferedReader in) throws Exception {
+    private static void runCheck(BufferedReader in, Channel channel) throws Exception {
         Path src = WORK.resolve("src");
-        Path tests = WORK.resolve("test");
         Path classes = WORK.resolve("classes");
-        Path testClasses = WORK.resolve("test-classes");
-        for (Path p : List.of(src, tests, classes, testClasses)) Files.createDirectories(p);
+        for (Path p : List.of(src, classes)) Files.createDirectories(p);
         List<Path> studentFiles = new ArrayList<>();
-        List<Path> testFiles = new ArrayList<>();
+        Map<String, String> testSources = new LinkedHashMap<>();
         String line;
         while ((line = in.readLine()) != null && !line.equals("END")) {
             String[] parts = line.split(" ", 3);
             if (parts.length < 3 || !(parts[0].equals("FILE") || parts[0].equals("TEST"))) continue;
             String rel = new String(Base64.getDecoder().decode(parts[1]), StandardCharsets.UTF_8);
             if (!SAFE_PATH.matcher(rel).matches()) {
-                emit(checkResult("error", "Invalid file name: " + rel, null, null, null));
+                channel.emit(checkResult("error", "Invalid file name: " + rel, null, null, null));
                 return;
             }
-            boolean test = parts[0].equals("TEST");
-            Path target = (test ? tests : src).resolve(rel).normalize();
-            Files.createDirectories(target.getParent());
-            Files.write(target, Base64.getDecoder().decode(parts[2].trim()));
-            (test ? testFiles : studentFiles).add(target);
+            byte[] content = Base64.getDecoder().decode(parts[2].trim());
+            if (parts[0].equals("TEST")) {
+                testSources.put(rel, new String(content, StandardCharsets.UTF_8));
+            } else {
+                Path target = src.resolve(rel).normalize();
+                Files.createDirectories(target.getParent());
+                Files.write(target, content);
+                studentFiles.add(target);
+            }
         }
         long started = System.nanoTime();
         Capture capture = new Capture();
@@ -412,38 +433,48 @@ public final class Kernel {
         PrintStream realErr = System.err;
         String libs = classpath();
         try {
-            List<Map<String, Object>> diags = compile(studentFiles, classes, libs, src, "your code");
-            if (diags.isEmpty()) {
-                diags = compile(testFiles, testClasses, libs + java.io.File.pathSeparator + classes, tests, "the hidden tests");
-                if (!diags.isEmpty()) {
-                    emit(checkResult("compile_error",
-                        "Your code compiles, but the tests cannot use it. Check class and method names, parameters and return types against the task.",
-                        diags, null, elapsed(started)));
-                    return;
-                }
-            } else {
-                emit(checkResult("compile_error", "Your code does not compile.", diags, null, elapsed(started)));
+            List<Map<String, Object>> diags = compileStudent(studentFiles, classes, libs, src);
+            if (!diags.isEmpty()) {
+                channel.emit(checkResult("compile_error", "Your code does not compile.", diags, null, elapsed(started)));
+                return;
+            }
+            Map<String, byte[]> testBytes = new LinkedHashMap<>();
+            diags = compileHidden(testSources, libs + java.io.File.pathSeparator + classes, testBytes);
+            testSources.clear();
+            if (!diags.isEmpty()) {
+                channel.emit(checkResult("compile_error",
+                    "Your code compiles, but the tests cannot use it. Check class and method names, parameters and return types against the task.",
+                    diags, null, elapsed(started)));
                 return;
             }
 
-            // Hidden tests first, so a student class cannot shadow a test class of the same name.
-            // JUnit and AssertJ come from the kernel's own class path (the parent loader).
-            URL[] urls = { testClasses.toUri().toURL(), classes.toUri().toURL() };
             Results results = new Results();
-            try (URLClassLoader loader = new URLClassLoader(urls, Kernel.class.getClassLoader())) {
+            try (URLClassLoader student = new URLClassLoader(new URL[] { classes.toUri().toURL() }, Kernel.class.getClassLoader())) {
+                HiddenTestLoader loader = new HiddenTestLoader(testBytes, student);
+                // Define every hidden class now (without initialising it), then forget the bytes
+                List<Class<?>> topLevel = new ArrayList<>();
+                for (String name : new ArrayList<>(testBytes.keySet())) {
+                    Class<?> c = loader.loadClass(name);
+                    if (!name.contains("$")) topLevel.add(c);
+                }
+                testBytes.clear();
+                loader.forget();
                 Thread.currentThread().setContextClassLoader(loader);
-                System.setOut(capture.stream(capture.out));
-                System.setErr(capture.stream(capture.err));
-                // Only the hidden tests count: a @Test the student writes in their own files is not run
                 LauncherDiscoveryRequest request = LauncherDiscoveryRequestBuilder.request()
-                    .selectors(DiscoverySelectors.selectClasspathRoots(Set.of(testClasses)))
+                    .selectors(topLevel.stream().map(DiscoverySelectors::selectClass).toList())
                     .build();
                 Launcher launcher = LauncherFactory.create();
-                launcher.execute(request, results);
+                // Discovery reads annotations only; no student code has run yet
+                TestPlan plan = launcher.discover(request);
+                results.plan(plan);
+                System.setOut(capture.stream(capture.out));
+                System.setErr(capture.stream(capture.err));
+                launcher.execute(plan, results);
             } finally {
                 System.setOut(realOut);
                 System.setErr(realErr);
             }
+            results.finish();
             Map<String, Object> tally = new LinkedHashMap<>();
             tally.put("total", results.total);
             tally.put("passed", results.passed);
@@ -453,38 +484,104 @@ public final class Kernel {
                 null, tally, elapsed(started));
             r.put("stdout", capture.out());
             r.put("truncated", capture.truncated);
-            emit(r);
+            channel.emit(r);
         } catch (Throwable t) {
-            emit(checkResult("error", "The checker failed: " + t, null, null, elapsed(started)));
+            channel.emit(checkResult("error", "The checker failed: " + t, null, null, elapsed(started)));
         }
-        PROTO.flush();
-        Runtime.getRuntime().halt(0);
+    }
+
+    /** Defines the hidden test classes from memory. It serves no resources, so their bytes cannot be read back. */
+    static final class HiddenTestLoader extends ClassLoader {
+        private Map<String, byte[]> bytes;
+
+        HiddenTestLoader(Map<String, byte[]> bytes, ClassLoader parent) {
+            super("hidden-tests", parent);
+            this.bytes = new HashMap<>(bytes);
+        }
+
+        void forget() { bytes = Map.of(); }
+
+        @Override protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> c = findLoadedClass(name);
+                // Hidden classes first: a student class cannot shadow a test class of the same name
+                if (c == null && bytes.containsKey(name)) {
+                    byte[] b = bytes.get(name);
+                    c = defineClass(name, b, 0, b.length);
+                }
+                if (c == null) return super.loadClass(name, resolve);
+                if (resolve) resolveClass(c);
+                return c;
+            }
+        }
     }
 
     private static long elapsed(long started) { return (System.nanoTime() - started) / 1_000_000; }
 
-    private static List<Map<String, Object>> compile(List<Path> files, Path out, String cp, Path root, String label) throws IOException {
+    private static List<String> compileOptions(String cp) {
+        return List.of("-cp", cp, "-proc:none", "-Xlint:none", "-encoding", "UTF-8", "-implicit:none");
+    }
+
+    private static List<Map<String, Object>> diagnostics(DiagnosticCollector<JavaFileObject> collector, Path root, boolean hidden) {
         List<Map<String, Object>> list = new ArrayList<>();
-        if (files.isEmpty()) return list;
+        for (Diagnostic<? extends JavaFileObject> d : collector.getDiagnostics()) {
+            if (d.getKind() != Diagnostic.Kind.ERROR) continue;
+            Map<String, Object> m = new LinkedHashMap<>();
+            String file = hidden || d.getSource() == null ? null : root.relativize(Path.of(d.getSource().toUri())).toString();
+            m.put("file", hidden ? "hidden test" : file);
+            m.put("line", hidden ? null : d.getLineNumber());
+            m.put("message", d.getMessage(Locale.ENGLISH));
+            list.add(m);
+            if (list.size() >= 20) break;
+        }
+        return list;
+    }
+
+    private static List<Map<String, Object>> compileStudent(List<Path> files, Path out, String cp, Path root) throws IOException {
+        if (files.isEmpty()) return List.of();
         JavaCompiler javac = ToolProvider.getSystemJavaCompiler();
         DiagnosticCollector<JavaFileObject> collector = new DiagnosticCollector<>();
         try (StandardJavaFileManager fm = javac.getStandardFileManager(collector, Locale.ENGLISH, StandardCharsets.UTF_8)) {
-            List<String> options = List.of("-d", out.toString(), "-cp", cp, "-proc:none", "-Xlint:none", "-encoding", "UTF-8", "-implicit:none");
+            List<String> options = new ArrayList<>(compileOptions(cp));
+            options.addAll(List.of("-d", out.toString()));
             Boolean ok = javac.getTask(new StringWriter(), fm, collector, options, null, fm.getJavaFileObjectsFromPaths(files)).call();
-            for (Diagnostic<? extends JavaFileObject> d : collector.getDiagnostics()) {
-                if (d.getKind() != Diagnostic.Kind.ERROR) continue;
-                Map<String, Object> m = new LinkedHashMap<>();
-                String file = d.getSource() == null ? null : root.relativize(Path.of(d.getSource().toUri())).toString();
-                boolean hidden = label.equals("the hidden tests");
-                m.put("file", hidden ? "hidden test" : file);
-                m.put("line", hidden ? null : d.getLineNumber());
-                m.put("message", d.getMessage(Locale.ENGLISH));
-                list.add(m);
-                if (list.size() >= 20) break;
-            }
-            if (!Boolean.TRUE.equals(ok) && list.isEmpty()) list.add(Map.of("message", "Compilation failed"));
+            List<Map<String, Object>> list = diagnostics(collector, root, false);
+            if (!Boolean.TRUE.equals(ok) && list.isEmpty()) return List.of(Map.of("message", "Compilation failed"));
+            return list;
         }
-        return list;
+    }
+
+    /** Compiles the hidden tests to class bytes in memory. */
+    private static List<Map<String, Object>> compileHidden(Map<String, String> sources, String cp, Map<String, byte[]> out) throws IOException {
+        if (sources.isEmpty()) return List.of();
+        JavaCompiler javac = ToolProvider.getSystemJavaCompiler();
+        DiagnosticCollector<JavaFileObject> collector = new DiagnosticCollector<>();
+        Map<String, ByteArrayOutputStream> compiled = new LinkedHashMap<>();
+        try (StandardJavaFileManager std = javac.getStandardFileManager(collector, Locale.ENGLISH, StandardCharsets.UTF_8);
+             JavaFileManager fm = new ForwardingJavaFileManager<JavaFileManager>(std) {
+                 @Override public JavaFileObject getJavaFileForOutput(Location location, String className, JavaFileObject.Kind kind, FileObject sibling) {
+                     return new SimpleJavaFileObject(URI.create("mem:///" + className.replace('.', '/') + kind.extension), kind) {
+                         @Override public OutputStream openOutputStream() {
+                             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                             compiled.put(className, bytes);
+                             return bytes;
+                         }
+                     };
+                 }
+             }) {
+            List<JavaFileObject> units = new ArrayList<>();
+            for (Map.Entry<String, String> e : sources.entrySet()) {
+                String content = e.getValue();
+                units.add(new SimpleJavaFileObject(URI.create("hidden:///" + e.getKey()), JavaFileObject.Kind.SOURCE) {
+                    @Override public CharSequence getCharContent(boolean ignoreEncodingErrors) { return content; }
+                });
+            }
+            Boolean ok = javac.getTask(new StringWriter(), fm, collector, compileOptions(cp), null, units).call();
+            List<Map<String, Object>> list = diagnostics(collector, null, true);
+            if (!Boolean.TRUE.equals(ok)) return list.isEmpty() ? List.of(Map.of("message", "Compilation failed")) : list;
+        }
+        for (Map.Entry<String, ByteArrayOutputStream> e : compiled.entrySet()) out.put(e.getKey(), e.getValue().toByteArray());
+        return List.of();
     }
 
     private static Map<String, Object> checkResult(String status, String summary, List<Map<String, Object>> diagnostics,
@@ -499,13 +596,56 @@ public final class Kernel {
         return r;
     }
 
-    /** Tally of a JUnit run, filled from the bridged listener. */
+    /**
+     * Tally of a JUnit run. The planned tests are fixed before student code runs; a result is
+     * accepted once per planned test (or per dynamic test under a planned container, such as a
+     * parameterized invocation). A planned test that never reports counts as failed.
+     */
     static final class Results implements TestExecutionListener {
         int total;
         int passed;
         final List<Map<String, Object>> failures = new ArrayList<>();
+        private final Set<String> planned = new HashSet<>();
+        private final Set<String> containers = new HashSet<>();
+        private final Set<String> done = new HashSet<>();
+        private final Map<String, String> names = new HashMap<>();
 
-        void finished(String name, String status, String message) {
+        void plan(TestPlan plan) {
+            for (TestIdentifier root : plan.getRoots()) {
+                for (TestIdentifier id : plan.getDescendants(root)) {
+                    if (id.isTest()) { planned.add(id.getUniqueId()); names.put(id.getUniqueId(), nameOf(id)); }
+                    else containers.add(id.getUniqueId());
+                }
+            }
+        }
+
+        @Override public void dynamicTestRegistered(TestIdentifier id) {
+            String parent = id.getParentId().orElse("");
+            if (containers.contains(parent) || planned.contains(parent)) {
+                if (id.isTest()) { planned.add(id.getUniqueId()); names.put(id.getUniqueId(), nameOf(id)); }
+                else containers.add(id.getUniqueId());
+            }
+        }
+
+        @Override public void executionSkipped(TestIdentifier id, String reason) {
+            // @Disabled tests do not count either way
+            if (planned.remove(id.getUniqueId())) names.remove(id.getUniqueId());
+        }
+
+        @Override public void executionFinished(TestIdentifier id, TestExecutionResult result) {
+            if (!id.isTest() || !planned.contains(id.getUniqueId()) || !done.add(id.getUniqueId())) return;
+            String message = result.getThrowable().map(t -> {
+                String m = t.getMessage();
+                return t.getClass().getSimpleName() + (m == null ? "" : ": " + m.strip());
+            }).orElse(null);
+            record(names.get(id.getUniqueId()), result.getStatus().name(), message);
+        }
+
+        void finish() {
+            for (String id : planned) if (!done.contains(id)) record(names.get(id), "FAILED", "did not finish");
+        }
+
+        private void record(String name, String status, String message) {
             total++;
             if ("SUCCESSFUL".equals(status)) { passed++; return; }
             if (failures.size() >= 50) return;
@@ -513,15 +653,6 @@ public final class Kernel {
             f.put("name", name);
             f.put("message", message == null ? status.toLowerCase(Locale.ROOT) : (message.length() > 2000 ? message.substring(0, 2000) + "…" : message));
             failures.add(f);
-        }
-
-        @Override public void executionFinished(TestIdentifier id, TestExecutionResult result) {
-            if (!id.isTest()) return;
-            String message = result.getThrowable().map(t -> {
-                String m = t.getMessage();
-                return t.getClass().getSimpleName() + (m == null ? "" : ": " + m.strip());
-            }).orElse(null);
-            finished(nameOf(id), result.getStatus().name(), message);
         }
 
         private static String nameOf(TestIdentifier id) {
