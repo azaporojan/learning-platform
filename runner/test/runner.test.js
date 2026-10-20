@@ -80,12 +80,16 @@ test('an unexpected error is a 500, a gate failure a 502', async () => {
   const executor = {
     runNotebook: async (cells) => {
       if (cells[0] === 'gate') throw Object.assign(new Error('gate POST /sandboxes -> 502'), { status: 502 });
+      if (cells[0] === 'full') throw Object.assign(new Error('gate POST /sandboxes -> 429'), { status: 429 });
       throw new TypeError('bug');
     },
   };
   await withServer(executor, async (base) => {
     assert.strictEqual((await call(base, 'POST', '/run', { cells: ['gate'] })).status, 502);
     assert.strictEqual((await call(base, 'POST', '/run', { cells: ['bug'] })).status, 500);
+    const full = await call(base, 'POST', '/run', { cells: ['full'] });
+    assert.strictEqual(full.status, 429);
+    assert.strictEqual((await full.json()).code, 'busy');
   });
 });
 
