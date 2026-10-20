@@ -28,6 +28,8 @@ own homework, dates) they should check.
 | New lesson | Title and summary | End of the expanded phase → **Add lesson** → **Lesson Title**, **Lesson Summary** → **Create**. It is added at the end of the phase |
 | New phase | Name, description, gating | Header **Phase** or **Add phase** → **Phase Name**, **Description**, **Course**, "Locked until the previous phase is finished", "Stars required" → **Create Phase**. It goes to the end; reorder with **Edit phase** → "Order in course" |
 | Deck | A standalone HTML file (below) | Open it in Chrome → save as PDF → lesson → MATERIALS → **Attach files** |
+| Notebook lesson | The notebook as one `.md` file (format in `references/notebooks.md`), plus its images | Header **Notebooks** → **Import .md** → open the new notebook → **Settings** (sliders icon) → **Lesson** and **Published to students** → **Save**. Images: open a text cell → image button, or paste them into the cell. Then **Run all** once to check every cell |
+| Auto-checked homework | Hidden test files, starter files and a reference solution, each as a code block with its path (`shop/CartTest.java`) | Open the task → **Task Details** → AUTO-CHECK **Set up** → **Hidden tests** (one tab per file: **+ File**, double-click a tab to rename) → **Starter code** → **Try with a solution** → paste the solution → **Save and run the tests** (all must pass) → **Save** |
 
 Notes for the hand-over:
 - The quiz/flashcards JSON mode accepts **only the items array** (`[ … ]`), not `{title, items}`.

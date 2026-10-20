@@ -1,6 +1,6 @@
 ---
 name: course-content
-description: Create and publish teaching content on the Learning Platform (learning.bsf.md, the "QA Automation Engineer" course) through its admin API — new phases and lessons, homework tasks, quizzes, flashcard decks, Russian lesson scripts for the teacher, and lesson presentation decks (PDF with diagrams, icons, quotes and linked industry standards such as ISTQB, ISO/IEC/IEEE 29119, Scrum Guide). Works with direct API access (Claude Code on the repo) or, without it (claude.ai), by producing paste-ready content for the admin UI. Use this whenever the user mentions a lesson, week, phase, homework, quiz, flashcards, lesson script/сценарий, slides/deck/презентация for the course, ISTQB material for students, or asks to add, fix, review or attach anything on learning.bsf.md — even if they don't say "skill" or "API".
+description: Create and publish teaching content on the Learning Platform (learning.bsf.md, the "QA Automation Engineer" course) through its admin API — new phases and lessons, homework tasks, auto-checked Java homework (hidden JUnit tests), quizzes, flashcard decks, Russian lesson scripts for the teacher, runnable Java notebook lessons (Markdown + code cells, images, Mermaid; presented in class instead of slides), and lesson presentation decks (PDF with diagrams, icons, quotes and linked industry standards such as ISTQB, ISO/IEC/IEEE 29119, Scrum Guide). Works with direct API access (Claude Code on the repo) or, without it (claude.ai), by producing paste-ready content for the admin UI. Use this whenever the user mentions a lesson, week, phase, homework, quiz, flashcards, notebook/ноутбук, "make this lesson a notebook", hidden tests / auto-check for a task, lesson script/сценарий, slides/deck/презентация for the course, ISTQB material for students, or asks to add, fix, review or attach anything on learning.bsf.md — even if they don't say "skill" or "API".
 ---
 
 # Course content for the Learning Platform
@@ -52,6 +52,8 @@ results or email students). `docs/AGENT_API.md` is the full API reference.
 | Quiz / flashcards | `references/content-standards.md` | Check the script's appendix for a teacher draft → draft JSON → `scripts/check_study_set.py` → verify facts → `POST /study-sets` → read back |
 | Lesson script | `references/lesson-script-template.md` + one neighbouring script | Russian, minute-by-minute; save with `lp.mjs script-put` (it refuses to overwrite a newer copy) |
 | Presentation | `references/presentations.md`, `references/industry-sources.md` | Build with `scripts/build_deck.mjs`, look at every slide, verify links, send the PDF; upload when asked |
+| Notebook lesson (runnable Java, presented in class) | `references/notebooks.md`, `references/content-standards.md` | Draft the `.md` from the lesson script → `scripts/check_notebook.mjs --run` (every cell must run) → `lp.mjs notebook-put <lessonId> file.md --publish` → `notebook-run` to read it back. Prefer a notebook over a deck for Java lessons |
+| Auto-checked homework (hidden tests) | `references/notebooks.md` § Auto-checked homework, `references/content-standards.md` § Homework | Task text names the exact classes/methods → tests + starter + reference solution in temp folders → `lp.mjs check-put` → `check-try` with the solution (all pass) → report. Auto-approve only for practice tasks |
 
 ## Working principles
 
@@ -76,7 +78,8 @@ results or email students). `docs/AGENT_API.md` is the full API reference.
 
 | Script | Purpose |
 |---|---|
-| `scripts/lp.mjs` | API helper: `tree`, `get/post/put/delete`, `script-get/script-put`, `upload` |
+| `scripts/lp.mjs` | API helper: `tree`, `get/post/put/delete`, `script-get/script-put`, `upload`, `notebook-get/notebook-put/notebook-run`, `check-get/check-put/check-try` |
+| `scripts/check_notebook.mjs` | Lints a notebook `.md` (format, images, JShell pitfalls, cell sizes); `--run` runs every code cell on the platform in a temporary private notebook |
 | `scripts/check_study_set.py` | Validates quiz/flashcard JSON: API limits + course quality rules (answer balance, giveaway options, explanations, question-form fronts, examples) |
 | `scripts/standalone_deck.py` | Browser mode: the same deck HTML → one self-contained HTML (CDN fonts/icons/Mermaid) the teacher prints to PDF from Chrome. Python 3 only |
 | `scripts/build_deck.mjs` | Slide HTML → PDF with the course theme, local fonts, Lucide icons, Mermaid diagrams, footers; reports overflow and lists links; `--sheet`/`--png` previews. Needs `npm install --prefix .claude/skills/course-content/scripts` once |

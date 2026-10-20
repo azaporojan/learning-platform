@@ -10,13 +10,22 @@
 //   node lp.mjs script-put <lessonId> <file.md> save a lesson script; refuses to overwrite a newer server copy
 //   node lp.mjs upload <lessonId> <file>...     attach PDF/DOCX/PPTX/TXT/MD files to a lesson
 //   node lp.mjs download <fileId> <out>         save a lesson file (e.g. an existing deck to study)
+//   node lp.mjs notebook-get <notebookId> [out.md]          a notebook as Markdown → stdout or file
+//   node lp.mjs notebook-put <lessonId> <file.md> [--id N] [--publish] [--title T]
+//                                               new lesson notebook from Markdown (images next to the .md are
+//                                               uploaded); --id replaces notebook N, refusing if it changed meanwhile
+//   node lp.mjs notebook-run <notebookId>       run every code cell, print each cell's status
+//   node lp.mjs check-get <taskId>              a task's auto-check (hidden tests, starter, limits)
+//   node lp.mjs check-put <taskId> <testsDir> [--starter dir] [--timeout s] [--auto] [--off]
+//                                               set the hidden JUnit tests (.java files under package folders)
+//   node lp.mjs check-try <taskId> <solutionDir> run the hidden tests against a solution, print the result
 //
 // Env: LEARNING_API_KEY (required), LEARNING_API_URL (default https://learning.bsf.md/api).
 // Node's fetch passes the site's Cloudflare check; Python's urllib does not (error 1010), so use
 // this helper or curl rather than urllib/requests.
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { basename, extname } from 'node:path';
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { basename, extname, dirname, join, relative, sep } from 'node:path';
 
 const API = (process.env.LEARNING_API_URL || 'https://learning.bsf.md/api').replace(/\/$/, '');
 const KEY = process.env.LEARNING_API_KEY;
@@ -45,6 +54,54 @@ const print = (d) => console.log(typeof d === 'string' ? d : JSON.stringify(d, n
 const MIME = { '.pdf': 'application/pdf', '.md': 'text/markdown', '.txt': 'text/plain',
   '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.ppt': 'application/vnd.ms-powerpoint', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+
+
+// --flag value / --flag options after the positional arguments
+function options(list, flags) {
+  const out = { _: [] };
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    if (a.startsWith('--')) {
+      const name = a.slice(2);
+      if (flags.includes(name)) out[name] = true;
+      else out[name] = list[++i];
+    } else out._.push(a);
+  }
+  return out;
+}
+
+// Java files under a folder, as [{path: 'shop/Cart.java', content}]
+function javaFiles(dir) {
+  const out = [];
+  const walk = (d) => {
+    for (const name of readdirSync(d)) {
+      const full = join(d, name);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (name.endsWith('.java')) out.push({ path: relative(dir, full).split(sep).join('/'), content: readFileSync(full, 'utf8') });
+    }
+  };
+  walk(dir);
+  if (out.length === 0) { console.error(`no .java files under ${dir}`); process.exit(2); }
+  return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+// The notebook form: the Markdown plus every relative image it references, sent under its relative path
+function notebookForm(file) {
+  const md = readFileSync(file, 'utf8');
+  const fd = new FormData();
+  fd.append('notebook', new Blob([md], { type: 'text/markdown' }), basename(file));
+  const IMG = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
+  const seen = new Set();
+  for (const m of md.matchAll(/!\[[^\]]*\]\(([^)\s]+)/g)) {
+    const ref = m[1].replace(/^\.\//, '');
+    if (/^[a-z]+:|^\//i.test(ref) || seen.has(ref)) continue;
+    const full = join(dirname(file), ref);
+    if (!existsSync(full)) { console.error(`image not found: ${ref}`); process.exit(2); }
+    seen.add(ref);
+    fd.append('files', new Blob([readFileSync(full)], { type: IMG[extname(ref).toLowerCase()] || 'application/octet-stream' }), ref);
+  }
+  return { fd, images: seen.size };
+}
 
 const [cmd, ...args] = process.argv.slice(2);
 switch (cmd) {
@@ -96,7 +153,69 @@ switch (cmd) {
     console.error(`saved ${args[1]}`);
     break;
   }
+  case 'notebook-get': {
+    const res = await fetch(`${API}/notebooks/${args[0]}/export`, { headers: auth });
+    if (!res.ok) { console.error(`notebook-get ${args[0]} → ${res.status}`); process.exit(1); }
+    const md = await res.text();
+    if (args[1]) { writeFileSync(args[1], md); console.error(`saved ${args[1]}`); } else process.stdout.write(md);
+    break;
+  }
+  case 'notebook-put': {
+    const o = options(args, ['publish']);
+    const [lessonId, file] = o._;
+    if (!file) { console.error('usage: notebook-put <lessonId> <file.md> [--id N] [--publish] [--title T]'); process.exit(2); }
+    const { fd, images } = notebookForm(file);
+    if (o.title) fd.append('title', o.title);
+    if (o.id) {
+      // Replace the cells of an existing notebook; its current revision guards against overwriting edits made meanwhile
+      const cur = await call('GET', `/notebooks/${o.id}`);
+      fd.append('baseRevision', String(cur.revision));
+      const r = await call('PUT', `/notebooks/${o.id}/markdown`, fd);
+      if (o.publish && !cur.published) await call('PUT', `/notebooks/${o.id}`, { published: true });
+      console.log(`updated notebook ${o.id} (revision ${r.revision}, ${images} image(s))`);
+    } else {
+      if (lessonId && lessonId !== 'none') fd.append('lessonId', String(lessonId));
+      if (o.publish) fd.append('published', 'true');
+      const nb = await call('POST', '/notebooks/import', fd);
+      console.log(`created notebook ${nb.id} "${nb.title}": ${nb.cell_count} cells (${nb.code_cell_count} code), ${images} image(s)${nb.published ? ', published' : ', draft'}`);
+    }
+    break;
+  }
+  case 'notebook-run': {
+    const nb = await call('GET', `/notebooks/${args[0]}`);
+    const r = await call('POST', `/notebooks/${args[0]}/run`, {});
+    let i = 0;
+    for (const c of nb.cells) {
+      if (c.kind !== 'code') continue;
+      i += 1;
+      const o = r.outputs[c.id];
+      const first = c.source.split('\n')[0].slice(0, 60);
+      const detail = !o ? '' : o.status === 'ok' ? (o.value !== null ? ` → ${String(o.value).slice(0, 60)}` : '') : ` → ${(o.error && o.error.message || o.status).split('\n')[0].slice(0, 120)}`;
+      console.log(`${String(i).padStart(3)}  ${(o ? o.status : '—').padEnd(8)} ${first}${detail}`);
+    }
+    console.log(`run: ${r.status} in ${r.durationMs} ms`);
+    if (r.status !== 'ok') process.exitCode = 1;
+    break;
+  }
+  case 'check-get': print(await call('GET', `/tasks/${args[0]}/check`)); break;
+  case 'check-put': {
+    const o = options(args, ['auto', 'off']);
+    const [taskId, testsDir] = o._;
+    if (!testsDir) { console.error('usage: check-put <taskId> <testsDir> [--starter dir] [--timeout s] [--auto] [--off]'); process.exit(2); }
+    const body = { tests: javaFiles(testsDir), starter: o.starter ? javaFiles(o.starter) : [], timeoutS: o.timeout ? Number(o.timeout) : 30, autoApprove: Boolean(o.auto), enabled: !o.off };
+    const r = await call('PUT', `/tasks/${taskId}/check`, body);
+    console.log(`task ${taskId}: ${r.tests.length} test file(s), ${r.starter.length} starter file(s), ${r.timeout_s} s, auto-approve ${r.auto_approve ? 'on' : 'off'}, ${r.enabled ? 'on' : 'off'}`);
+    break;
+  }
+  case 'check-try': {
+    const r = await call('POST', `/tasks/${args[0]}/check/try`, { files: javaFiles(args[1]) });
+    console.log(`${r.status}: ${r.summary}`);
+    for (const f of (r.tests && r.tests.failed) || []) console.log(`  ✗ ${f.name}: ${f.message.split('\n')[0]}`);
+    for (const d of r.diagnostics || []) console.log(`  ${d.file || 'compiler'}${d.line ? ':' + d.line : ''}: ${d.message.split('\n')[0]}`);
+    if (r.status !== 'passed') process.exitCode = 1;
+    break;
+  }
   default:
-    console.error(readFileSync(new URL(import.meta.url), 'utf8').split('\n').slice(1, 15).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
+    console.error(readFileSync(new URL(import.meta.url), 'utf8').split('\n').slice(1, 25).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
     process.exit(cmd ? 2 : 0);
 }

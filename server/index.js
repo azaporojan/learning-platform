@@ -1358,6 +1358,13 @@ const lessonFiles = require('./lessonFiles').registerLessonFileRoutes({ api, db,
 // Java notebooks; code runs in the sandbox runner (runner/, RUNNER_URL + RUNNER_TOKEN)
 const runner = require('./runnerClient').createRunnerClient();
 require('./notebooks').registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons, uploadsDir, runner });
+// Auto-checked tasks (hidden JUnit tests, same runner). Uses notifySubmission/approveSubmission,
+// which are function declarations below (hoisted).
+const taskChecks = require('./taskChecks');
+const taskCheckRoutes = taskChecks.registerTaskCheckRoutes({
+  api, db, io, authenticateToken, requireAdmin, taskLockReasons: courseRoutes.taskLockReasons, runner,
+  notifySubmission: (...a) => notifySubmission(...a), approveSubmission: (...a) => approveSubmission(...a),
+});
 
 api.get('/paths', async (req, res) => {
   const userId = await optionalUserId(req);
@@ -1965,6 +1972,95 @@ api.get('/tasks/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Tells the admins about a new submission (notification + email + live event). Never throws:
+// the submission is already saved when this runs.
+async function notifySubmission(id, userId, submissionId, { fileName = null, comment = '', kind = null } = {}) {
+  try {
+    const [tasks] = await db.query('SELECT title, lesson_id, type FROM tasks WHERE id = ?', [id]);
+    const [users] = await db.query('SELECT name, email FROM users WHERE id = ?', [userId]);
+    if (tasks.length === 0 || users.length === 0) return;
+    const task = tasks[0];
+    const [lessons] = await db.query('SELECT title as lesson_title, path_id FROM lessons WHERE id = ?', [task.lesson_id]);
+    let pathName = 'Unknown Path';
+    let lessonTitle = 'Unknown Lesson';
+    if (lessons.length > 0) {
+      lessonTitle = lessons[0].lesson_title;
+      const [paths] = await db.query('SELECT name FROM paths WHERE id = ?', [lessons[0].path_id]);
+      if (paths.length > 0) pathName = paths[0].name;
+    }
+    const what = kind || (fileName ? 'a file' : 'a comment');
+    const notificationMessage = `${users[0].name} has submitted ${what} for task "${task.title}" (${task.type.charAt(0).toUpperCase() + task.type.slice(1)}) in lesson "${lessonTitle}" from path "${pathName}".`;
+    await notifyAdmins(
+      'task_submission',
+      'New Task Submission! 📤',
+      notificationMessage,
+      await taskLink(id), // opens the task's submissions on the road
+      {
+        taskId: id,
+        userId,
+        submissionId,
+        fileName,
+        comment: comment ? (comment.length > 200 ? `${comment.slice(0, 200)}…` : comment) : null, // preview only
+        taskTitle: task.title,
+        taskType: task.type,
+        lessonTitle,
+        pathName
+      },
+      () => `A student has submitted a task:<br><br>
+        <strong>Student:</strong> ${escapeHtml(users[0].name)}<br>
+        <strong>Task:</strong> ${escapeHtml(task.title)}<br>
+        <strong>Type:</strong> ${task.type.charAt(0).toUpperCase() + task.type.slice(1)}<br>
+        <strong>Lesson:</strong> ${escapeHtml(lessonTitle)}<br>
+        <strong>Path:</strong> ${escapeHtml(pathName)}<br>
+        ${fileName ? `<strong>File:</strong> ${escapeHtml(fileName)}<br>` : ''}
+        ${comment ? `<strong>Comment:</strong> ${escapeHtml(comment)}<br>` : ''}
+        <br>Please review the submission in the platform.`
+    );
+    // Live event for the admin graph
+    io.emit('task:submission_uploaded', { taskId: id });
+  } catch (notifyErr) {
+    console.error('[Submit] Saved, but notifying admins failed:', notifyErr);
+  }
+}
+
+// Approves a submission: marks the task done for the student, notifies them, updates the board.
+// Returns false when the submission does not exist.
+async function approveSubmission(id, { auto = false } = {}) {
+  const [submissions] = await db.query('SELECT * FROM task_submissions WHERE id = ?', [id]);
+  if (submissions.length === 0) return false;
+  const submission = submissions[0];
+  await db.query("UPDATE task_submissions SET status = 'approved' WHERE id = ?", [id]);
+  const [progress] = await db.query(
+    "SELECT * FROM user_progress WHERE user_id = ? AND entity_type = 'task' AND entity_id = ?",
+    [submission.user_id, submission.task_id]
+  );
+  if (progress.length === 0) {
+    await db.query(
+      "INSERT INTO user_progress (user_id, entity_type, entity_id) VALUES (?, 'task', ?)",
+      [submission.user_id, submission.task_id]
+    );
+  }
+  const [task] = await db.query('SELECT title FROM tasks WHERE id = ?', [submission.task_id]);
+  const taskTitle = task.length > 0 ? task[0].title : 'Task';
+  await notifyUser(submission.user_id, {
+    type: 'submission_approved',
+    title: 'Submission Approved! ✅',
+    message: auto
+      ? `Your code for "${taskTitle}" passed every test and was approved automatically. The next step is now unlocked.`
+      : `Your submission for "${taskTitle}" has been approved! The next step is now unlocked.`,
+    link: await taskLink(submission.task_id),
+    metadata: { taskId: submission.task_id, submissionId: id, auto },
+    emailHtml: (u) => `Hello <strong>${escapeHtml(u.name)}</strong>!<br><br>
+          ${auto
+            ? `Your code for task <strong>"${escapeHtml(taskTitle)}"</strong> passed every test and was approved automatically.<br>`
+            : `Great news! Your submission for task <strong>"${escapeHtml(taskTitle)}"</strong> has been approved by an administrator.<br>`}
+          You can now proceed to the next task in your learning path.`,
+  });
+  io.emit('leaderboard:update');
+  io.emit('task:completed', { userId: submission.user_id, taskId: submission.task_id });
+  return true;
+}
+
 // Upload Task Submission
 api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (req, res) => {
   const { id } = req.params;
@@ -2003,64 +2099,7 @@ api.post('/tasks/:id/submit', authenticateToken, upload.single('file'), async (r
 
     // The submission is saved at this point: a failure while notifying admins must not turn
     // into a 500 (the student would retry and create a duplicate).
-    try {
-    // Get task, lesson, path and user info
-    const [tasks] = await db.query('SELECT title, lesson_id, type FROM tasks WHERE id = ?', [id]);
-    const [users] = await db.query('SELECT name, email FROM users WHERE id = ?', [userId]);
-
-    if (tasks.length > 0 && users.length > 0) {
-      const task = tasks[0];
-
-      // Get lesson and path details
-      const [lessons] = await db.query('SELECT title as lesson_title, path_id FROM lessons WHERE id = ?', [task.lesson_id]);
-      let pathName = 'Unknown Path';
-      let lessonTitle = 'Unknown Lesson';
-
-      if (lessons.length > 0) {
-        lessonTitle = lessons[0].lesson_title;
-        const [paths] = await db.query('SELECT name FROM paths WHERE id = ?', [lessons[0].path_id]);
-        if (paths.length > 0) {
-          pathName = paths[0].name;
-        }
-      }
-
-      // Create detailed notification message
-      const notificationMessage = `${users[0].name} has submitted ${req.file ? 'a file' : 'a comment'} for task "${task.title}" (${task.type.charAt(0).toUpperCase() + task.type.slice(1)}) in lesson "${lessonTitle}" from path "${pathName}".`;
-
-      // Notify all admins about the submission
-      await notifyAdmins(
-        'task_submission',
-        'New Task Submission! 📤',
-        notificationMessage,
-        await taskLink(id), // opens the task's submissions on the road
-        {
-          taskId: id,
-          userId,
-          submissionId: result.insertId,
-          fileName: req.file ? req.file.originalname : null,
-          comment: comment ? (comment.length > 200 ? `${comment.slice(0, 200)}…` : comment) : null, // preview only
-          taskTitle: task.title,
-          taskType: task.type,
-          lessonTitle,
-          pathName
-        },
-        () => `A student has submitted a task:<br><br>
-          <strong>Student:</strong> ${escapeHtml(users[0].name)}<br>
-          <strong>Task:</strong> ${escapeHtml(task.title)}<br>
-          <strong>Type:</strong> ${task.type.charAt(0).toUpperCase() + task.type.slice(1)}<br>
-          <strong>Lesson:</strong> ${escapeHtml(lessonTitle)}<br>
-          <strong>Path:</strong> ${escapeHtml(pathName)}<br>
-          ${req.file ? `<strong>File:</strong> ${escapeHtml(req.file.originalname)}<br>` : ''}
-          ${comment ? `<strong>Comment:</strong> ${escapeHtml(comment)}<br>` : ''}
-          <br>Please review the submission in the platform.`
-      );
-
-      // Emit live event for Admin graph update
-      io.emit('task:submission_uploaded', { taskId: id });
-    }
-    } catch (notifyErr) {
-      console.error('[Submit] Saved, but notifying admins failed:', notifyErr);
-    }
+    await notifySubmission(id, userId, result.insertId, { fileName: req.file ? req.file.originalname : null, comment });
 
     res.status(201).json({
       id: result.insertId,
@@ -2089,9 +2128,10 @@ api.get('/tasks/:id/submissions', authenticateToken, async (req, res) => {
 
     // Admins see every submission; students only their own.
     const [rows] = await db.query(
-      `SELECT s.*, u.name as user_name, u.email as user_email 
+      `SELECT s.*, u.name as user_name, u.email as user_email, chk.check_status, chk.check_passed, chk.check_total
        FROM task_submissions s
        JOIN users u ON s.user_id = u.id
+       ${taskChecks.LATEST_CHECK_JOIN}
        WHERE s.task_id = ? ${isAdmin ? '' : 'AND s.user_id = ?'}
        ORDER BY s.submitted_at DESC`,
       isAdmin ? [id] : [id, req.user.id]
@@ -2128,13 +2168,15 @@ api.get('/admin/submissions', authenticateToken, requireAdmin, async (req, res) 
               t.id AS task_id, t.title AS task_title, t.type AS task_type, t.xp_reward,
               l.id AS lesson_id, l.title AS lesson_title,
               p.id AS path_id, p.name AS path_name, p.order_index AS phase_order,
-              c.id AS course_id, c.name AS course_name
+              c.id AS course_id, c.name AS course_name,
+              chk.check_status, chk.check_passed, chk.check_total
        FROM task_submissions s
        INNER JOIN users u ON u.id = s.user_id
        INNER JOIN tasks t ON t.id = s.task_id
        INNER JOIN lessons l ON l.id = t.lesson_id
        INNER JOIN paths p ON p.id = l.path_id
        LEFT JOIN courses c ON c.id = p.course_id
+       ${taskChecks.LATEST_CHECK_JOIN}
        ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
        ORDER BY s.id DESC
        LIMIT ${limit + 1}`,
@@ -2276,54 +2318,9 @@ api.post('/submissions/:id/approve', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Admin access required' });
     }
 
-    // Get submission details
-    const [submissions] = await db.query('SELECT * FROM task_submissions WHERE id = ?', [id]);
-    if (submissions.length === 0) {
+    if (!(await approveSubmission(id))) {
       return res.status(404).json({ error: 'Submission not found' });
     }
-    const submission = submissions[0];
-
-    // Update submission status
-    await db.query("UPDATE task_submissions SET status = 'approved' WHERE id = ?", [id]);
-
-    // Mark task as completed for the user in user_progress
-    // Check if tasks is already completed
-    const [progress] = await db.query(
-      "SELECT * FROM user_progress WHERE user_id = ? AND entity_type = 'task' AND entity_id = ?",
-      [submission.user_id, submission.task_id]
-    );
-
-    if (progress.length === 0) {
-      await db.query(
-        "INSERT INTO user_progress (user_id, entity_type, entity_id) VALUES (?, 'task', ?)",
-        [submission.user_id, submission.task_id]
-      );
-    }
-
-    // Notify the user
-    const [task] = await db.query('SELECT title FROM tasks WHERE id = ?', [submission.task_id]);
-    const taskTitle = task.length > 0 ? task[0].title : 'Task';
-
-    await notifyUser(submission.user_id, {
-      type: 'submission_approved',
-      title: 'Submission Approved! ✅',
-      message: `Your submission for "${taskTitle}" has been approved! The next step is now unlocked.`,
-      link: await taskLink(submission.task_id),
-      metadata: { taskId: submission.task_id, submissionId: id },
-      emailHtml: (u) => `Hello <strong>${escapeHtml(u.name)}</strong>!<br><br>
-            Great news! Your submission for task <strong>"${escapeHtml(taskTitle)}"</strong> has been approved by an administrator.<br>
-            You can now proceed to the next task in your learning path.`,
-    });
-
-    // Emit Socket.IO events for live updates
-    // 1. Notify all users about leaderboard change
-    io.emit('leaderboard:update');
-
-    // 2. Notify about task completion for this specific user
-    io.emit('task:completed', {
-      userId: submission.user_id,
-      taskId: submission.task_id
-    });
 
     res.json({ message: 'Submission approved successfully' });
   } catch (err) {
@@ -3288,6 +3285,7 @@ if (fs.existsSync(path.join(publicDir, 'index.html'))) {
     process.exit(1);
   }
   lessonFiles.quarantineOrphanFiles(); // files without a row are set aside (never deleted)
+  taskCheckRoutes.markInterrupted(); // checks that were running when the server stopped
 
   // Encrypt any hash not yet sealed with the current key (first start after this release,
   // or after rotating PASSWORD_PEPPER)

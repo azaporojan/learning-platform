@@ -3,6 +3,7 @@ import { useNavigate, Navigate } from 'react-router-dom';
 import { User } from '../types';
 import { apiUrl, getFileUrl } from '../config';
 import { useSocket } from '../contexts/SocketContext';
+import { CheckChip } from '../checks/CheckResult';
 
 interface SubmissionsPageProps {
   currentUser: User;
@@ -30,6 +31,9 @@ interface InboxRow {
   phase_order: number;
   course_id: number | null;
   course_name: string | null;
+  check_status?: string | null;
+  check_passed?: number | null;
+  check_total?: number | null;
 }
 
 type Filter = 'pending' | 'approved' | 'rejected' | 'all';
@@ -110,8 +114,8 @@ export const SubmissionsPage: React.FC<SubmissionsPageProps> = ({ currentUser })
   useEffect(() => {
     if (!socket) return;
     const refresh = () => fetchInbox();
-    ['task:submission_uploaded', 'task:completed', 'task:updated', 'task:deleted', 'lesson:deleted'].forEach((e) => socket.on(e, refresh));
-    return () => { ['task:submission_uploaded', 'task:completed', 'task:updated', 'task:deleted', 'lesson:deleted'].forEach((e) => socket.off(e, refresh)); };
+    ['task:submission_uploaded', 'task:completed', 'task:updated', 'task:deleted', 'lesson:deleted', 'submission:checked'].forEach((e) => socket.on(e, refresh));
+    return () => { ['task:submission_uploaded', 'task:completed', 'task:updated', 'task:deleted', 'lesson:deleted', 'submission:checked'].forEach((e) => socket.off(e, refresh)); };
   }, [socket, fetchInbox]);
 
   if (currentUser.role !== 'admin') return <Navigate to="/courses" replace />;
@@ -189,6 +193,7 @@ export const SubmissionsPage: React.FC<SubmissionsPageProps> = ({ currentUser })
                     <span className="font-semibold text-gray-800 dark:text-gray-100 truncate">{row.task_title}</span>
                     <span className={`material-icons text-sm ${row.task_type === 'mandatory' ? 'text-blue-500' : 'text-yellow-500'}`} title={row.task_type}>{row.task_type === 'mandatory' ? 'assignment' : 'stars'}</span>
                     <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold uppercase ${chip(row.status)}`}>{row.status || 'pending'}</span>
+                    <CheckChip status={row.check_status} passed={row.check_passed} total={row.check_total} />
                     {(row.status || 'pending') === 'pending' && !row.is_viewed && <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">NEW</span>}
                   </div>
                   <div className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 truncate">

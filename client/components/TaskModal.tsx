@@ -1,9 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { useDialog } from '../hooks/useDialog';
 import { AlertDialog } from './AlertDialog';
 import { apiUrl } from '../config';
 import { ConfirmDialog } from './ConfirmDialog';
 import { MarkdownEditor, MarkdownContent, toMarkdown } from './MarkdownEditor';
+import { useSocket } from '../contexts/SocketContext';
+import { CheckChip } from '../checks/CheckResult';
+
+// The code editor of auto-checked tasks loads only when such a task is opened
+const TaskCheckPanel = lazy(() => import('../checks/TaskCheckPanel'));
+const TaskCheckSetup = lazy(() => import('../checks/TaskCheckSetup'));
+const CheckDetails = lazy(() => import('../checks/CheckDetails'));
 
 interface Task {
   id: number;
@@ -25,6 +32,9 @@ interface Submission {
   comment?: string | null;
   submitted_at: string;
   status: 'pending' | 'approved' | 'rejected' | null;
+  check_status?: string | null; // newest code check, for auto-checked tasks
+  check_passed?: number | null;
+  check_total?: number | null;
 }
 
 // A submission's text part: plain text with http(s) links made clickable (PR links, Jira tickets…).
@@ -81,6 +91,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
     description: toMarkdown(task.description || '')
   });
   const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [checkFor, setCheckFor] = useState<number | null>(null); // submission whose code check is open
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [comment, setComment] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -169,6 +180,15 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       console.error('Failed to mark task as viewed:', error);
     }
   };
+
+  // A code check finishes after the submission was sent: refresh when its result arrives
+  const { socket } = useSocket();
+  useEffect(() => {
+    if (!socket || !isOpen) return undefined;
+    const onChecked = (data: { taskId: number }) => { if (Number(data.taskId) === Number(task.id)) fetchSubmissions(); };
+    socket.on('submission:checked', onChecked);
+    return () => { socket.off('submission:checked', onChecked); };
+  }, [socket, isOpen, task.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchSubmissions = async () => {
     try {
@@ -605,6 +625,13 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                   )}
                 </div>
 
+                {/* Auto-check: teachers set up hidden tests; students write and check code */}
+                <Suspense fallback={null}>
+                  {isAdmin
+                    ? <TaskCheckSetup taskId={Number(task.id)} />
+                    : <TaskCheckPanel taskId={Number(task.id)} onSubmitted={fetchSubmissions} />}
+                </Suspense>
+
                 {/* Student Upload Section */}
                 {!isAdmin && (
                   <>
@@ -700,6 +727,8 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                                       <span className="material-icons text-green-500 text-sm">check_circle</span>
                                       <span className="font-bold text-gray-800 dark:text-white">Submitted</span>
                                       {renderStatusChip(sub.status)}
+                                  <CheckChip status={sub.check_status} passed={sub.check_passed} total={sub.check_total} onClick={() => setCheckFor(sub.id)} />
+                                      <CheckChip status={sub.check_status} passed={sub.check_passed} total={sub.check_total} onClick={() => setCheckFor(sub.id)} />
                                     </div>
                                     {sub.comment && <div className="mb-2"><SubmissionComment text={sub.comment} /></div>}
                                     <div className="flex items-center space-x-4 text-sm text-gray-600 dark:text-gray-400">
@@ -964,6 +993,12 @@ export const TaskModal: React.FC<TaskModalProps> = ({
               </div>
             )}
           </div>
+
+          {checkFor !== null && (
+            <Suspense fallback={null}>
+              <CheckDetails submissionId={checkFor} isAdmin={isAdmin} onClose={() => setCheckFor(null)} />
+            </Suspense>
+          )}
 
           {/* Footer */}
           <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-between">
