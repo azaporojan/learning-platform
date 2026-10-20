@@ -74,7 +74,7 @@ All routes except `/health` need `Authorization: Bearer $RUNNER_TOKEN`.
 | `GET /stats` | | pool, sessions, limits |
 | `POST /run` | `{cells: [string], requestId?}` | `{status, cells: [{index, status, stdout, stderr, value, error, durationMs, truncated}], durationMs, warm, queuedMs}` |
 | `GET /queue/:requestId` | | `{position}`; 0 when the request is no longer waiting |
-| `POST /check` | `{files: [{path, content}], tests: [{path, content}], timeoutMs?}` | `{status, summary, diagnostics, tests: {total, passed, failed: [{name, message}]}, stdout, durationMs}` |
+| `POST /check` | `{files: [{path, content}], tests: [{path, content}], timeoutMs?}` (clamped to 5-60 s) | `{status, summary, diagnostics, tests: {total, passed, failed: [{name, message}]}, stdout, durationMs}` |
 | `GET /sessions` | | live teacher sessions |
 | `POST /sessions` | `{owner}` | the owner's session (opened if needed) |
 | `POST /sessions/:id/cells` | `{owner, source}` | one cell result plus `executionCount` and `sessionEnded` |
@@ -89,7 +89,7 @@ Check status: `passed`, `failed`, `compile_error`, `no_tests`, `timeout`, `oom`,
 | Variable | Used by | Default |
 |---|---|---|
 | `RUNNER_TOKEN` | runner | required, 24+ chars; the platform sends it |
-| `GATE_TOKEN` | runner, gate | required, 24+ chars |
+| `GATE_TOKEN` | runner, gate | required, 24+ chars, **different from `RUNNER_TOKEN`** (the runner refuses to start otherwise): only the runner may hold it |
 | `GATE_URL` | runner | `http://gate:2376` |
 | `PORT` / `GATE_PORT` | runner / gate | `8080` / `2376` |
 | `RUNNER_MAX_CONTAINERS`, `RUNNER_WARM`, `RUNNER_MAX_SESSIONS` | runner | 4, 2, 2 |

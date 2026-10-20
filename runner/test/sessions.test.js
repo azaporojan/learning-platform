@@ -33,6 +33,15 @@ test('a session answers only its owner', async () => {
   assert.deepStrictEqual((await sessions.open('teacher-1')).id, s.id, 'the same owner gets the same session');
 });
 
+test('two opens for the same owner give one session', async () => {
+  const pool = slowPool();
+  const sessions = new Sessions({ pool, limits, log: { error() {} } });
+  const [a, b] = await Promise.all([sessions.open('t'), sessions.open('t')]);
+  assert.strictEqual(a.id, b.id);
+  assert.strictEqual(sessions.byId.size, 1);
+  assert.strictEqual(pool.released.length, 1, 'the second sandbox goes back');
+});
+
 test('the startup sweep leaves recent sandboxes alone', async () => {
   const now = Date.parse('2026-10-20T12:00:00Z');
   const removed = [];

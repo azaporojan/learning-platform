@@ -34,6 +34,7 @@ const docker = http.createServer((req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/containers/create') {
       const spec = JSON.parse(body);
+      if (spec.Image === 'sha256:gone') return send(404, { message: 'No such image: sha256:gone' });
       created.push(spec);
       const id = String(++seq).padStart(64, 'a');
       containers.set(id, { labels: spec.Labels, created: Date.now() / 1000 });
@@ -158,6 +159,21 @@ test('attach splices the caller onto the container stream, for sandboxes only', 
   assert.strictEqual(frame.subarray(8, 13).toString(), 'hello');
   a.socket.destroy();
   assert.strictEqual((await attach(FOREIGN)).status, 404);
+});
+
+test('a removed image id falls back to the image name', async () => {
+  const fallback = createGate({ image: { id: 'sha256:gone', ref: 'ghcr.io/x/runner:latest' } });
+  await new Promise((r) => fallback.listen(0, '127.0.0.1', r));
+  try {
+    // make room under the ceiling first
+    for (const s of await (await call('GET', '/sandboxes')).json()) await call('DELETE', `/sandboxes/${s.id}`);
+    const r = await fetch(`http://127.0.0.1:${fallback.address().port}/sandboxes`, { method: 'POST', headers: { Authorization: TOKEN, 'content-type': 'application/json' }, body: JSON.stringify({ profile: 'jshell' }) });
+    assert.strictEqual(r.status, 201);
+    assert.strictEqual(created.at(-1).Image, 'ghcr.io/x/runner:latest');
+  } finally {
+    fallback.closeAllConnections();
+    fallback.close();
+  }
 });
 
 test('the sweep removes only old sandboxes', async () => {

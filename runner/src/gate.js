@@ -86,8 +86,8 @@ function sandboxSpec(image, profileName) {
       PidsLimit: 64,
       ReadonlyRootfs: true,
       Tmpfs: {
-        '/work': 'rw,nosuid,nodev,size=32m,mode=1777',
-        '/tmp': 'rw,nosuid,nodev,size=16m,mode=1777',
+        '/work': 'rw,noexec,nosuid,nodev,size=32m,mode=1777',
+        '/tmp': 'rw,noexec,nosuid,nodev,size=16m,mode=1777',
       },
       CapDrop: ['ALL'],
       SecurityOpt: ['no-new-privileges'],
@@ -190,8 +190,9 @@ function readJson(req, limit = 4096) {
     let tooBig = false;
     const chunks = [];
     req.on('data', (c) => {
-      if (tooBig) return; // keep draining so the 413 reaches the client
       size += c.length;
+      // Drain a little so the 413 reaches the client, then cut a body that keeps coming
+      if (tooBig) { if (size > limit * 4) req.destroy(); return; }
       if (size > limit) { tooBig = true; reject(Object.assign(new Error('Body too large'), { status: 413 })); return; }
       chunks.push(c);
     });

@@ -61,8 +61,9 @@ function readJson(req, limit) {
     let tooBig = false;
     const chunks = [];
     req.on('data', (c) => {
-      if (tooBig) return; // keep draining so the 413 reaches the client
       size += c.length;
+      // Drain a little so the 413 reaches the client, then cut a body that keeps coming
+      if (tooBig) { if (size > limit * 4) req.destroy(); return; }
       if (size > limit) { tooBig = true; reject(new HttpError(413, 'Request too large')); return; }
       chunks.push(c);
     });
@@ -201,6 +202,7 @@ async function main() {
   if (token.length < 24) { console.error('[runner] RUNNER_TOKEN must be set (at least 24 characters)'); process.exit(1); }
   const gateToken = process.env.GATE_TOKEN || '';
   if (gateToken.length < 24) { console.error('[runner] GATE_TOKEN must be set (at least 24 characters)'); process.exit(1); }
+  if (gateToken === token) { console.error('[runner] GATE_TOKEN and RUNNER_TOKEN must be different secrets'); process.exit(1); }
   dropPrivileges();
   const gate = new GateClient({ url: process.env.GATE_URL || 'http://gate:2376', token: gateToken });
   const pool = new Pool({
@@ -211,8 +213,9 @@ async function main() {
   const executor = new Executor({ pool, limits: LIMITS });
   const sessions = new Sessions({ pool, limits: LIMITS });
 
-  // Start clean: anything labelled as a sandbox now belongs to no one
-  await removeStrays(gate, new Set());  // older than 2 min: see removeStrays
+  // Sandboxes left by a previous run belong to no one: remove those older than two minutes (younger
+  // ones may still be used by a runner that is shutting down; the periodic sweep gets them later)
+  await removeStrays(gate, new Set());
   pool.schedule();
 
   const server = createRunner({ executor, sessions, pool, token });
