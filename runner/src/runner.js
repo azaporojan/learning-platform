@@ -242,7 +242,9 @@ async function main() {
       ...[...pool.leased].map((s) => s.id),
       ...[...sessions.byId.values()].map((s) => s.sandbox.id),
     ]);
-    // Warm, leased and session sandboxes are known; anything else this old is a leftover
+    // Warm, leased and session sandboxes are known; anything else this old is a leftover. A sandbox
+    // still booting is in none of those sets, so the cutoff must stay well above a boot (seconds)
+    // and above the longest a request holds one (queue wait plus the longest check).
     gate.list().then((list) => {
       const cutoff = Date.now() - (LIMITS.maxCheckTimeoutMs + LIMITS.checkQueueWaitMs + 60000);
       return Promise.all(list.filter((s) => !known.has(s.id) && Date.parse(s.createdAt) < cutoff).map((s) => gate.remove(s.id)));

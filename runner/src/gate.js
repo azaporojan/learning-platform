@@ -311,7 +311,9 @@ function createGate({ image }) {
         upstream.pipe(socket);
         socket.pipe(upstream);
       });
-      socket.on('close', () => upstream.destroy());
+      // Tracked so a shutdown can end them: server.close() would wait for upgraded sockets forever
+      server.attached.add(socket);
+      socket.on('close', () => { server.attached.delete(socket); upstream.destroy(); });
       upstream.on('close', () => socket.destroy());
     } catch (err) {
       console.error('[gate] attach failed:', err.message || err);
@@ -319,6 +321,7 @@ function createGate({ image }) {
     }
   });
 
+  server.attached = new Set();
   return server;
 }
 
@@ -347,7 +350,14 @@ async function main() {
   server.listen(PORT, HOST, () => console.log(`[gate] listening on ${HOST}:${PORT}, sandbox image ${image.id.slice(0, 19)} (${image.ref}), at most ${MAX_SANDBOXES} sandboxes`));
   setInterval(sweep, 60 * 1000).unref();
   sweep();
-  const stop = () => server.close(() => process.exit(0));
+  // Attach streams are long-lived: end them, or a redeploy waits for Docker's SIGKILL.
+  // The runner sees its sandboxes close and its sweep removes what is left.
+  const stop = () => {
+    server.close(() => process.exit(0));
+    for (const socket of server.attached) socket.destroy();
+    server.closeAllConnections();
+    setTimeout(() => process.exit(0), 5000).unref();
+  };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
 }
