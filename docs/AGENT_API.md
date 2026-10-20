@@ -355,6 +355,43 @@ curl -sS -X POST "$LEARNING_API_URL/notebooks/import" -H "Authorization: Bearer 
   -F "lessonId=12" -F "published=true"
 ```
 
+## 5f. Auto-checked tasks (hidden JUnit tests)
+
+A task can carry hidden JUnit 5 tests. Students write Java in the task window, press **Check** to
+run the tests as often as they like, then **Submit**. A submission is checked once more and the
+result shows next to it in the submissions inbox. With `autoApprove`, a submission that passes
+every test is approved on its own. Leave it off for anything that counts: student code runs in the
+same JVM as the tests, so a determined student can forge a pass (SECURITY.md item 32).
+
+| Method & path | Body | Purpose |
+|---|---|---|
+| `GET /api/tasks/:id/check` | — | Admin: `{enabled, tests, starter, timeout_s, auto_approve, runner_configured}`. Student: `{enabled, starter, timeout_s, auto_approve, test_files}` (never the tests) |
+| `PUT /api/tasks/:id/check` | `{tests, starter?, timeoutS?, autoApprove?, enabled?}` | Admin: set the hidden tests and the starter files students begin from |
+| `DELETE /api/tasks/:id/check` | — | Admin: the task is reviewed by hand again |
+| `POST /api/tasks/:id/check/try` | `{files}` | Run the tests against `files` without saving. Students get no test stdout |
+| `POST /api/tasks/:id/submit-code` | `{files, comment?}` | Student: submit; `201 {id, check: {status: "running"}}`, then a `submission:checked` socket event |
+| `GET /api/submissions/:id/check` | — | The newest check of a submission (its owner or an admin) |
+| `POST /api/submissions/:id/recheck` | — | Admin: check a code submission again, e.g. after fixing a test |
+
+- `tests`, `starter` and `files` are lists of `{path, content}`. `path` is a `.java` file under its
+  package folders (`shop/CartTest.java`); at most 40 files, 100 000 characters each.
+- `timeoutS` is 5-60 (default 30). A check runs with 512 MB and no network.
+- A result has `status` (`passed`, `failed`, `compile_error`, `no_tests`, `timeout`, `oom`,
+  `crashed`, `error`), a `summary`, `tests: {total, passed, failed: [{name, message}]}` and
+  compiler `diagnostics: [{file, line, message}]`.
+- Students may run 6 checks a minute, one at a time, and submit 3 times a minute, never while
+  their last submission is still being checked (`429` otherwise). Re-checking a submission that
+  is being checked answers `409`.
+- Submission lists (`GET /api/tasks/:id/submissions`, `GET /api/admin/submissions`) gain
+  `check_status`, `check_passed` and `check_total` from the newest check (all `null` for
+  submissions without one).
+
+```bash
+curl -sS -X PUT "$LEARNING_API_URL/tasks/42/check" -H "Authorization: Bearer $LEARNING_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"tests":[{"path":"shop/CartTest.java","content":"package shop; ..."}],"starter":[{"path":"shop/Cart.java","content":"package shop;\npublic class Cart {}"}],"timeoutS":30}'
+```
+
 ## 6. Using it from a Claude agent
 
 **Review before students see it.** Imported content goes live immediately, and lesson/task

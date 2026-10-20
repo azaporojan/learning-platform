@@ -69,6 +69,17 @@ further task `+150` on x. The import endpoint computes these for you, so prefer 
   "items": [ { "front": "What is **testware**?", "back": "**ISTQB definition:** …\n\n**In simple words:** …\n\n**Example:** …" } ] }
 ```
 
+## Notebooks and auto-checks
+
+Full tables in `docs/AGENT_API.md` §5e and §5f; the helper commands are in `lp.mjs`.
+
+- `POST /notebooks/import` (multipart `notebook` + `files`, `lessonId`, `published`) creates a lesson
+  notebook from Markdown; `PUT /notebooks/:id/markdown` (same fields, `baseRevision`) replaces it.
+  Notebooks the API key creates are owned by the key's teacher, so it can run them
+  (`POST /notebooks/:id/run`). Students only see `published` ones.
+- `PUT /tasks/:id/check` `{tests, starter, timeoutS, autoApprove, enabled}` sets a task's hidden tests;
+  `POST /tasks/:id/check/try` `{files}` runs them against files without saving anything.
+
 ## Things that bite
 
 - **`PUT /study-sets/:id` with `items` deletes every student's results on that set.** Renaming or
@@ -88,3 +99,8 @@ further task `+150` on x. The import endpoint computes these for you, so prefer 
   fields are Markdown.
 - `deadline` is `YYYY-MM-DD` (end of that day) or an ISO timestamp.
 - Limits: 20 study sets per lesson, 300 items per set, 50 files per lesson (50 MB each).
+- **Replacing a notebook's Markdown clears its outputs** and bumps its version: students' copies stay
+  as they are and show "updated since you copied". `notebook-put --id` refuses (409) when the
+  notebook changed since it was read; re-read and merge, never force.
+- **Changing a task's hidden tests does not re-check old submissions.** Use
+  `POST /submissions/:id/recheck` per submission if the user wants that.

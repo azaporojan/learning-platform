@@ -67,8 +67,25 @@ const Mermaid: React.FC<{ code: string }> = ({ code }) => {
   return <div className="lp-mermaid flex justify-center my-4 overflow-x-auto" dangerouslySetInnerHTML={{ __html: svg }} />;
 };
 
+// Images uploaded to the notebook load at once. An image from another site loads only when the
+// reader asks, so opening someone's notebook never tells a third party who looked, and when.
+const ownImage = (src?: string) => Boolean(src && (src.startsWith('/api/notebook-files/') || /^data:image\/(png|jpeg|gif|webp);/.test(src)));
+const NotebookImage: React.FC<{ src?: string; alt?: string }> = ({ src, alt }) => {
+  const [allowed, setAllowed] = useState(false);
+  if (ownImage(src) || allowed) return <img src={notebookFileSrc(src)} alt={alt || ''} loading="lazy" className="rounded-lg max-w-full mx-auto" />;
+  let host = '';
+  try { host = new URL(String(src)).host; } catch { /* not a URL */ }
+  if (!host) return <span className="text-xs text-gray-400">[image: {alt || 'unavailable'}]</span>;
+  return (
+    <button type="button" onClick={() => setAllowed(true)} className="inline-flex items-center gap-1 text-xs font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg px-3 py-2 my-2">
+      <span aria-hidden="true" className="material-icons text-base">image</span>
+      Show image{alt ? ` "${alt}"` : ''} from {host}
+    </button>
+  );
+};
+
 const components = {
-  img: ({ node, src, alt, ...props }: any) => <img src={notebookFileSrc(src)} alt={alt || ''} loading="lazy" className="rounded-lg max-w-full mx-auto" {...props} />,
+  img: ({ src, alt }: any) => <NotebookImage src={src} alt={alt} />,
   a: ({ node, ...props }: any) => <a target="_blank" rel="noopener noreferrer" {...props} />,
   pre: ({ node, children }: any) => {
     const codeEl = node && node.children && node.children[0];

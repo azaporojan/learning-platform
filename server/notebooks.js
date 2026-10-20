@@ -264,6 +264,28 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
     return type && type.ok(head.subarray(0, n));
   }
 
+  // Stored images no row points at any more (an account deletion cascades the rows, not the bytes).
+  // Only files older than a day go, so an upload still in flight is never touched. The directory
+  // holds only notebook images (multer writes nothing else there).
+  async function sweepOrphanFiles() {
+    try {
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      const old = fs.readdirSync(dir).filter((name) => {
+        try { return fs.statSync(path.join(dir, name)).mtimeMs < cutoff; } catch { return false; }
+      });
+      if (old.length === 0) return;
+      const [rows] = await db.query('SELECT DISTINCT stored_name FROM notebook_files WHERE stored_name = ANY(?::text[])', [old]); // one array parameter, not a row list
+      const kept = new Set(rows.map((r) => r.stored_name));
+      const gone = old.filter((name) => !kept.has(name));
+      for (const name of gone) fs.unlink(path.join(dir, name), () => {});
+      if (gone.length) console.log(`[notebooks] removed ${gone.length} unreferenced image file(s)`);
+    } catch (err) {
+      console.error('[notebooks] orphan sweep failed:', err.message);
+    }
+  }
+  setTimeout(sweepOrphanFiles, 30 * 1000).unref();
+  setInterval(sweepOrphanFiles, 24 * 60 * 60 * 1000).unref();
+
   // Bytes are shared between copies: delete them only when no row points at them any more.
   async function removeUnreferenced(storedNames) {
     for (const name of new Set(storedNames)) {
@@ -894,10 +916,12 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
     try {
       const r = await load(req, res);
       if (!r) return;
-      const name = `${r.row.title.replace(/[^\w\- ]+/g, '').trim().slice(0, 80) || 'notebook'}.md`;
+      // An ASCII fallback plus the real title (Cyrillic, Romanian diacritics) as RFC 5987 filename*
+      const base = r.row.title.replace(/[\u0000-\u001f\u007f"\\/:*?<>|]+/g, '').trim().slice(0, 80) || 'notebook';
+      const ascii = `${base.replace(/[^\w\- ]+/g, '').trim() || 'notebook'}.md`;
       res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(`${base}.md`)}`);
       res.send(notebookToMarkdown(r.row.cells || []));
     } catch (err) {
       fail(res, err, 'GET /notebooks/:id/export');
