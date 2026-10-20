@@ -379,7 +379,9 @@ same JVM as the tests, so a determined student can forge a pass (SECURITY.md ite
 - A result has `status` (`passed`, `failed`, `compile_error`, `no_tests`, `timeout`, `oom`,
   `crashed`, `error`), a `summary`, `tests: {total, passed, failed: [{name, message}]}` and
   compiler `diagnostics: [{file, line, message}]`.
-- Students may run 6 checks a minute, one at a time (`429` otherwise).
+- Students may run 6 checks a minute, one at a time, and submit 3 times a minute, never while
+  their last submission is still being checked (`429` otherwise). Re-checking a submission that
+  is being checked answers `409`.
 
 ```bash
 curl -sS -X PUT "$LEARNING_API_URL/tasks/42/check" -H "Authorization: Bearer $LEARNING_API_KEY" \

@@ -22,6 +22,7 @@ const SAFE_PATH = /^[A-Za-z0-9_$-]+(\/[A-Za-z0-9_$-]+)*\.java$/;
 const MAX_FILES = 40;
 const MAX_FILE_CHARS = 100000;
 const MAX_TOTAL_CHARS = 600000;
+const SUBMITS_PER_MINUTE = Math.max(1, parseInt(process.env.CHECK_SUBMITS_PER_MINUTE || '3', 10));
 const TRIES_PER_MINUTE = Math.max(1, parseInt(process.env.CHECK_TRIES_PER_MINUTE || '6', 10));
 
 const httpError = (status, message, extra) => Object.assign(new Error(message), { status, extra });
@@ -136,6 +137,8 @@ function registerTaskCheckRoutes({ api, db, io, authenticateToken, requireAdmin,
 
   api.delete('/tasks/:id/check', authenticateToken, requireAdmin, async (req, res) => {
     try {
+      const [tasks] = await db.query('SELECT id FROM tasks WHERE id = ?', [req.params.id]);
+      if (tasks.length === 0) return res.status(404).json({ error: 'Task not found' });
       await db.query('DELETE FROM task_checks WHERE task_id = ?', [req.params.id]);
       io.emit('task:updated', { taskId: Number(req.params.id) });
       res.json({ success: true });
@@ -147,8 +150,15 @@ function registerTaskCheckRoutes({ api, db, io, authenticateToken, requireAdmin,
   // -------------------------------------------------------------------------
   // Trying (not saved)
   // -------------------------------------------------------------------------
+  // Per-process limits: the platform runs as one instance (docs/DEPLOYMENT.md). Each minute window
+  // is pruned as it is read, and idle users are dropped every few minutes.
   const inFlight = new Set();
   const recent = new Map();
+  const recentSubmits = new Map();
+  setInterval(() => {
+    const now = Date.now();
+    for (const m of [recent, recentSubmits]) for (const [k, list] of m) if (!list.some((t) => now - t < 60000)) m.delete(k);
+  }, 5 * 60 * 1000).unref();
   function admitTry(userId) {
     if (inFlight.has(userId)) throw httpError(429, 'A check is already running. Wait for it to finish.', { code: 'in_flight' });
     const now = Date.now();
@@ -197,10 +207,15 @@ function registerTaskCheckRoutes({ api, db, io, authenticateToken, requireAdmin,
         `UPDATE submission_checks SET status = ?, summary = ?, passed = ?, total = ?, result = ?::jsonb, finished_at = NOW() WHERE id = ?`,
         [result.status, result.summary || '', result.tests ? result.tests.passed : null, result.tests ? result.tests.total : null, JSON.stringify(result), checkId]
       );
-      // Auto-approve: only a pending submission that passed every test, when the task allows it
+      // Auto-approve: only a pending submission that passed every test, when the task allows it.
+      // The result is already saved, so a failure here is logged and never turns a pass into an error.
       if (check && check.auto_approve && result.status === 'passed') {
-        const [subs] = await db.query("SELECT status FROM task_submissions WHERE id = ?", [submissionId]);
-        if (subs.length && subs[0].status === 'pending') await approveSubmission(submissionId, { auto: true });
+        try {
+          const [subs] = await db.query("SELECT status FROM task_submissions WHERE id = ?", [submissionId]);
+          if (subs.length && subs[0].status === 'pending') await approveSubmission(submissionId, { auto: true });
+        } catch (err) {
+          console.error('[check] auto-approve failed; a teacher can approve by hand:', err);
+        }
       }
     } catch (err) {
       const unavailable = err instanceof RunnerError;
@@ -213,14 +228,36 @@ function registerTaskCheckRoutes({ api, db, io, authenticateToken, requireAdmin,
     io.emit('submission:checked', { submissionId, taskId: Number(taskId), userId });
   }
 
-  async function startCheck(submissionId, taskId, userId, files) {
-    const [rows] = await db.query(
+  async function insertCheck(q, submissionId, files) {
+    const [rows] = await q.query(
       `INSERT INTO submission_checks (submission_id, files, status, summary) VALUES (?, ?::jsonb, 'running', 'Checking…') RETURNING id`,
       [submissionId, JSON.stringify(files)]
     );
-    // Not awaited: the answer goes out now, the result arrives as a live event
-    runSubmissionCheck(rows[0].id, submissionId, taskId, userId, files);
     return rows[0].id;
+  }
+
+  async function startCheck(submissionId, taskId, userId, files) {
+    const checkId = await insertCheck(db, submissionId, files);
+    // Not awaited: the answer goes out now, the result arrives as a live event
+    runSubmissionCheck(checkId, submissionId, taskId, userId, files);
+    return checkId;
+  }
+
+  // A student submits at most SUBMITS_PER_MINUTE times a minute, and never while one of their
+  // submissions is still being checked: the runner queue and the teacher's inbox stay bounded.
+  // The minute window is taken synchronously, so parallel requests cannot all pass.
+  async function admitSubmit(userId) {
+    const now = Date.now();
+    const list = (recentSubmits.get(userId) || []).filter((t) => now - t < 60000);
+    if (list.length >= SUBMITS_PER_MINUTE) throw httpError(429, `At most ${SUBMITS_PER_MINUTE} submissions a minute.`, { code: 'rate_limited' });
+    list.push(now);
+    recentSubmits.set(userId, list);
+    const [running] = await db.query(
+      `SELECT 1 FROM submission_checks c JOIN task_submissions s ON s.id = c.submission_id
+        WHERE s.user_id = ? AND c.status = 'running' LIMIT 1`,
+      [userId]
+    );
+    if (running.length) throw httpError(429, 'Your last submission is still being checked. Wait for its result.', { code: 'in_flight' });
   }
 
   api.post('/tasks/:id/submit-code', authenticateToken, async (req, res) => {
@@ -232,13 +269,18 @@ function registerTaskCheckRoutes({ api, db, io, authenticateToken, requireAdmin,
       await studentGate(req, req.params.id);
       const check = await loadCheck(req.params.id);
       if (!check || !check.enabled) throw httpError(400, 'This task is not checked automatically: submit a link or a file instead');
+      if (!isAdmin(req)) await admitSubmit(req.user.id);
       const label = `Code: ${files.map((f) => f.path.split('/').pop()).join(', ')}`.slice(0, 250);
-      const [result] = await db.query(
-        'INSERT INTO task_submissions (task_id, user_id, file_name, file_path, file_size, comment) VALUES (?, ?, NULL, NULL, NULL, ?)',
-        [req.params.id, req.user.id, comment ? `${comment}\n\n${label}` : label]
-      );
-      const submissionId = result.insertId;
-      await startCheck(submissionId, req.params.id, req.user.id, files);
+      // The submission and its check row are created together, so a failure leaves neither behind
+      const { submissionId, checkId } = await db.transaction(async (tx) => {
+        const [result] = await tx.query(
+          'INSERT INTO task_submissions (task_id, user_id, file_name, file_path, file_size, comment) VALUES (?, ?, NULL, NULL, NULL, ?) RETURNING id',
+          [req.params.id, req.user.id, comment ? `${comment}\n\n${label}` : label]
+        );
+        return { submissionId: result[0].id, checkId: await insertCheck(tx, result[0].id, files) };
+      });
+      runSubmissionCheck(checkId, submissionId, req.params.id, req.user.id, files); // not awaited
+      // notifySubmission logs its own failures; the submission stands either way
       await notifySubmission(req.params.id, req.user.id, submissionId, { comment: comment || label, kind: 'code' });
       res.status(201).json({ id: submissionId, check: { status: 'running' } });
     } catch (err) {
@@ -279,6 +321,8 @@ function registerTaskCheckRoutes({ api, db, io, authenticateToken, requireAdmin,
         [req.params.id]
       );
       if (rows.length === 0) return res.status(404).json({ error: 'This submission has no code to check' });
+      const [latest] = await db.query('SELECT status FROM submission_checks WHERE submission_id = ? ORDER BY id DESC LIMIT 1', [req.params.id]);
+      if (latest[0].status === 'running') return res.status(409).json({ error: 'This submission is being checked right now.', code: 'running' });
       await startCheck(Number(req.params.id), rows[0].task_id, rows[0].user_id, rows[0].files);
       res.status(202).json({ status: 'running' });
     } catch (err) {

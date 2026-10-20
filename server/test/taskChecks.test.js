@@ -63,7 +63,7 @@ test('auto-checked tasks API', { timeout: 120000 }, async (t) => {
   const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-chk-'));
   const child = startServer({
     port, uploadsDir, adminEmail: 'teacher@example.test',
-    env: { RUNNER_URL: `http://127.0.0.1:${runner.server.address().port}`, RUNNER_TOKEN: 'runner-token-for-tests-0123456789', CHECK_TRIES_PER_MINUTE: '50' },
+    env: { RUNNER_URL: `http://127.0.0.1:${runner.server.address().port}`, RUNNER_TOKEN: 'runner-token-for-tests-0123456789', CHECK_TRIES_PER_MINUTE: '50', CHECK_SUBMITS_PER_MINUTE: '4' },
   });
   t.after(() => { child.kill('SIGTERM'); runner.server.close(); fs.rmSync(uploadsDir, { recursive: true, force: true }); });
   await waitForHealth(child, base);
@@ -153,6 +153,20 @@ test('auto-checked tasks API', { timeout: 120000 }, async (t) => {
   assert.equal((await admin(`/submissions/${sub.body.id}/recheck`, { method: 'POST' })).status, 202);
   await eventually(async () => (await admin(`/submissions/${sub.body.id}/check`)).body.status === 'failed', 'recheck did not finish');
   assert.equal((await dbQuery('SELECT COUNT(*)::int AS n FROM submission_checks WHERE submission_id = $1', [sub.body.id]))[0].n, 2);
+
+  // While a submission is being checked, the student cannot submit again and nobody can re-check it
+  const slowSub = await stud(`/tasks/${taskId}/submit-code`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: '// slow' }] } });
+  assert.equal(slowSub.status, 201);
+  const again = await stud(`/tasks/${taskId}/submit-code`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: 'x' }] } });
+  assert.equal(again.status, 429);
+  assert.equal(again.body.code, 'in_flight');
+  assert.equal((await admin(`/submissions/${slowSub.body.id}/recheck`, { method: 'POST' })).status, 409);
+  await eventually(async () => { runner.release(); return (await stud(`/submissions/${slowSub.body.id}/check`)).body.status === 'failed'; }, 'slow check did not finish');
+  // ...and at most CHECK_SUBMITS_PER_MINUTE (4 here) attempts a minute: the 5th is refused
+  const fourth = await stud(`/tasks/${taskId}/submit-code`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: 'x' }] } });
+  assert.equal(fourth.status, 429);
+  assert.equal(fourth.body.code, 'rate_limited');
+  assert.equal((await admin('/tasks/999999/check', { method: 'DELETE' })).status, 404);
 
   // Tasks without a check refuse code submissions; removing the check turns it off
   assert.equal((await admin(`/tasks/${taskId}/check`, { method: 'DELETE' })).status, 200);
