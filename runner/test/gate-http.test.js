@@ -164,10 +164,11 @@ test('attach splices the caller onto the container stream, for sandboxes only', 
   const frame = await got;
   assert.strictEqual(frame[0], 1);
   assert.strictEqual(frame.subarray(8, 13).toString(), 'hello');
-  // The gate tracks the stream so a shutdown can end it, and forgets it once closed
+  // The gate tracks the stream so a shutdown can end it (what SIGTERM does), and forgets it once closed
   assert.strictEqual(gate.attached.size, 1);
-  a.socket.destroy();
-  for (let i = 0; i < 50 && gate.attached.size; i++) await new Promise((r) => setTimeout(r, 10));
+  const closed = new Promise((r) => a.socket.on('close', r));
+  for (const s of gate.attached) s.destroy();
+  await closed;
   assert.strictEqual(gate.attached.size, 0);
   assert.strictEqual((await attach(FOREIGN)).status, 404);
 });
