@@ -14,7 +14,7 @@
 //   PUT    /notebooks/:id                 owner: {title?, description?, cells?, baseRevision, lessonId?, published?}
 //   DELETE /notebooks/:id                 owner or admin
 //   POST   /notebooks/:id/copy            your own copy
-//   GET    /notebooks/:id/copies          admin, owner of the original: the students' copies
+//   GET    /notebooks/:id/copies          admin (every teacher is one): the students' copies
 //   POST   /notebooks/:id/run             owner: {cells: [{id, kind, source}], upTo, requestId}
 //   GET    /notebooks/queue/:requestId    {position} while a run waits for a free sandbox
 //   GET    /notebooks/session             admin: live session status (one per teacher, tied to a notebook)
@@ -563,6 +563,11 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
   // -------------------------------------------------------------------------
   const inFlight = new Set();
   const recent = new Map(); // userId -> [timestamps] in the last minute
+  // Users who stopped running code drop out, so the map stays as small as the last minute's users
+  setInterval(() => {
+    const now = Date.now();
+    for (const [userId, list] of recent) if (!list.some((t) => now - t < 60000)) recent.delete(userId);
+  }, 5 * 60 * 1000).unref();
 
   // The in-memory checks and the slot are taken before the first await, so two requests from one
   // user can never both pass; a refusal after that gives the slot back.
@@ -578,7 +583,11 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       const [day] = await db.query("SELECT COUNT(*) AS n FROM notebook_runs WHERE user_id = ? AND created_at > NOW() - INTERVAL '1 day'", [userId]);
       if (day[0].n >= RUNS_PER_DAY) throw httpError(429, `You have reached today's limit of ${RUNS_PER_DAY} runs.`, { code: 'daily_limit' });
     } catch (err) {
+      // A refused run neither holds the slot nor counts towards the minute
       inFlight.delete(userId);
+      const i = list.indexOf(now);
+      if (i !== -1) list.splice(i, 1);
+      if (list.length === 0) recent.delete(userId);
       throw err;
     }
   }
@@ -593,6 +602,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
 
   async function nextCount(notebookId, by) {
     const [rows] = await db.query(
+      // '$count' is a literal JSON key; db.js only rewrites '?' placeholders
       `UPDATE notebooks SET outputs = jsonb_set(outputs, '{$count}', to_jsonb(COALESCE((outputs->>'$count')::int, 0) + ?)) WHERE id = ?
        RETURNING (outputs->>'$count')::int AS count`,
       [by, notebookId]
@@ -798,7 +808,16 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
   }
 
   const importUpload = upload.fields([{ name: 'notebook', maxCount: 1 }, { name: 'files', maxCount: 50 }]);
-  const withImport = (handler) => (req, res) => importUpload(req, res, async (uploadErr) => {
+  // `before` runs ahead of multer, so nothing is written to disk for a caller who would be refused
+  const withImport = (handler, before) => async (req, res) => {
+    try {
+      if (before && !(await before(req, res))) return;
+    } catch (err) {
+      return fail(res, err, `${req.method} ${req.path}`);
+    }
+    importUpload(req, res, (uploadErr) => afterImportUpload(handler, req, res, uploadErr));
+  };
+  const afterImportUpload = async (handler, req, res, uploadErr) => {
     const files = Object.values(req.files || {}).flat();
     req.files = files;
     try {
@@ -813,7 +832,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       removeTemp(files);
       fail(res, err, `${req.method} ${req.path}`);
     }
-  });
+  };
 
   const parseFormBool = (v) => v === true || v === 'true' || v === '1';
   const parseFormInt = (v) => (v === undefined || v === '' || v === null || v === 'null' ? null : Number(v));
@@ -839,11 +858,13 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
     });
     const row = await loadRow(id);
     res.status(201).json(full(row, { read: true, edit: true, run: true }));
+  }, async (req) => {
+    await assertNotebookQuota(req); // again before the upload is stored
+    return true;
   }));
 
   api.put('/notebooks/:id/markdown', authenticateToken, withImport(async (req, res) => {
-    const r = await load(req, res, 'edit');
-    if (!r) return;
+    const r = req.notebook; // loaded and checked before the upload
     const { cells: parsed } = parseNotebookMarkdown(readMarkdown(req));
     const cells = normalizeCells(parsed);
     const baseRevision = parseFormInt(req.body.baseRevision);
@@ -864,6 +885,9 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       return rows[0];
     });
     res.json(updated);
+  }, async (req, res) => {
+    req.notebook = await load(req, res, 'edit');
+    return Boolean(req.notebook);
   }));
 
   api.get('/notebooks/:id/export', authenticateToken, async (req, res) => {

@@ -300,6 +300,19 @@ test('notebooks API', { timeout: 120000 }, async (t) => {
   assert.equal((await stud(copiedUrl.replace('/api', ''))).status, 200);
   assert.equal((await stud(`/notebooks/${play.body.id}`, { method: 'DELETE' })).status, 200);
 
+  // Queue positions are looked up under the caller's own id, so one user never sees another's run
+  const teacherId = users.body.find((u) => u.email === 'teacher@example.test').id;
+  await admin('/notebooks/queue/shared-request-1');
+  await stud('/notebooks/queue/shared-request-1');
+  const asked = runner.calls.filter((c) => c.url.startsWith('/queue/')).map((c) => decodeURIComponent(c.url.slice(7)));
+  assert.deepEqual(asked.slice(-2), [`${teacherId}:shared-request-1`, `${studentId}:shared-request-1`]);
+
+  // Replacing someone else's notebook from Markdown is refused before the upload is stored
+  const notMine = new FormData();
+  notMine.append('markdown', '# Taken over');
+  const refusedMd = await stud(`/notebooks/${imported.body.id}/markdown`, { method: 'PUT', form: notMine });
+  assert.ok([403, 404].includes(refusedMd.status), String(refusedMd.status));
+
   // Ids that are not integers are a 404, never a database error
   for (const p of ['/notebooks/abc', '/notebooks/1e3/copies', '/notebook-files/x', '/lessons/abc/notebooks']) {
     assert.equal((await admin(p)).status, 404, p);
