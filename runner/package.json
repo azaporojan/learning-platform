@@ -1,0 +1,12 @@
+{
+  "name": "learning-platform-runner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sandboxed Java runner for Learning Platform notebooks and auto-checked tasks",
+  "license": "ISC",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "check": "node --check src/runner.js && node --check src/gate.js && node --check src/pool.js && node --check src/executor.js && node --check src/sandbox.js && node --check src/gateClient.js && node --check src/protocol.js",
+    "test": "node --test test/*.test.js"
+  }
+}

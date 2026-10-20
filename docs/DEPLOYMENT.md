@@ -43,9 +43,28 @@ there is no Sonar step in CI (CI-based and automatic analysis are mutually exclu
 | `DOKPLOY_WEBHOOK_URL` | `deploy` | Dokploy → project Learning Platform → application → **Deployments** tab → *Webhook URL* (`https://dokploy.bsf.md/api/deploy/<token>`). |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `claude-review.yml` | Token from `claude setup-token`; the [Claude GitHub App](https://github.com/apps/claude) must be installed on the repo. Advisory only. |
 | `DOKPLOY_DASHBOARD_URL` | `rollback` (manual) | `https://dokploy.bsf.md` — informational only. |
+| `DOKPLOY_RUNNER_WEBHOOK_URL` | `runner` | Webhook URL of the **runner** application (Java sandbox API). Optional: without it the runner image is pushed but not redeployed. |
+| `DOKPLOY_GATE_WEBHOOK_URL` | `runner` | Webhook URL of the **runner-gate** application. Optional, same as above. |
 
 `GITHUB_TOKEN` (automatic) pushes the image to GHCR. Dokploy pulls it with the GHCR credentials
 stored on the application (Provider tab); if the package is made **public** those can be removed.
+
+## Java runner (notebooks and checked tasks)
+
+Notebook cells and checked homework run in sandbox containers managed by the runner (`runner/`,
+see `runner/README.md`). It is two more Dokploy applications in the **Learning Platform**
+project, both on `ghcr.io/azaporojan/learning-platform-runner:latest` (pushed by the `runner`
+CI job), with no domain:
+
+| Application | Command | Mounts | Env | Limits |
+|---|---|---|---|---|
+| runner-gate | `node src/gate.js` | `/var/run/docker.sock` → `/var/run/docker.sock` | `GATE_TOKEN` | 128 MiB, 0.25 CPU |
+| runner | (image default) | none | `RUNNER_TOKEN`, `GATE_TOKEN`, `GATE_URL=http://<gate appName>:2376` | 128 MiB, 0.5 CPU |
+
+The platform application gets `RUNNER_URL=http://<runner appName>:8080` and the same
+`RUNNER_TOKEN`. Without `RUNNER_URL` the platform still works; Run buttons answer that the
+runner is not configured. The sandboxes themselves (at most 4 at a time, 384–512 MiB each)
+are plain containers the gate creates on the host, not Dokploy services.
 
 ## First-time bring-up checklist
 

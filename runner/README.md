@@ -1,0 +1,111 @@
+# Runner: sandboxed Java for notebooks and checked tasks
+
+The Learning Platform server sends Java cells and homework submissions here. Each run happens
+in a throwaway container with no network, a hard memory limit and a timeout.
+
+```
+platform (Express) ──HTTP, RUNNER_TOKEN──▶ runner ──HTTP, GATE_TOKEN──▶ gate ──/var/run/docker.sock──▶ sandbox containers
+                                          (no Docker access)            (builds every container itself)   (java lp.Kernel …)
+```
+
+One image (`ghcr.io/azaporojan/learning-platform-runner`) plays all three roles:
+
+| Role | Command | Runs as | Notes |
+|---|---|---|---|
+| runner | `node src/runner.js` (default) | uid 10001 (drops root at start) | HTTP API, pool, warm containers, queue, teacher sessions |
+| gate | `node src/gate.js` | root (needs the Docker socket) | Five operations on sandbox containers only. It never takes an image, command, mount or network from the caller |
+| sandbox | `java lp.Kernel jshell` / `check` | uid 10001 | Created by the gate from the image the gate itself runs, so the host always has it |
+
+## Kernel
+
+`kernel/src/lp/Kernel.java` runs inside the sandbox:
+
+- **jshell**: one JShell with local execution (a single JVM). Cells arrive one at a time; each is
+  split into snippets, evaluated, and answered with stdout, stderr, the value of the last
+  expression, or the first compile or runtime error with its line in the cell. State is kept
+  between cells until the container ends.
+- **check**: compiles the student's files, then the hidden tests against them, and runs only the
+  hidden tests with the JUnit Platform launcher. A `@Test` the student writes is never counted.
+
+The image ships JUnit 5 (console standalone 1.11.4), AssertJ 3.27.3 and Byte Buddy, pinned by
+SHA-256. AssertJ's `assertThat` is imported in every notebook.
+
+Messages from the kernel carry a per-run nonce that the kernel reads from stdin before any
+student code runs, so text a student prints to the real stdout cannot pose as a result.
+Student code still runs in the same JVM as the kernel; a determined student could find the
+nonce in memory. Treat check results as a strong signal, and keep auto-approve off for tasks
+where a forged pass would matter.
+
+## Sandbox limits
+
+| | jshell | check |
+|---|---|---|
+| Memory (no swap) | 384 MiB | 512 MiB |
+| JVM heap | 256 MiB | 320 MiB |
+| CPU | 1 | 1 |
+| Timeout | 15 s per run (all cells), per cell in a session | 30 s, up to 60 s per task |
+| Processes | 64 | 64 |
+| Network | none | none |
+| Filesystem | read-only root, 32 MiB tmpfs `/work`, 16 MiB `/tmp` | same |
+| Privileges | all capabilities dropped, no-new-privileges, uid 10001 | same |
+
+The pool keeps at most `RUNNER_MAX_CONTAINERS` (4) sandboxes alive in any state: booting,
+warm, running, or held by a session. Two warm jshell containers (about 90 MiB each idle) wait
+when there is room, so a notebook run starts in about 100 ms. Requests beyond the ceiling
+queue for up to 20 s (checks up to 2 min, always after waiting notebook runs) and then get 429.
+
+## API
+
+All routes except `/health` need `Authorization: Bearer $RUNNER_TOKEN`.
+
+| Route | Body | Answer |
+|---|---|---|
+| `GET /health` | | `{ok}` |
+| `GET /stats` | | pool, sessions, limits |
+| `POST /run` | `{cells: [string], requestId?}` | `{status, cells: [{index, status, stdout, stderr, value, error, durationMs, truncated}], durationMs, warm, queuedMs}` |
+| `GET /queue/:requestId` | | `{position}`; 0 when the request is no longer waiting |
+| `POST /check` | `{files: [{path, content}], tests: [{path, content}], timeoutMs?}` | `{status, summary, diagnostics, tests: {total, passed, failed: [{name, message}]}, stdout, durationMs}` |
+| `GET /sessions` | | live teacher sessions |
+| `POST /sessions` | `{owner}` | the owner's session (opened if needed) |
+| `POST /sessions/:id/cells` | `{owner, source}` | one cell result plus `executionCount` and `sessionEnded` |
+| `DELETE /sessions/:id?owner=…` | | `{closed}` |
+
+Run status: `ok`, `error` (a cell failed to compile or threw), `timeout`, `oom`, `crashed`
+(System.exit or a JVM crash). Cell status adds `not_run` for cells after the failing one.
+Check status: `passed`, `failed`, `compile_error`, `no_tests`, `timeout`, `oom`, `crashed`, `error`.
+
+## Configuration
+
+| Variable | Used by | Default |
+|---|---|---|
+| `RUNNER_TOKEN` | runner | required, 24+ chars; the platform sends it |
+| `GATE_TOKEN` | runner, gate | required, 24+ chars |
+| `GATE_URL` | runner | `http://gate:2376` |
+| `PORT` / `GATE_PORT` | runner / gate | `8080` / `2376` |
+| `RUNNER_MAX_CONTAINERS`, `RUNNER_WARM`, `RUNNER_MAX_SESSIONS` | runner | 4, 2, 2 |
+| `RUNNER_RUN_TIMEOUT_MS`, `RUNNER_CHECK_TIMEOUT_MS`, `RUNNER_SESSION_IDLE_MS` | runner | 15000, 30000, 600000 |
+| `GATE_JSHELL_MEMORY_MB`, `GATE_CHECK_MEMORY_MB`, `GATE_SANDBOX_CPUS` | gate | 384, 512, 1 |
+| `SANDBOX_IMAGE` | gate | the gate's own image |
+| `GATE_MAX_AGE_MS` | gate | 2 h; no sandbox outlives it |
+
+## Deployment (Dokploy)
+
+Two applications in the **Learning Platform** project, both from the runner image with the same
+GHCR credentials as the platform app:
+
+- **runner-gate**: command `node src/gate.js`, bind mount `/var/run/docker.sock`, env `GATE_TOKEN`,
+  limits 128 MiB / 0.25 CPU. No domain.
+- **runner**: default command, env `RUNNER_TOKEN`, `GATE_TOKEN`, `GATE_URL=http://<gate appName>:2376`,
+  limits 128 MiB / 0.5 CPU. No domain.
+
+The platform app gets `RUNNER_URL=http://<runner appName>:8080` and `RUNNER_TOKEN`. CI builds and
+pushes the image on every push to `main`; set the `DOKPLOY_RUNNER_WEBHOOK_URL` and
+`DOKPLOY_GATE_WEBHOOK_URL` repository secrets to redeploy both automatically.
+
+## Development
+
+```bash
+npm test --prefix runner                       # unit tests
+docker build -t lp-runner:test runner
+RUNNER_IT=1 SANDBOX_IMAGE=lp-runner:test npm test --prefix runner   # real sandboxes (needs Docker)
+```
