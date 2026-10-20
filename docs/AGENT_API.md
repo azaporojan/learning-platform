@@ -382,6 +382,9 @@ same JVM as the tests, so a determined student can forge a pass (SECURITY.md ite
 - Students may run 6 checks a minute, one at a time, and submit 3 times a minute, never while
   their last submission is still being checked (`429` otherwise). Re-checking a submission that
   is being checked answers `409`.
+- Submission lists (`GET /api/tasks/:id/submissions`, `GET /api/admin/submissions`) gain
+  `check_status`, `check_passed` and `check_total` from the newest check (all `null` for
+  submissions without one).
 
 ```bash
 curl -sS -X PUT "$LEARNING_API_URL/tasks/42/check" -H "Authorization: Bearer $LEARNING_API_KEY" \

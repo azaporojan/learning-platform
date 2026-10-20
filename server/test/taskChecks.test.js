@@ -162,10 +162,13 @@ test('auto-checked tasks API', { timeout: 120000 }, async (t) => {
   assert.equal(again.body.code, 'in_flight');
   assert.equal((await admin(`/submissions/${slowSub.body.id}/recheck`, { method: 'POST' })).status, 409);
   await eventually(async () => { runner.release(); return (await stud(`/submissions/${slowSub.body.id}/check`)).body.status === 'failed'; }, 'slow check did not finish');
-  // ...and at most CHECK_SUBMITS_PER_MINUTE (4 here) attempts a minute: the 5th is refused
+  // ...a refused attempt takes no slot, and at most CHECK_SUBMITS_PER_MINUTE (4 here) go through a minute
   const fourth = await stud(`/tasks/${taskId}/submit-code`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: 'x' }] } });
-  assert.equal(fourth.status, 429);
-  assert.equal(fourth.body.code, 'rate_limited');
+  assert.equal(fourth.status, 201, JSON.stringify(fourth.body));
+  await eventually(async () => (await stud(`/submissions/${fourth.body.id}/check`)).body.status === 'failed', 'fourth check did not finish');
+  const fifth = await stud(`/tasks/${taskId}/submit-code`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: 'x' }] } });
+  assert.equal(fifth.status, 429);
+  assert.equal(fifth.body.code, 'rate_limited');
   assert.equal((await admin('/tasks/999999/check', { method: 'DELETE' })).status, 404);
 
   // Tasks without a check refuse code submissions; removing the check turns it off

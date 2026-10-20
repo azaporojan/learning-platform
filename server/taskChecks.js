@@ -57,7 +57,7 @@ function studentView(result) {
   };
 }
 
-function registerTaskCheckRoutes({ api, db, io, authenticateToken, requireAdmin, taskLockReasons, runner, notifySubmission, approveSubmission }) {
+function registerTaskCheckRoutes({ api, db, io, emitToUser, authenticateToken, requireAdmin, taskLockReasons, runner, notifySubmission, approveSubmission }) {
   const isAdmin = (req) => req.user && req.user.role === 'admin';
 
   const fail = (res, err, label) => {
@@ -155,6 +155,7 @@ function registerTaskCheckRoutes({ api, db, io, authenticateToken, requireAdmin,
   const inFlight = new Set();
   const recent = new Map();
   const recentSubmits = new Map();
+  const submitting = new Set(); // users whose submission is being created right now
   setInterval(() => {
     const now = Date.now();
     for (const m of [recent, recentSubmits]) for (const [k, list] of m) if (!list.some((t) => now - t < 60000)) m.delete(k);
@@ -225,7 +226,15 @@ function registerTaskCheckRoutes({ api, db, io, authenticateToken, requireAdmin,
         [unavailable ? 'unavailable' : 'error', unavailable ? 'The checker is not available right now. A teacher will review your code, or it can be checked again later.' : 'The check failed on the server.', checkId]
       ).catch(() => {});
     }
-    io.emit('submission:checked', { submissionId, taskId: Number(taskId), userId });
+    // Only the student and the teachers learn about it, never every connected client
+    const payload = { submissionId, taskId: Number(taskId), userId };
+    emitToUser(userId, 'submission:checked', payload);
+    try {
+      const [admins] = await db.query("SELECT id FROM users WHERE role = 'admin'");
+      for (const a of admins) if (a.id !== userId) emitToUser(a.id, 'submission:checked', payload);
+    } catch (err) {
+      console.error('[check] could not notify teachers:', err.message);
+    }
   }
 
   async function insertCheck(q, submissionId, files) {
@@ -246,21 +255,33 @@ function registerTaskCheckRoutes({ api, db, io, authenticateToken, requireAdmin,
   // A student submits at most SUBMITS_PER_MINUTE times a minute, and never while one of their
   // submissions is still being checked: the runner queue and the teacher's inbox stay bounded.
   // The minute window is taken synchronously, so parallel requests cannot all pass.
+  // The caller holds `submitting` until its submission and check row exist (release it with
+  // doneSubmitting), so a parallel request sees either the slot or the running check.
+  const inFlightError = () => httpError(429, 'Your last submission is still being checked. Wait for its result.', { code: 'in_flight' });
   async function admitSubmit(userId) {
-    const now = Date.now();
-    const list = (recentSubmits.get(userId) || []).filter((t) => now - t < 60000);
-    if (list.length >= SUBMITS_PER_MINUTE) throw httpError(429, `At most ${SUBMITS_PER_MINUTE} submissions a minute.`, { code: 'rate_limited' });
-    list.push(now);
-    recentSubmits.set(userId, list);
-    const [running] = await db.query(
-      `SELECT 1 FROM submission_checks c JOIN task_submissions s ON s.id = c.submission_id
-        WHERE s.user_id = ? AND c.status = 'running' LIMIT 1`,
-      [userId]
-    );
-    if (running.length) throw httpError(429, 'Your last submission is still being checked. Wait for its result.', { code: 'in_flight' });
+    if (submitting.has(userId)) throw inFlightError();
+    submitting.add(userId);
+    try {
+      const [running] = await db.query(
+        `SELECT 1 FROM submission_checks c JOIN task_submissions s ON s.id = c.submission_id
+          WHERE s.user_id = ? AND c.status = 'running' LIMIT 1`,
+        [userId]
+      );
+      if (running.length) throw inFlightError(); // refused: takes no slot in the minute window
+      // Read after the await, but `submitting` keeps this user's requests one at a time
+      const now = Date.now();
+      const list = (recentSubmits.get(userId) || []).filter((t) => now - t < 60000);
+      if (list.length >= SUBMITS_PER_MINUTE) throw httpError(429, `At most ${SUBMITS_PER_MINUTE} submissions a minute.`, { code: 'rate_limited' });
+      list.push(now);
+      recentSubmits.set(userId, list);
+    } catch (err) {
+      submitting.delete(userId);
+      throw err;
+    }
   }
 
   api.post('/tasks/:id/submit-code', authenticateToken, async (req, res) => {
+    let admitted = false;
     try {
       const b = req.body || {};
       const files = normalizeFiles(b.files, 'files');
@@ -269,7 +290,7 @@ function registerTaskCheckRoutes({ api, db, io, authenticateToken, requireAdmin,
       await studentGate(req, req.params.id);
       const check = await loadCheck(req.params.id);
       if (!check || !check.enabled) throw httpError(400, 'This task is not checked automatically: submit a link or a file instead');
-      if (!isAdmin(req)) await admitSubmit(req.user.id);
+      if (!isAdmin(req)) { await admitSubmit(req.user.id); admitted = true; }
       const label = `Code: ${files.map((f) => f.path.split('/').pop()).join(', ')}`.slice(0, 250);
       // The submission and its check row are created together, so a failure leaves neither behind
       const { submissionId, checkId } = await db.transaction(async (tx) => {
@@ -280,11 +301,14 @@ function registerTaskCheckRoutes({ api, db, io, authenticateToken, requireAdmin,
         return { submissionId: result[0].id, checkId: await insertCheck(tx, result[0].id, files) };
       });
       runSubmissionCheck(checkId, submissionId, req.params.id, req.user.id, files); // not awaited
-      // notifySubmission logs its own failures; the submission stands either way
-      await notifySubmission(req.params.id, req.user.id, submissionId, { comment: comment || label, kind: 'code' });
+      // Not awaited: notifySubmission logs its own failures, and the submission stands either way
+      notifySubmission(req.params.id, req.user.id, submissionId, { comment: comment || label, kind: 'code' });
       res.status(201).json({ id: submissionId, check: { status: 'running' } });
     } catch (err) {
       fail(res, err, 'POST /tasks/:id/submit-code');
+    } finally {
+      // The check row now exists (or nothing was created): the running-check query takes over
+      if (admitted) submitting.delete(req.user.id);
     }
   });
 

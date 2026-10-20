@@ -1362,7 +1362,7 @@ require('./notebooks').registerNotebookRoutes({ api, db, authenticateToken, requ
 // which are function declarations below (hoisted).
 const taskChecks = require('./taskChecks');
 const taskCheckRoutes = taskChecks.registerTaskCheckRoutes({
-  api, db, io, authenticateToken, requireAdmin, taskLockReasons: courseRoutes.taskLockReasons, runner,
+  api, db, io, emitToUser, authenticateToken, requireAdmin, taskLockReasons: courseRoutes.taskLockReasons, runner,
   notifySubmission: (...a) => notifySubmission(...a), approveSubmission: (...a) => approveSubmission(...a),
 });
 
@@ -2029,7 +2029,13 @@ async function approveSubmission(id, { auto = false } = {}) {
   const [submissions] = await db.query('SELECT * FROM task_submissions WHERE id = ?', [id]);
   if (submissions.length === 0) return false;
   const submission = submissions[0];
-  await db.query("UPDATE task_submissions SET status = 'approved' WHERE id = ?", [id]);
+  // Auto-approval only takes a submission that is still pending, so it never overrides a teacher's
+  // decision made while the check ran, and never approves (and notifies) twice
+  const [updated] = await db.query(
+    `UPDATE task_submissions SET status = 'approved' WHERE id = ?${auto ? " AND status = 'pending'" : ''} RETURNING id`,
+    [id]
+  );
+  if (updated.length === 0) return false;
   const [progress] = await db.query(
     "SELECT * FROM user_progress WHERE user_id = ? AND entity_type = 'task' AND entity_id = ?",
     [submission.user_id, submission.task_id]

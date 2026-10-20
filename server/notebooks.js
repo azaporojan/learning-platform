@@ -264,9 +264,9 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
     return type && type.ok(head.subarray(0, n));
   }
 
-  // Bytes are shared between copies: delete them only when no row points at them any more.
   // Stored images no row points at any more (an account deletion cascades the rows, not the bytes).
-  // Only files older than a day go, so an upload still in flight is never touched.
+  // Only files older than a day go, so an upload still in flight is never touched. The directory
+  // holds only notebook images (multer writes nothing else there).
   async function sweepOrphanFiles() {
     try {
       const cutoff = Date.now() - 24 * 60 * 60 * 1000;
@@ -274,7 +274,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
         try { return fs.statSync(path.join(dir, name)).mtimeMs < cutoff; } catch { return false; }
       });
       if (old.length === 0) return;
-      const [rows] = await db.query('SELECT DISTINCT stored_name FROM notebook_files WHERE stored_name = ANY(?::text[])', [old]);
+      const [rows] = await db.query('SELECT DISTINCT stored_name FROM notebook_files WHERE stored_name = ANY(?::text[])', [old]); // one array parameter, not a row list
       const kept = new Set(rows.map((r) => r.stored_name));
       const gone = old.filter((name) => !kept.has(name));
       for (const name of gone) fs.unlink(path.join(dir, name), () => {});
@@ -286,6 +286,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
   setTimeout(sweepOrphanFiles, 30 * 1000).unref();
   setInterval(sweepOrphanFiles, 24 * 60 * 60 * 1000).unref();
 
+  // Bytes are shared between copies: delete them only when no row points at them any more.
   async function removeUnreferenced(storedNames) {
     for (const name of new Set(storedNames)) {
       const [rows] = await db.query('SELECT 1 FROM notebook_files WHERE stored_name = ? LIMIT 1', [name]);
