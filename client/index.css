@@ -150,3 +150,65 @@
     animation: none;
   }
 }
+
+/* ===================================================================== */
+/* Notebooks                                                              */
+/* ===================================================================== */
+.lp-cm .cm-editor { font-size: 14px; background: transparent; }
+.lp-cm .cm-editor.cm-focused { outline: none; }
+.lp-cm .cm-scroller { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.55; }
+.lp-cm-code .cm-content { padding: 8px 0; min-height: 2.6em; }
+.lp-cm-text .cm-content { padding: 10px 12px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13.5px; }
+.lp-cm .cm-gutters { background: transparent; border: none; color: #9ca3af; }
+.lp-cm .cm-lineNumbers .cm-gutterElement { padding: 0 8px 0 10px; min-width: 2.2em; font-size: 12px; }
+.lp-cm .cm-activeLine { background: rgba(163, 230, 53, 0.08); }
+.lp-cm .cm-activeLineGutter { background: transparent; color: #4b5563; }
+.lp-cm .cm-editor:not(.cm-focused) .cm-activeLine { background: transparent; }
+.lp-cm .cm-editor:not(.cm-focused) .cm-activeLineGutter { color: #9ca3af; }
+.lp-cm .cm-placeholder { color: #9ca3af; font-style: italic; }
+.lp-cm .cm-error-line { background: rgba(244, 63, 94, 0.12) !important; }
+.lp-cm .cm-selectionBackground, .lp-cm .cm-editor.cm-focused .cm-selectionBackground { background: rgba(101, 163, 13, 0.25) !important; }
+.lp-cm .cm-matchingBracket { background: rgba(101, 163, 13, 0.25); outline: none; }
+.lp-cm .cm-tooltip-autocomplete { border-radius: 8px; border-color: #e5e7eb; box-shadow: 0 8px 24px rgba(0,0,0,.08); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; }
+.lp-cm .cm-tooltip-autocomplete ul li[aria-selected] { background: #65a30d; }
+.lp-present .lp-cm .cm-editor { font-size: 20px; }
+
+/* Token colours (classHighlighter), shared by editors and highlighted code in text cells */
+.tok-keyword, .tok-modifier, .tok-operatorKeyword, .tok-controlKeyword, .tok-definitionKeyword { color: #7c3aed; font-weight: 600; }
+.tok-typeName, .tok-className { color: #0e7490; }
+.tok-string, .tok-string2 { color: #15803d; }
+.tok-number, .tok-bool, .tok-atom, .tok-null { color: #c2410c; }
+.tok-comment, .tok-lineComment, .tok-blockComment { color: #9ca3af; font-style: italic; }
+.tok-variableName.tok-definition, .tok-function { color: #1d4ed8; }
+.tok-propertyName { color: #374151; }
+.tok-meta, .tok-annotation { color: #b45309; }
+.tok-punctuation, .tok-operator { color: #4b5563; }
+.tok-heading { color: #111827; font-weight: 800; }
+.tok-emphasis { font-style: italic; }
+.tok-strong { font-weight: 800; }
+.tok-link, .tok-url { color: #2563eb; text-decoration: underline; }
+.tok-monospace { color: #be185d; }
+
+/* Cells */
+.lp-cell { padding: 4px 0; }
+.lp-cell-selected { background: rgba(14, 165, 233, 0.035); }
+.lp-cell-running .rounded-lg.border { animation: lp-pulse 1.2s ease-in-out infinite; }
+@keyframes lp-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(101, 163, 13, 0.0); border-color: #a3e635; } 50% { box-shadow: 0 0 0 4px rgba(101, 163, 13, 0.18); border-color: #65a30d; } }
+.lp-spinner { width: 18px; height: 18px; border-radius: 9999px; border: 2.5px solid rgba(101, 163, 13, 0.25); border-top-color: #65a30d; animation: lp-spin .8s linear infinite; display: inline-block; }
+@keyframes lp-spin { to { transform: rotate(360deg); } }
+.lp-output-text { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; margin: 0; }
+.lp-flash { animation: lp-flash 1.2s ease-out; }
+@keyframes lp-flash { from { background: rgba(163, 230, 53, 0.28); } to { background: transparent; } }
+.lp-code-block { background: #f8fafc !important; color: #1f2937 !important; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px 14px !important; font-size: 13.5px; overflow-x: auto; }
+.lp-code-block code { background: transparent !important; color: inherit; font-weight: 400; }
+.lp-code-block code::before, .lp-code-block code::after { content: none !important; }
+.lp-callout > p { margin: 0.25rem 0; }
+.lp-mermaid svg { max-width: 100%; height: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-cell-running .rounded-lg.border, .lp-flash, .lp-spinner { animation: none; }
+}
+/* Code is shown exactly as typed: no "->" or ">=" ligatures from whatever monospace font is installed */
+.lp-cm .cm-content, .lp-output-text, .lp-code-block, .lp-code-block code { font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
+.lp-present .lp-code-block { font-size: 18px; }
+.lp-present .lp-output-text { font-size: 17px; }

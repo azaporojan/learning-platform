@@ -226,6 +226,10 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
                   My courses
                 </NavLink>
               )}
+              <NavLink to="/notebooks" className={navLinkClass}>
+                <span className="material-icons text-lg mr-1.5">menu_book</span>
+                Notebooks
+              </NavLink>
               <NavLink to="/users" className={navLinkClass}>
                 <span className="material-icons text-lg mr-1.5">group</span>
                 Users
@@ -359,6 +363,10 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
                           <span className="text-sm text-gray-700 dark:text-gray-300">My courses</span>
                         </Link>
                       )}
+                      <Link to="/notebooks" onClick={() => setShowUserMenu(false)} className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+                        <span className="material-icons text-gray-600 dark:text-gray-400">menu_book</span>
+                        <span className="text-sm text-gray-700 dark:text-gray-300">Notebooks</span>
+                      </Link>
                       <Link to="/users" onClick={() => setShowUserMenu(false)} className="w-full px-4 py-3 text-left flex items-center space-x-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                         <span className="material-icons text-gray-600 dark:text-gray-400">group</span>
                         <span className="text-sm text-gray-700 dark:text-gray-300">Users</span>

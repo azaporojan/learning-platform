@@ -293,6 +293,68 @@ The text after `tests` is the panel title. The masked column is the first header
 The **Tests** button of the description editor inserts a template. The block only hides the
 answers in the UI: they are part of the task text the API returns, so it is a study aid, not a secret.
 
+## 5e. Notebooks (runnable Java lessons)
+
+A notebook is a list of **code** and **text** cells. Code cells run in the sandbox runner
+(`runner/`, see `runner/README.md`); text cells are Markdown with images, Mermaid diagrams and
+callouts (`> **Note** …`, `> **Tip**`, `> **Goal**`, `> **Warning**`, `> **Important**`, `> **ISTQB**`,
+`> **Exercise**`). A teacher's notebook is either attached to a lesson (`lessonId`) or a
+playground (`lessonId: null`), and students see it only when it is **published** (and, when
+attached, when they have reached the lesson's phase). Students never edit it: **Copy** gives them
+their own notebook pointing back at the original.
+
+| Method & path | Body | Purpose |
+|---|---|---|
+| `GET /api/notebooks?scope=mine\|teacher\|students&kind=lesson\|playground&lessonId=&q=` | — | Summaries; `students` is admin-only |
+| `POST /api/notebooks` | `{title, description?, lessonId?, published?, cells?}` | Create (cells default to a heading and one empty code cell) |
+| `GET /api/notebooks/:id` | — | Full notebook: `cells`, `outputs`, `revision`, `version`, `can_edit`, `can_run` |
+| `PUT /api/notebooks/:id` | `{title?, description?, lessonId?, published?, cells?, baseRevision}` | Save; `cells` needs the current `revision` as `baseRevision`, else `409` |
+| `DELETE /api/notebooks/:id` | — | Owner or admin; copies keep working ("original removed") |
+| `POST /api/notebooks/:id/copy` | — | Your own copy (same lesson, no outputs) |
+| `GET /api/notebooks/:id/copies` | — | Admin: the students' copies of a notebook |
+| `POST /api/notebooks/:id/run` | `{cells?, upTo?, requestId?}` | Owner: run the code cells up to `upTo` (a cell id), in order, in a fresh sandbox |
+| `POST /api/notebooks/:id/files` | multipart `file` (PNG, JPEG, GIF, WebP, SVG; 5 MB) | Image for a text cell → `{id, url}`; use `url` in `![alt](url)` |
+| `POST /api/notebooks/import` | multipart: `notebook` (.md) or `markdown`, `files` (images), `title?`, `lessonId?`, `published?` | Create from Markdown |
+| `PUT /api/notebooks/:id/markdown` | multipart, same fields + `baseRevision?` | Replace the cells from Markdown (outputs cleared) |
+| `GET /api/notebooks/:id/export` | — | The notebook as Markdown |
+| `GET /api/lessons/:id/notebooks` | — | Teacher notebooks of a lesson, with `my_copy_id` |
+
+### Markdown format
+
+````markdown
+# Streams: filter, map, collect
+
+> **Goal** By the end you can turn a loop into a stream pipeline.
+
+![Pipeline](img/pipeline.png)
+
+```java run
+record User(String name, int age) {}
+var users = List.of(new User("Ana", 31), new User("Ion", 17));
+```
+
+Now keep only the adults. `filter` takes a predicate.
+
+```java run
+users.stream().filter(u -> u.age() >= 18).toList()
+```
+````
+
+- Every ` ```java run ` fence is a code cell; the text between code cells is one text cell.
+  `<!-- cell -->` on its own line splits two text cells.
+- Other fences (` ```java ` without `run`, ` ```mermaid `, …) stay inside the text cell.
+- The first `# ` heading becomes the title unless `title` is sent.
+- Relative image paths (`img/pipeline.png`) are matched to the uploaded `files` by name.
+- Each code cell runs in **JShell**: no `class Main`/`main` needed; the value of a cell's last
+  expression is shown. `java.util.*`, streams, `java.time.*`, `java.nio.file.*` and AssertJ's
+  `assertThat` are imported. Limits per run: 15 s, 384 MB, no network.
+
+```bash
+curl -sS -X POST "$LEARNING_API_URL/notebooks/import" -H "Authorization: Bearer $LEARNING_API_KEY" \
+  -F "notebook=@streams.md" -F "files=@img/pipeline.png;filename=img/pipeline.png" \
+  -F "lessonId=12" -F "published=true"
+```
+
 ## 6. Using it from a Claude agent
 
 **Review before students see it.** Imported content goes live immediately, and lesson/task

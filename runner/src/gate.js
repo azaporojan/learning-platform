@@ -301,6 +301,7 @@ function createGate({ image }) {
       if (!authorized(req)) return fail(401, 'Unauthorized');
       const sandbox = await inspectSandbox(parts[1]);
       if (!sandbox) return fail(404, 'Not Found');
+      if (socket.destroyed) return; // the caller left while we looked the sandbox up
       const upstream = net.connect(DOCKER_SOCKET);
       upstream.on('error', () => { upstream.destroy(); socket.destroy(); });
       upstream.on('connect', () => {

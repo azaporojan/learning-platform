@@ -102,6 +102,8 @@ app.use(cors({
   },
   credentials: true
 }));
+// Notebooks save all their cells at once; everything else keeps the 1 MB ceiling
+app.use('/api/notebooks', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
@@ -156,7 +158,10 @@ api.use('/uploads', (req, res, next) => {
   let decoded;
   try { decoded = decodeURIComponent(req.path); } catch { return res.status(404).json({ error: 'Not found' }); }
   const normalised = path.posix.normalize(`/${decoded.replace(/\\/g, '/')}`).toLowerCase();
-  if (normalised === '/lesson-files' || normalised.startsWith('/lesson-files/')) return res.status(404).json({ error: 'Not found' });
+  // Lesson materials and notebook images are served only through their own routes, which check access
+  for (const guarded of ['/lesson-files', '/notebook-files']) {
+    if (normalised === guarded || normalised.startsWith(`${guarded}/`)) return res.status(404).json({ error: 'Not found' });
+  }
   next();
 });
 api.use('/uploads', express.static(uploadsDir, {
@@ -1350,6 +1355,9 @@ courseRoutes.registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin
 const studySets = require('./studySets');
 studySets.registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons });
 const lessonFiles = require('./lessonFiles').registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons, uploadsDir });
+// Java notebooks; code runs in the sandbox runner (runner/, RUNNER_URL + RUNNER_TOKEN)
+const runner = require('./runnerClient').createRunnerClient();
+require('./notebooks').registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons, uploadsDir, runner });
 
 api.get('/paths', async (req, res) => {
   const userId = await optionalUserId(req);

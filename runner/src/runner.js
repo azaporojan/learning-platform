@@ -172,6 +172,8 @@ function createRunner({ executor, sessions, pool, token }) {
       if (err instanceof HttpError) return send(res, err.status, { error: err.message, ...(err.extra || {}) });
       if (err instanceof BusyError) return send(res, 429, { error: err.message, code: 'busy' });
       if (err instanceof SessionError) return send(res, err.code === 'no_session' ? 404 : err.code === 'busy' ? 409 : 429, { error: err.message, code: err.code });
+      // The gate's own ceiling: as busy as a full pool, so callers retry instead of reporting a failure
+      if (err.status === 429) return send(res, 429, { error: 'Every sandbox is in use. Try again in a moment.', code: 'busy' });
       console.error('[runner] request failed:', err.stack || err.message || err);
       if (res.headersSent) return;
       // Gate answers and network failures towards the gate are transient (502); anything else is a bug (500)
@@ -251,11 +253,19 @@ async function main() {
     }).catch((err) => console.error('[runner] sweep failed:', err.message));
   }, 30000).unref();
 
+  // Remove our sandboxes, then exit whatever happens; a stuck shutdown never outlives 10 s
   const stop = async () => {
+    setTimeout(() => process.exit(0), 10000).unref();
     server.close();
-    await sessions.shutdown();
-    await pool.shutdown();
-    process.exit(0);
+    server.closeAllConnections();
+    try {
+      await sessions.shutdown();
+      await pool.shutdown();
+    } catch (err) {
+      console.error('[runner] shutdown failed:', err.message || err);
+    } finally {
+      process.exit(0);
+    }
   };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
