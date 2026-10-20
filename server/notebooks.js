@@ -43,6 +43,11 @@ const MAX_FILES_PER_NOTEBOOK = 200;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const RUNS_PER_MINUTE = Math.max(1, parseInt(process.env.NOTEBOOK_RUNS_PER_MINUTE || '10', 10));
 const RUNS_PER_DAY = Math.max(1, parseInt(process.env.NOTEBOOK_RUNS_PER_DAY || '200', 10));
+// Students only (teachers are trusted with their own server): notebooks and image bytes per user
+const MAX_NOTEBOOKS_PER_STUDENT = Math.max(1, parseInt(process.env.NOTEBOOK_MAX_PER_STUDENT || '100', 10));
+const MAX_IMAGE_MB_PER_STUDENT = Math.max(1, parseInt(process.env.NOTEBOOK_IMAGE_MB_PER_STUDENT || '50', 10));
+// Ids in paths are plain integers; anything else is a 404 rather than a database error
+const validId = (v) => /^\d{1,9}$/.test(String(v));
 const CELL_ID = /^[A-Za-z0-9_-]{1,40}$/;
 const FILE_URL = /\/api\/notebook-files\/(\d{1,9})/g;
 
@@ -125,6 +130,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       LEFT JOIN users su ON su.id = src.owner_id`;
 
   async function loadRow(id) {
+    if (!validId(id)) return null;
     const [rows] = await db.query(`${SUMMARY_SQL} WHERE n.id = ?`, [id]);
     return rows[0] || null;
   }
@@ -155,6 +161,27 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       return null;
     }
     return { row, access };
+  }
+
+  async function assertNotebookQuota(req) {
+    if (isAdmin(req)) return;
+    const [rows] = await db.query('SELECT COUNT(*) AS n FROM notebooks WHERE owner_id = ?', [req.user.id]);
+    if (rows[0].n >= MAX_NOTEBOOKS_PER_STUDENT) {
+      throw httpError(400, `You can keep at most ${MAX_NOTEBOOKS_PER_STUDENT} notebooks. Delete some you no longer need.`, { code: 'notebook_limit' });
+    }
+  }
+
+  // Bytes are counted once per stored file, so copies of your own notebooks do not count twice
+  async function assertImageQuota(req, addBytes) {
+    if (isAdmin(req) || addBytes <= 0) return;
+    const [rows] = await db.query(
+      `SELECT COALESCE(SUM(size_bytes), 0)::bigint AS used
+         FROM (SELECT DISTINCT stored_name, size_bytes FROM notebook_files WHERE uploaded_by = ?) f`,
+      [req.user.id]
+    );
+    if (Number(rows[0].used) + addBytes > MAX_IMAGE_MB_PER_STUDENT * 1024 * 1024) {
+      throw httpError(400, `Your notebook images can use at most ${MAX_IMAGE_MB_PER_STUDENT} MB. Delete some first.`, { code: 'image_limit' });
+    }
   }
 
   function summary(row, extra = {}) {
@@ -329,6 +356,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
 
   api.get('/lessons/:id/notebooks', authenticateToken, async (req, res) => {
     try {
+      if (!validId(req.params.id)) return res.status(404).json({ error: 'Lesson not found' });
       const [lessons] = await db.query('SELECT id, path_id FROM lessons WHERE id = ?', [req.params.id]);
       if (lessons.length === 0) return res.status(404).json({ error: 'Lesson not found' });
       const reasons = isAdmin(req) ? [] : await phaseLockReasons(db, req.user.id, lessons[0].path_id);
@@ -360,6 +388,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       if (!title || title.length > 255) throw httpError(400, 'title is required (max 255 characters)');
       if (b.description !== undefined && (typeof b.description !== 'string' || b.description.length > 4000)) throw httpError(400, 'description must be text (max 4000 characters)');
       if (!isAdmin(req) && (b.lessonId !== undefined && b.lessonId !== null)) throw httpError(403, 'Only teachers attach notebooks to lessons. Copy a lesson notebook instead.');
+      await assertNotebookQuota(req);
       const lessonId = await validLessonId(b.lessonId);
       const cells = b.cells === undefined
         ? [{ id: newCellId(), kind: 'text', source: `# ${title}` }, { id: newCellId(), kind: 'code', source: '' }]
@@ -478,6 +507,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       const [files] = await db.query('SELECT stored_name FROM notebook_files WHERE notebook_id = ?', [row.id]);
       await db.query('DELETE FROM notebooks WHERE id = ?', [row.id]);
       await removeUnreferenced(files.map((f) => f.stored_name));
+      closeNotebookSession(row.owner_id, row.id); // a live session would otherwise idle out
       res.json({ success: true });
     } catch (err) {
       fail(res, err, 'DELETE /notebooks/:id');
@@ -498,6 +528,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       if (!r) return;
       const src = r.row;
       const own = src.owner_id === req.user.id;
+      await assertNotebookQuota(req);
       const id = await db.transaction(async (tx) => {
         const title = (own ? `Copy of ${src.title}` : src.title).slice(0, 255);
         const [rows] = await tx.query(
@@ -519,6 +550,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
 
   api.get('/notebooks/:id/copies', authenticateToken, requireAdmin, async (req, res) => {
     try {
+      if (!validId(req.params.id)) return res.status(404).json({ error: 'Notebook not found' });
       const [rows] = await db.query(`${SUMMARY_SQL} WHERE n.copied_from_id = ? ORDER BY COALESCE(n.last_run_at, n.updated_at) DESC`, [req.params.id]);
       res.json(rows.map((r) => summary(r)));
     } catch (err) {
@@ -532,16 +564,23 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
   const inFlight = new Set();
   const recent = new Map(); // userId -> [timestamps] in the last minute
 
+  // The in-memory checks and the slot are taken before the first await, so two requests from one
+  // user can never both pass; a refusal after that gives the slot back.
   async function admitRun(userId) {
     if (inFlight.has(userId)) throw httpError(429, 'A run is already in progress. Wait for it to finish.', { code: 'in_flight' });
     const now = Date.now();
     const list = (recent.get(userId) || []).filter((t) => now - t < 60000);
     if (list.length >= RUNS_PER_MINUTE) throw httpError(429, `At most ${RUNS_PER_MINUTE} runs a minute. Wait a few seconds and run again.`, { code: 'rate_limited' });
-    const [day] = await db.query("SELECT COUNT(*) AS n FROM notebook_runs WHERE user_id = ? AND created_at > NOW() - INTERVAL '1 day'", [userId]);
-    if (day[0].n >= RUNS_PER_DAY) throw httpError(429, `You have reached today's limit of ${RUNS_PER_DAY} runs.`, { code: 'daily_limit' });
+    inFlight.add(userId);
     list.push(now);
     recent.set(userId, list);
-    inFlight.add(userId);
+    try {
+      const [day] = await db.query("SELECT COUNT(*) AS n FROM notebook_runs WHERE user_id = ? AND created_at > NOW() - INTERVAL '1 day'", [userId]);
+      if (day[0].n >= RUNS_PER_DAY) throw httpError(429, `You have reached today's limit of ${RUNS_PER_DAY} runs.`, { code: 'daily_limit' });
+    } catch (err) {
+      inFlight.delete(userId);
+      throw err;
+    }
   }
 
   async function saveOutputs(notebookId, newOutputs, count) {
@@ -604,6 +643,13 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
   // one notebook (owner "<user>:nb<notebook>"), so variables never leak from one notebook into
   // another; opening it on a notebook ends that teacher's session on any other notebook.
   const sessionOwner = (userId, notebookId) => `${userId}:nb${notebookId}`;
+  function closeNotebookSession(userId, notebookId) {
+    const owner = sessionOwner(userId, notebookId);
+    runner.stats()
+      .then((s) => Promise.all((s.sessions || []).filter((x) => x.owner === owner).map((x) => runner.closeSession(x.id, owner))))
+      .catch(() => {}); // runner not configured or down: the session idles out on its own
+  }
+
   async function teacherSessions(userId) {
     const list = await runner.stats().then((s) => s.sessions || []);
     return list.filter((s) => String(s.owner).startsWith(`${userId}:nb`));
@@ -636,8 +682,10 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       }
       db.query('INSERT INTO notebook_runs (user_id, notebook_id, mode, cell_count, status, duration_ms) VALUES (?, ?, ?, ?, ?, ?)',
         [req.user.id, r.row.id, 'session', 1, result.status, result.durationMs || 0]).catch(() => {});
-      const output = storedOutput(result, result.executionCount);
-      await saveOutputs(r.row.id, { [cellId]: output }, result.executionCount);
+      // The notebook's own counter, shared with batch runs (the session's restarts at 1)
+      const count = await nextCount(r.row.id, 1);
+      const output = storedOutput(result, count);
+      await saveOutputs(r.row.id, { [cellId]: output }, count);
       res.json({ output, sessionEnded: Boolean(result.sessionEnded), sessionRestarted: restarted || session.executionCount === 0 });
     } catch (err) {
       fail(res, err, 'POST /notebooks/:id/session/run');
@@ -681,6 +729,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
           if (!checkImage(req.file)) throw httpError(400, 'This file does not look like the image type its name says');
           const [count] = await db.query('SELECT COUNT(*) AS n FROM notebook_files WHERE notebook_id = ?', [r.row.id]);
           if (count[0].n >= MAX_FILES_PER_NOTEBOOK) throw httpError(400, `A notebook can hold at most ${MAX_FILES_PER_NOTEBOOK} images`);
+          await assertImageQuota(req, req.file.size);
           const id = await insertFile(db, r.row.id, req.file, req.user.id);
           res.status(201).json({ id, url: `/api/notebook-files/${id}` });
         } catch (err) {
@@ -695,6 +744,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
 
   api.get('/notebook-files/:id', authenticateToken, async (req, res) => {
     try {
+      if (!validId(req.params.id)) return res.status(404).json({ error: 'File not found' });
       const [rows] = await db.query('SELECT * FROM notebook_files WHERE id = ?', [req.params.id]);
       if (rows.length === 0) return res.status(404).json({ error: 'File not found' });
       const row = await loadRow(rows[0].notebook_id);
@@ -730,6 +780,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
     const images = (req.files || []).filter((f) => f.fieldname === 'files');
     if (images.length === 0) return cells;
     for (const f of images) if (!checkImage(f)) throw httpError(400, `"${f.originalname}" does not look like the image type its name says`);
+    await assertImageQuota(req, images.reduce((n, f) => n + f.size, 0));
     const byName = new Map();
     for (const f of images) {
       const id = await insertFile(tx, notebookId, f, req.user.id);
@@ -775,6 +826,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
     if (lessonId !== null && !isAdmin(req)) throw httpError(403, 'Only teachers attach notebooks to lessons');
     await validLessonId(lessonId);
     const published = isAdmin(req) && parseFormBool(req.body.published);
+    await assertNotebookQuota(req);
     const id = await db.transaction(async (tx) => {
       const [rows] = await tx.query(
         `INSERT INTO notebooks (owner_id, title, description, lesson_id, published, cells) VALUES (?, ?, ?, ?, ?, '[]'::jsonb) RETURNING id`,

@@ -102,7 +102,9 @@ app.use(cors({
   },
   credentials: true
 }));
-app.use(express.json({ limit: '2mb' })); // notebooks save all their cells at once
+// Notebooks save all their cells at once; everything else keeps the 1 MB ceiling
+app.use('/api/notebooks', express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
 // Rate limits: a general per-IP ceiling for the API and a much tighter one for the

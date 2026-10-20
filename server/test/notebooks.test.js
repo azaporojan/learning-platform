@@ -67,6 +67,9 @@ function fakeRunner() {
       calls.push({ method: req.method, url: req.url, json, auth: req.headers.authorization });
       const send = (status, data) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
       if (req.headers.authorization !== 'Bearer runner-token-for-tests-0123456789') return send(401, { error: 'unauthorized' });
+      if (req.url === '/run' && json.cells.some((c) => c.includes('SLOW'))) {
+        return setTimeout(() => send(200, { status: 'ok', cells: json.cells.map((src, index) => ({ index, status: 'ok', stdout: '', stderr: '', value: src, error: null, durationMs: 300 })), durationMs: 300, warm: true, queuedMs: 0 }), 300);
+      }
       if (req.url === '/run') {
         const failAt = json.cells.findIndex((c) => c.includes('FAIL'));
         const cells = json.cells.map((src, index) => {
@@ -108,7 +111,7 @@ test('notebooks API', { timeout: 120000 }, async (t) => {
   const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-nb-'));
   const child = startServer({
     port, uploadsDir, adminEmail: 'teacher@example.test',
-    env: { RUNNER_URL: `http://127.0.0.1:${runner.server.address().port}`, RUNNER_TOKEN: 'runner-token-for-tests-0123456789', NOTEBOOK_RUNS_PER_MINUTE: '50' },
+    env: { RUNNER_URL: `http://127.0.0.1:${runner.server.address().port}`, RUNNER_TOKEN: 'runner-token-for-tests-0123456789', NOTEBOOK_RUNS_PER_MINUTE: '50', NOTEBOOK_MAX_PER_STUDENT: '6' },
   });
   t.after(() => { child.kill('SIGTERM'); runner.server.close(); fs.rmSync(uploadsDir, { recursive: true, force: true }); });
   await waitForHealth(child, base);
@@ -296,4 +299,41 @@ test('notebooks API', { timeout: 120000 }, async (t) => {
   assert.equal(orphan.body.copied_from.removed, true);
   assert.equal((await stud(copiedUrl.replace('/api', ''))).status, 200);
   assert.equal((await stud(`/notebooks/${play.body.id}`, { method: 'DELETE' })).status, 200);
+
+  // Ids that are not integers are a 404, never a database error
+  for (const p of ['/notebooks/abc', '/notebooks/1e3/copies', '/notebook-files/x', '/lessons/abc/notebooks']) {
+    assert.equal((await admin(p)).status, 404, p);
+  }
+
+  // A student's own image counts against their quota (50 MB by default), so a small one is fine
+  const stuForm = new FormData();
+  stuForm.append('file', new Blob([PNG], { type: 'image/png' }), 'mine.png');
+  assert.equal((await stud(`/notebooks/${copy.body.id}/files`, { method: 'POST', form: stuForm })).status, 201);
+
+  // One run at a time per user, even when two requests arrive together
+  const slow = await stud('/notebooks', { method: 'POST', json: { title: 'Slow', cells: [{ id: 's1', kind: 'code', source: 'SLOW' }] } });
+  const both = await Promise.all([1, 2].map(() => stud(`/notebooks/${slow.body.id}/run`, { method: 'POST', json: {} })));
+  assert.deepEqual(both.map((r) => r.status).sort(), [200, 429]);
+  assert.equal(both.find((r) => r.status === 429).body.code, 'in_flight');
+
+  // Deleting a lesson unpublishes its notebooks before they become playgrounds
+  const doomed = await admin('/lessons', { method: 'POST', json: { pathId: p1.body.id, title: 'Doomed', order: 9 } });
+  const doomedNb = await admin('/notebooks', { method: 'POST', json: { title: 'Doomed notebook', lessonId: doomed.body.id, published: true } });
+  assert.equal((await stud(`/notebooks/${doomedNb.body.id}`)).status, 200);
+  assert.equal((await admin(`/lessons/${doomed.body.id}`, { method: 'DELETE' })).status, 200);
+  const after = await admin(`/notebooks/${doomedNb.body.id}`);
+  assert.equal(after.body.published, false);
+  assert.equal(after.body.kind, 'playground');
+  assert.equal((await stud(`/notebooks/${doomedNb.body.id}`)).status, 404);
+
+  // Students keep a bounded number of notebooks (NOTEBOOK_MAX_PER_STUDENT=6 here)
+  let refused = null;
+  for (let i = 0; i < 8 && !refused; i++) {
+    const r = await stud('/notebooks', { method: 'POST', json: { title: `Extra ${i}` } });
+    if (r.status !== 201) refused = r;
+  }
+  assert.ok(refused, 'the cap was never reached');
+  assert.equal(refused.status, 400);
+  assert.equal(refused.body.code, 'notebook_limit');
+  assert.equal((await stud('/notebooks?scope=mine')).body.length, 6);
 });

@@ -34,6 +34,18 @@ CREATE TABLE IF NOT EXISTS notebooks (
 );
 CREATE INDEX IF NOT EXISTS idx_notebooks_owner ON notebooks (owner_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notebooks_lesson ON notebooks (lesson_id, order_index);
+
+-- A lesson's notebooks were gated by its phase. When the lesson goes they become playgrounds, so
+-- they are unpublished first: nothing a lock kept from students becomes readable by everyone.
+CREATE OR REPLACE FUNCTION unpublish_lesson_notebooks() RETURNS trigger AS $$
+BEGIN
+  UPDATE notebooks SET published = FALSE WHERE lesson_id = OLD.id AND published;
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_lessons_unpublish_notebooks ON lessons;
+CREATE TRIGGER trg_lessons_unpublish_notebooks BEFORE DELETE ON lessons
+  FOR EACH ROW EXECUTE FUNCTION unpublish_lesson_notebooks();
 CREATE INDEX IF NOT EXISTS idx_notebooks_copied_from ON notebooks (copied_from_id);
 DROP TRIGGER IF EXISTS trg_notebooks_updated_at ON notebooks;
 CREATE TRIGGER trg_notebooks_updated_at BEFORE UPDATE ON notebooks
