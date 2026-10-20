@@ -157,9 +157,15 @@ class Sessions {
       throw new SessionError('session_limit', `At most ${this.limits.maxSessions} live sessions can run at once. Close one, or run without a session.`);
     }
     const lease = await this.pool.acquire('jshell', { priority: 0, waitMs: this.limits.queueWaitMs });
-    // Two opens for the same owner may race: keep the first
+    // Opens race while they wait for a sandbox: the same owner keeps the first, and the session
+    // ceiling is checked again now that this one is about to exist
     const raced = this.forOwner(owner);
     if (raced) { lease.sandbox.end(); await this.pool.release(lease.sandbox); return this.describe(raced); }
+    if (this.byId.size >= this.limits.maxSessions) {
+      lease.sandbox.end();
+      await this.pool.release(lease.sandbox);
+      throw new SessionError('session_limit', `At most ${this.limits.maxSessions} live sessions can run at once. Close one, or run without a session.`);
+    }
     const s = { id: crypto.randomUUID(), owner, sandbox: lease.sandbox, createdAt: Date.now(), lastUsed: Date.now(), count: 0, busy: false };
     this.byId.set(s.id, s);
     return this.describe(s);

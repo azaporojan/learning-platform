@@ -131,8 +131,10 @@ function docker(method, path, body) {
 }
 
 // The sandbox image is the image this gate container runs, so it is always present on the host.
+// Returns {id, ref}: sandboxes start from the exact image id; if a cleanup removed that image while
+// the gate kept running, they fall back to the image's name (the newest pulled runner image).
 async function resolveImage() {
-  if (process.env.SANDBOX_IMAGE) return process.env.SANDBOX_IMAGE;
+  if (process.env.SANDBOX_IMAGE) return { id: process.env.SANDBOX_IMAGE, ref: process.env.SANDBOX_IMAGE };
   let id = null;
   try {
     const mountinfo = fs.readFileSync('/proc/self/mountinfo', 'utf8');
@@ -144,7 +146,7 @@ async function resolveImage() {
   if (r.status !== 200 || !r.json || !r.json.Image) {
     throw new Error('Cannot find the gate container image. Set SANDBOX_IMAGE.');
   }
-  return r.json.Image;
+  return { id: r.json.Image, ref: (r.json.Config && r.json.Config.Image) || r.json.Image };
 }
 
 const validId = (id) => /^[0-9a-f]{12,64}$/.test(id || '');
@@ -168,12 +170,12 @@ const describe = (c) => ({
   oomKilled: Boolean(c.State && c.State.OOMKilled),
 });
 
+// Both sides are hashed first, so the comparison takes the same time whatever the given length
+const digest = (v) => crypto.createHash('sha256').update(String(v)).digest();
 function authorized(req) {
   const header = req.headers.authorization || '';
   if (!TOKEN || !header.startsWith('Bearer ')) return false;
-  const given = Buffer.from(header.slice(7));
-  const expected = Buffer.from(TOKEN);
-  return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+  return crypto.timingSafeEqual(digest(header.slice(7)), digest(TOKEN));
 }
 
 function send(res, status, body) {
@@ -215,6 +217,7 @@ async function removeSandbox(id) {
 }
 
 function createGate({ image }) {
+  const images = typeof image === 'string' ? { id: image, ref: image } : image;
   // Creates are serialised: the ceiling counts existing sandboxes, so two parallel creates must
   // not both see room for one more.
   let createLock = Promise.resolve();
@@ -239,7 +242,11 @@ function createGate({ image }) {
           const existing = await listSandboxes();
           if (existing.length >= MAX_SANDBOXES) return { status: 429, body: { error: `at most ${MAX_SANDBOXES} sandboxes at a time` } };
           const name = `lp-sandbox-${crypto.randomBytes(6).toString('hex')}`;
-          const r = await docker('POST', `/containers/create?name=${name}`, sandboxSpec(image, body.profile));
+          let r = await docker('POST', `/containers/create?name=${name}`, sandboxSpec(images.id, body.profile));
+          if (r.status === 404 && images.ref !== images.id) {
+            console.warn(`[gate] image ${images.id.slice(0, 19)} is gone; using ${images.ref}`);
+            r = await docker('POST', `/containers/create?name=${name}`, sandboxSpec(images.ref, body.profile));
+          }
           if (r.status !== 201) return { status: 502, body: { error: 'create failed', detail: r.json && r.json.message } };
           return { status: 201, body: { id: r.json.Id } };
         });
@@ -260,7 +267,7 @@ function createGate({ image }) {
       if (!sandbox) return send(res, 404, { error: 'no such sandbox' });
       if (parts.length === 2 && req.method === 'GET') return send(res, 200, describe(sandbox));
       if (parts.length === 2 && req.method === 'DELETE') {
-        await removeSandbox(sandbox.Id);
+        if (!(await removeSandbox(sandbox.Id))) return send(res, 502, { error: 'remove failed' });
         return send(res, 200, { removed: true });
       }
       if (parts.length === 3 && parts[2] === 'start' && req.method === 'POST') {
@@ -332,7 +339,7 @@ async function main() {
   }
   const image = await resolveImage();
   const server = createGate({ image });
-  server.listen(PORT, HOST, () => console.log(`[gate] listening on ${HOST}:${PORT}, sandbox image ${image.slice(0, 19)}, at most ${MAX_SANDBOXES} sandboxes`));
+  server.listen(PORT, HOST, () => console.log(`[gate] listening on ${HOST}:${PORT}, sandbox image ${image.id.slice(0, 19)} (${image.ref}), at most ${MAX_SANDBOXES} sandboxes`));
   setInterval(sweep, 60 * 1000).unref();
   sweep();
   const stop = () => server.close(() => process.exit(0));

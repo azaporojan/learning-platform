@@ -110,7 +110,14 @@ GHCR credentials as the platform app:
 - **runner**: default command, env `RUNNER_TOKEN`, `GATE_TOKEN`, `GATE_URL=http://<gate appName>:2376`,
   limits 128 MiB / 0.5 CPU. No domain.
 
-The platform app gets `RUNNER_URL=http://<runner appName>:8080` and `RUNNER_TOKEN`. CI builds and
+The platform app gets `RUNNER_URL=http://<runner appName>:8080` and `RUNNER_TOKEN`.
+
+- **One replica each.** On start the runner removes labelled sandboxes older than two minutes that
+  it does not know, so a second runner would remove the first one's sandboxes.
+- **Session owners come from the platform**, which sets them from the signed-in teacher and the
+  notebook (`<user id>:nb<notebook id>`); nothing a student sends ever becomes an owner.
+- **Keep both images in step.** Sandboxes start from the gate's own image; if a cleanup removes it
+  while the gate still runs, the gate falls back to the image name (the newest pulled runner image). CI builds and
 pushes the image on every push to `main`; set the `DOKPLOY_RUNNER_WEBHOOK_URL` and
 `DOKPLOY_GATE_WEBHOOK_URL` repository secrets to redeploy both automatically.
 

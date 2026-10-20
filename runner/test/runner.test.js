@@ -45,6 +45,14 @@ test('run validates cells and maps busy to 429', async () => {
   });
 });
 
+test('session owners are validated', async () => {
+  await withServer({}, async (base) => {
+    assert.strictEqual((await call(base, 'POST', '/sessions', { owner: '' })).status, 400);
+    assert.strictEqual((await call(base, 'POST', '/sessions', { owner: 'x'.repeat(101) })).status, 400);
+    assert.strictEqual((await call(base, 'POST', '/sessions/abc/cells', { source: '1' })).status, 400, 'no owner, no run');
+  });
+});
+
 test('check rejects unsafe file paths', async () => {
   await withServer({ runCheck: async () => ({ status: 'passed' }) }, async (base) => {
     for (const path of ['../x.java', '/abs/X.java', 'a/../../X.java', 'X.class', 'a b/X.java']) {

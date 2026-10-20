@@ -97,12 +97,18 @@ function validFiles(list, name, { allowEmpty = false } = {}) {
 }
 
 function createRunner({ executor, sessions, pool, token }) {
+  // Both sides are hashed first, so the comparison takes the same time whatever the given length
+  const digest = (v) => crypto.createHash('sha256').update(String(v)).digest();
+  const expected = digest(token);
   const authorized = (req) => {
     const header = req.headers.authorization || '';
     if (!header.startsWith('Bearer ')) return false;
-    const given = Buffer.from(header.slice(7));
-    const expected = Buffer.from(token);
-    return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+    return crypto.timingSafeEqual(digest(header.slice(7)), expected);
+  };
+  // The owner of a session is chosen by the platform (from the signed-in user), never by a student
+  const ownerOf = (v) => {
+    if (typeof v !== 'string' || !v || v.length > 100) throw new HttpError(400, 'owner must be 1-100 characters');
+    return v;
   };
 
   return http.createServer(async (req, res) => {
@@ -137,13 +143,12 @@ function createRunner({ executor, sessions, pool, token }) {
         if (req.method === 'GET' && parts.length === 1) return send(res, 200, sessions.list());
         if (req.method === 'POST' && parts.length === 1) {
           const body = await readJson(req, 4096);
-          if (typeof body.owner !== 'string' || !body.owner) throw new HttpError(400, 'owner is required');
-          return send(res, 201, await sessions.open(body.owner));
+          return send(res, 201, await sessions.open(ownerOf(body.owner)));
         }
         if (req.method === 'POST' && parts.length === 3 && parts[2] === 'cells') {
           const body = await readJson(req, 256 * 1024);
           if (typeof body.source !== 'string' || body.source.length > MAX_CELL_CHARS) throw new HttpError(400, 'source must be a string');
-          return send(res, 200, await sessions.run(parts[1], String(body.owner || ''), body.source));
+          return send(res, 200, await sessions.run(parts[1], ownerOf(body.owner), body.source));
         }
         if (req.method === 'DELETE' && parts.length === 2) {
           const s = sessions.byId.get(parts[1]);
@@ -168,11 +173,16 @@ function createRunner({ executor, sessions, pool, token }) {
   });
 }
 
-// Sandboxes this process does not know about (left over from a previous run) are removed.
-async function removeStrays(gate, known) {
+// Sandboxes this process does not know about (left over from a previous run) are removed. Ones
+// created in the last minAgeMs are left alone: during an overlapping redeploy they may still
+// belong to the runner that is shutting down. The runner is meant to run as one replica.
+async function removeStrays(gate, known, { minAgeMs = 120000, now = Date.now() } = {}) {
   try {
     for (const s of await gate.list()) {
-      if (!known.has(s.id)) await gate.remove(s.id);
+      if (known.has(s.id)) continue;
+      const age = now - Date.parse(s.createdAt);
+      if (Number.isFinite(age) && age < minAgeMs) continue;
+      await gate.remove(s.id);
     }
   } catch (err) {
     console.error('[runner] stray sweep failed:', err.message);
@@ -202,7 +212,7 @@ async function main() {
   const sessions = new Sessions({ pool, limits: LIMITS });
 
   // Start clean: anything labelled as a sandbox now belongs to no one
-  await removeStrays(gate, new Set());
+  await removeStrays(gate, new Set());  // older than 2 min: see removeStrays
   pool.schedule();
 
   const server = createRunner({ executor, sessions, pool, token });
@@ -236,4 +246,4 @@ async function main() {
 
 if (require.main === module) main().catch((err) => { console.error('[runner] fatal:', err.message || err); process.exit(1); });
 
-module.exports = { createRunner, validCells, validFiles, LIMITS };
+module.exports = { createRunner, validCells, validFiles, removeStrays, LIMITS };
