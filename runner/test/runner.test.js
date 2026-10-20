@@ -88,3 +88,15 @@ test('an unexpected error is a 500, a gate failure a 502', async () => {
     assert.strictEqual((await call(base, 'POST', '/run', { cells: ['bug'] })).status, 500);
   });
 });
+
+test('a body that is not a JSON object is a 400, not a 500', async () => {
+  const executor = { runNotebook: async () => ({ status: 'ok', cells: [] }), runCheck: async () => ({}) };
+  await withServer(executor, async (base) => {
+    for (const raw of ['null', '[]', '3', '"x"']) {
+      for (const path of ['/run', '/check', '/sessions']) {
+        const r = await fetch(base + path, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: raw });
+        assert.strictEqual(r.status, 400, `${path} with ${raw}`);
+      }
+    }
+  });
+});

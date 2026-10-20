@@ -28,6 +28,7 @@ class Pool {
     this.seq = 0;
     this.stopped = false;
     this.booting = new Set(); // in-flight boots, awaited on shutdown
+    this.leased = new Set(); // handed to a request or session, until released
   }
 
   track(promise) {
@@ -77,6 +78,7 @@ class Pool {
 
   /** Single use: a sandbox that ran student code is always destroyed. */
   async release(sandbox) {
+    this.leased.delete(sandbox);
     try { await sandbox.destroy(); } finally {
       this.live -= 1;
       this.schedule();
@@ -96,6 +98,7 @@ class Pool {
 
   serve(entry, sandbox, warm) {
     clearTimeout(entry.timer);
+    this.leased.add(sandbox);
     entry.resolve({ sandbox, warm, queuedMs: Date.now() - entry.enqueuedAt });
   }
 

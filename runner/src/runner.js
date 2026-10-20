@@ -23,6 +23,11 @@ const int = (name, fallback) => {
   const v = parseInt(process.env[name] || '', 10);
   return Number.isFinite(v) && v > 0 ? v : fallback;
 };
+// Same rule as the gate's capped(): 64-1024 MB, otherwise the default
+const memoryMb = (name, fallback) => {
+  const v = parseInt(process.env[name] || '', 10);
+  return Number.isFinite(v) && v >= 64 && v <= 1024 ? v : fallback;
+};
 
 const LIMITS = {
   maxContainers: int('RUNNER_MAX_CONTAINERS', 4),
@@ -34,8 +39,9 @@ const LIMITS = {
   queueWaitMs: int('RUNNER_QUEUE_WAIT_MS', 20000),
   checkQueueWaitMs: int('RUNNER_CHECK_QUEUE_WAIT_MS', 120000),
   sessionIdleMs: int('RUNNER_SESSION_IDLE_MS', 10 * 60 * 1000),
-  jshellMemoryMb: int('GATE_JSHELL_MEMORY_MB', 384),
-  checkMemoryMb: int('GATE_CHECK_MEMORY_MB', 512),
+  // Parsed exactly as the gate parses them, so error messages quote the real limit
+  jshellMemoryMb: memoryMb('GATE_JSHELL_MEMORY_MB', 384),
+  checkMemoryMb: memoryMb('GATE_CHECK_MEMORY_MB', 512),
 };
 
 const MAX_CELLS = 200;
@@ -70,7 +76,10 @@ function readJson(req, limit) {
     req.on('end', () => {
       if (tooBig) return;
       if (size === 0) return resolve({});
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch { reject(new HttpError(400, 'Invalid JSON')); }
+      let body;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return reject(new HttpError(400, 'Invalid JSON')); }
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) return reject(new HttpError(400, 'The body must be a JSON object'));
+      resolve(body);
     });
     req.on('error', reject);
   });
@@ -230,9 +239,10 @@ async function main() {
     try { pool.recycle(); } catch (err) { console.error('[runner] recycle failed:', err.message); }
     const known = new Set([
       ...pool.warm.map((s) => s.id),
+      ...[...pool.leased].map((s) => s.id),
       ...[...sessions.byId.values()].map((s) => s.sandbox.id),
     ]);
-    // Busy sandboxes are never older than the longest check; only clearly stale ones go
+    // Warm, leased and session sandboxes are known; anything else this old is a leftover
     gate.list().then((list) => {
       const cutoff = Date.now() - (LIMITS.maxCheckTimeoutMs + LIMITS.checkQueueWaitMs + 60000);
       return Promise.all(list.filter((s) => !known.has(s.id) && Date.parse(s.createdAt) < cutoff).map((s) => gate.remove(s.id)));

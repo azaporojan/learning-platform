@@ -128,6 +128,13 @@ test('refuses to create more than GATE_MAX_SANDBOXES, even in parallel', async (
   assert.strictEqual((await (await call('GET', '/sandboxes')).json()).length, 3);
 });
 
+test('a body that is not a JSON object is a 400', async () => {
+  for (const raw of ['null', '[]', '7']) {
+    const r = await fetch(base + '/sandboxes', { method: 'POST', headers: { Authorization: TOKEN, 'content-type': 'application/json' }, body: raw });
+    assert.strictEqual(r.status, 400, raw);
+  }
+});
+
 test('an oversized body gets a 413, not a reset', async () => {
   const r = await call('POST', '/sandboxes', { profile: 'jshell', pad: 'x'.repeat(10000) });
   assert.strictEqual(r.status, 413);

@@ -200,7 +200,10 @@ function readJson(req, limit = 4096) {
     req.on('end', () => {
       if (tooBig) return;
       if (size === 0) return resolve({});
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch { reject(Object.assign(new Error('Invalid JSON'), { status: 400 })); }
+      let body;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return reject(Object.assign(new Error('Invalid JSON'), { status: 400 })); }
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) return reject(Object.assign(new Error('The body must be a JSON object'), { status: 400 }));
+      resolve(body);
     });
     req.on('error', reject);
   });

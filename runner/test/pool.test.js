@@ -34,7 +34,10 @@ test('fills the warm pool and serves a notebook run from it', async () => {
   assert.strictEqual(pool.stats().warm, 2);
   const lease = await pool.acquire('jshell');
   assert.strictEqual(lease.warm, true);
+  // A leased sandbox is known to the pool until released, so the stray sweep leaves it alone
+  assert.ok(pool.leased.has(lease.sandbox));
   await pool.release(lease.sandbox);
+  assert.strictEqual(pool.leased.size, 0);
   await tick();
   assert.strictEqual(pool.stats().warm, 2);
   assert.strictEqual(pool.stats().live, 2);
