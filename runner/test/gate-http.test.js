@@ -118,9 +118,18 @@ test('containers without the sandbox label do not exist for the gate', async () 
   assert.strictEqual((await own.json()).profile, 'jshell');
 });
 
-test('refuses to create more than GATE_MAX_SANDBOXES', async () => {
-  while ((await (await call('GET', '/sandboxes')).json()).length < 3) await call('POST', '/sandboxes', { profile: 'check' });
-  assert.strictEqual((await call('POST', '/sandboxes', { profile: 'check' })).status, 429);
+test('refuses to create more than GATE_MAX_SANDBOXES, even in parallel', async () => {
+  const before = (await (await call('GET', '/sandboxes')).json()).length;
+  const results = await Promise.all(Array.from({ length: 8 }, () => call('POST', '/sandboxes', { profile: 'check' })));
+  const ok = results.filter((r) => r.status === 201).length;
+  assert.strictEqual(before + ok, 3, `${before} existed, ${ok} more were created`);
+  assert.ok(results.filter((r) => r.status === 429).length >= 5);
+  assert.strictEqual((await (await call('GET', '/sandboxes')).json()).length, 3);
+});
+
+test('an oversized body gets a 413, not a reset', async () => {
+  const r = await call('POST', '/sandboxes', { profile: 'jshell', pad: 'x'.repeat(10000) });
+  assert.strictEqual(r.status, 413);
 });
 
 function attach(id) {

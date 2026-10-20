@@ -55,3 +55,28 @@ test('check rejects unsafe file paths', async () => {
     assert.strictEqual(ok.status, 200);
   });
 });
+
+test('a check never waits longer than the maximum timeout', async () => {
+  const { Executor } = require('../src/executor');
+  let waited = null;
+  const sandbox = { sendFile() {}, end() {}, next: async (ms) => { waited = ms; return { type: 'check', status: 'passed', summary: 'ok' }; } };
+  const pool = { acquire: async () => ({ sandbox, queuedMs: 0 }), release: async () => {} };
+  const ex = new Executor({ pool, limits: { checkTimeoutMs: 30000, maxCheckTimeoutMs: 60000, checkQueueWaitMs: 1000, checkMemoryMb: 512 } });
+  await ex.runCheck([], [], { timeoutMs: 10 * 60 * 1000 });
+  assert.strictEqual(waited, 60000);
+  await ex.runCheck([], [], { timeoutMs: 1 });
+  assert.strictEqual(waited, 5000);
+});
+
+test('an unexpected error is a 500, a gate failure a 502', async () => {
+  const executor = {
+    runNotebook: async (cells) => {
+      if (cells[0] === 'gate') throw Object.assign(new Error('gate POST /sandboxes -> 502'), { status: 502 });
+      throw new TypeError('bug');
+    },
+  };
+  await withServer(executor, async (base) => {
+    assert.strictEqual((await call(base, 'POST', '/run', { cells: ['gate'] })).status, 502);
+    assert.strictEqual((await call(base, 'POST', '/run', { cells: ['bug'] })).status, 500);
+  });
+});

@@ -58,13 +58,16 @@ function send(res, status, body) {
 function readJson(req, limit) {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let tooBig = false;
     const chunks = [];
     req.on('data', (c) => {
+      if (tooBig) return; // keep draining so the 413 reaches the client
       size += c.length;
-      if (size > limit) { reject(new HttpError(413, 'Request too large')); req.destroy(); return; }
+      if (size > limit) { tooBig = true; reject(new HttpError(413, 'Request too large')); return; }
       chunks.push(c);
     });
     req.on('end', () => {
+      if (tooBig) return;
       if (size === 0) return resolve({});
       try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch { reject(new HttpError(400, 'Invalid JSON')); }
     });
@@ -155,7 +158,12 @@ function createRunner({ executor, sessions, pool, token }) {
       if (err instanceof BusyError) return send(res, 429, { error: err.message, code: 'busy' });
       if (err instanceof SessionError) return send(res, err.code === 'no_session' ? 404 : err.code === 'busy' ? 409 : 429, { error: err.message, code: err.code });
       console.error('[runner] request failed:', err.stack || err.message || err);
-      if (!res.headersSent) send(res, 502, { error: 'The runner could not start a sandbox. Try again in a moment.' });
+      if (res.headersSent) return;
+      // Gate answers and network failures towards the gate are transient (502); anything else is a bug (500)
+      const fromGate = err.status || ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENOTFOUND'].includes(err.code)
+        || /^gate |attach refused|kernel did not start|gate timeout/.test(err.message || '');
+      if (fromGate) send(res, 502, { error: 'The runner could not start a sandbox. Try again in a moment.', code: 'sandbox_unavailable' });
+      else send(res, 500, { error: 'The runner hit an internal error.', code: 'internal' });
     }
   });
 }

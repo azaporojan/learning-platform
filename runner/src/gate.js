@@ -24,6 +24,8 @@ const crypto = require('crypto');
 const DOCKER_SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 const PORT = parseInt(process.env.GATE_PORT || '2376', 10);
 const TOKEN = process.env.GATE_TOKEN || '';
+// 0.0.0.0 because the runner reaches the gate over the Docker overlay network. The gate must
+// never get a published port or a domain; see README "Deployment".
 const HOST = process.env.GATE_HOST || '0.0.0.0';
 const MAX_AGE_MS = parseInt(process.env.GATE_MAX_AGE_MS || String(2 * 60 * 60 * 1000), 10);
 // A ceiling of its own, independent of the runner's pool: even a broken or compromised runner
@@ -33,7 +35,11 @@ const LABEL = 'lp.runner';
 const LABEL_VALUE = 'sandbox';
 
 const MiB = 1024 * 1024;
-const capped = (envName, fallback, max) => Math.min(max, Math.max(64, parseInt(process.env[envName] || String(fallback), 10) || fallback));
+// An unset, malformed or out-of-range value falls back to the default (a typo never becomes 64 MB)
+const capped = (envName, fallback, max) => {
+  const v = parseInt(process.env[envName] || '', 10);
+  return Number.isFinite(v) && v >= 64 && v <= max ? v : fallback;
+};
 
 // Fixed sandbox profiles. Memory is a hard limit with no swap; the JVM heap sits below it so the
 // JVM, not the kernel's OOM killer, hits its ceiling first.
@@ -179,13 +185,16 @@ function send(res, status, body) {
 function readJson(req, limit = 4096) {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let tooBig = false;
     const chunks = [];
     req.on('data', (c) => {
+      if (tooBig) return; // keep draining so the 413 reaches the client
       size += c.length;
-      if (size > limit) { reject(Object.assign(new Error('Body too large'), { status: 413 })); req.destroy(); return; }
+      if (size > limit) { tooBig = true; reject(Object.assign(new Error('Body too large'), { status: 413 })); return; }
       chunks.push(c);
     });
     req.on('end', () => {
+      if (tooBig) return;
       if (size === 0) return resolve({});
       try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch { reject(Object.assign(new Error('Invalid JSON'), { status: 400 })); }
     });
@@ -206,6 +215,15 @@ async function removeSandbox(id) {
 }
 
 function createGate({ image }) {
+  // Creates are serialised: the ceiling counts existing sandboxes, so two parallel creates must
+  // not both see room for one more.
+  let createLock = Promise.resolve();
+  const exclusive = (fn) => {
+    const run = createLock.then(fn, fn);
+    createLock = run.catch(() => {});
+    return run;
+  };
+
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://gate');
@@ -217,12 +235,15 @@ function createGate({ image }) {
       if (parts.length === 1 && req.method === 'POST') {
         const body = await readJson(req);
         if (!Object.prototype.hasOwnProperty.call(PROFILES, body.profile)) return send(res, 400, { error: 'profile must be jshell or check' });
-        const existing = await listSandboxes();
-        if (existing.length >= MAX_SANDBOXES) return send(res, 429, { error: `at most ${MAX_SANDBOXES} sandboxes at a time` });
-        const name = `lp-sandbox-${crypto.randomBytes(6).toString('hex')}`;
-        const r = await docker('POST', `/containers/create?name=${name}`, sandboxSpec(image, body.profile));
-        if (r.status !== 201) return send(res, 502, { error: 'create failed', detail: r.json && r.json.message });
-        return send(res, 201, { id: r.json.Id });
+        const created = await exclusive(async () => {
+          const existing = await listSandboxes();
+          if (existing.length >= MAX_SANDBOXES) return { status: 429, body: { error: `at most ${MAX_SANDBOXES} sandboxes at a time` } };
+          const name = `lp-sandbox-${crypto.randomBytes(6).toString('hex')}`;
+          const r = await docker('POST', `/containers/create?name=${name}`, sandboxSpec(image, body.profile));
+          if (r.status !== 201) return { status: 502, body: { error: 'create failed', detail: r.json && r.json.message } };
+          return { status: 201, body: { id: r.json.Id } };
+        });
+        return send(res, created.status, created.body);
       }
       if (parts.length === 1 && req.method === 'GET') {
         const list = (await listSandboxes()).map((c) => ({
