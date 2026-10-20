@@ -145,10 +145,9 @@ test('auto-checked tasks API', { timeout: 120000 }, async (t) => {
   await admin(`/tasks/${taskId}/check`, { method: 'PUT', json: { tests, starter, timeoutS: 20, autoApprove: true } });
   const good = await stud(`/tasks/${taskId}/submit-code`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: '// correct' }] } });
   await eventually(async () => (await dbQuery("SELECT status FROM task_submissions WHERE id = $1", [good.body.id]))[0].status === 'approved', 'not auto-approved');
-  const progress = await dbQuery("SELECT 1 FROM user_progress WHERE user_id = $1 AND entity_type = 'task' AND entity_id = $2", [studentId, taskId]);
-  assert.equal(progress.length, 1);
-  const notes = await stud('/notifications');
-  assert.ok(notes.body.some((n) => n.type === 'submission_approved' && /automatically/.test(n.message)));
+  // Approval sets the status first, then records progress and notifies: wait for each
+  await eventually(async () => (await dbQuery("SELECT 1 FROM user_progress WHERE user_id = $1 AND entity_type = 'task' AND entity_id = $2", [studentId, taskId])).length === 1, 'no progress recorded');
+  await eventually(async () => (await stud('/notifications')).body.some((n) => n.type === 'submission_approved' && /automatically/.test(n.message)), 'no approval notification');
 
   // Re-check runs the same files again; a check interrupted by a restart is marked as such
   assert.equal((await admin(`/submissions/${sub.body.id}/recheck`, { method: 'POST' })).status, 202);

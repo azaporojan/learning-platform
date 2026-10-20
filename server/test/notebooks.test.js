@@ -339,6 +339,19 @@ test('notebooks API', { timeout: 120000 }, async (t) => {
   assert.equal(after.body.kind, 'playground');
   assert.equal((await stud(`/notebooks/${doomedNb.body.id}`)).status, 404);
 
+  // Students cannot publish their own notebooks or attach them to a lesson
+  const own = await stud('/notebooks', { method: 'POST', json: { title: 'Мой блокнот, ăîșț' } });
+  assert.equal((await stud(`/notebooks/${own.body.id}`, { method: 'PUT', json: { published: true } })).status, 403);
+  assert.equal((await stud(`/notebooks/${own.body.id}`, { method: 'PUT', json: { lessonId: l1.body.id } })).status, 403);
+  assert.equal((await stud(`/notebooks/${own.body.id}`)).body.published, false);
+
+  // The export keeps a non-ASCII title in filename*, with an ASCII fallback
+  const exp = await stud(`/notebooks/${own.body.id}/export`);
+  const disposition = exp.res.headers.get('content-disposition');
+  assert.match(disposition, /filename="[\w\- ]*\.md"/);
+  assert.ok(disposition.includes(`filename*=UTF-8''${encodeURIComponent('Мой блокнот, ăîșț.md')}`), disposition);
+  assert.equal((await stud(`/notebooks/${own.body.id}`, { method: 'DELETE' })).status, 200);
+
   // Students keep a bounded number of notebooks (NOTEBOOK_MAX_PER_STUDENT=6 here)
   let refused = null;
   for (let i = 0; i < 8 && !refused; i++) {
