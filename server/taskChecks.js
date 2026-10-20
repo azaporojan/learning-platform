@@ -73,7 +73,13 @@ function registerTaskCheckRoutes({ api, db, io, emitToUser, authenticateToken, r
   }
 
   // A student may use a task's check only when the task is in a phase they have reached
+  // Phase locks apply to students; a teacher only needs the task to exist
   async function studentGate(req, taskId) {
+    if (isAdmin(req)) {
+      const [tasks] = await db.query('SELECT id FROM tasks WHERE id = ?', [taskId]);
+      if (tasks.length === 0) throw httpError(404, 'Task not found');
+      return;
+    }
     const reasons = await taskLockReasons(db, req.user.id, taskId);
     if (reasons === null) throw httpError(404, 'Task not found');
     if (reasons.length > 0) throw httpError(403, 'This phase is locked for you', { lockReasons: reasons });
