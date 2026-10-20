@@ -25,6 +25,7 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 - 📝 Task-uri cu deadline-uri; predare ca și comentariu (link la PR / ticket Jira), fișier sau ambele
 - 🧠 Quiz-uri și flashcards sub fiecare lecție, pentru pregătire (corectate pe server, cel mai bun scor salvat; nu blochează drumul)
 - 📎 Materiale atașate lecției (PDF, Word, PowerPoint, TXT, Markdown): PDF/TXT/MD se deschid direct în aplicație, orice fișier se poate descărca
+- 📓 Notebooks Java (ca în Kaggle/Colab): celule de cod și text (Markdown, imagini, diagrame Mermaid), rulate într-un sandbox; copiezi notebook-ul profesorului și lucrezi pe copia ta
 - 🔔 Notificări în timp real și pe email (cont aprobat, task nou, submisie aprobată/respinsă, stele primite); fiecare notificare are un link direct (deep link) spre task / pagina potrivită
 - 💬 Chat în timp real cu Socket.IO
 - 🖼️ Upload de imagini și fișiere în task-uri și chat
@@ -39,6 +40,7 @@ Platformă modernă de învățare cu gamification, sistem de puncte, chat în t
 - 📜 Script de lecție (Markdown, doar pentru admin): pregătești planul lecției înainte și îl urmărești în timpul ei
 - 🧠 Quiz-uri și flashcards per lecție: editor în aplicație (formular sau JSON) și API complet (`/api/study-sets`, vezi `docs/AGENT_API.md`)
 - 📎 Atașare fișiere la lecție (drag & drop sau buton), redenumire, ștergere; și prin API (`/api/lessons/:id/files`)
+- 📓 Notebooks atașate lecțiilor sau „playground”, publicate pentru studenți, mod prezentare, sesiune live (variabilele rămân între rulări), import/export Markdown (`/api/notebooks`, vezi `docs/AGENT_API.md`)
 - 🔄 Notificări live și pe email pentru utilizatori noi și submisii noi, cu link direct la submisie / utilizator
 - 📊 Monitorizare progres studenți
 

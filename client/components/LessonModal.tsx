@@ -7,6 +7,7 @@ import { RoadLesson, RoadStudySet, RoadTask, StudySetKind } from '../types';
 import { NodeStatus } from '../roadState';
 import { apiUrl } from '../config';
 import { LessonMaterials } from './LessonMaterials';
+import { LessonNotebooks } from './LessonNotebooks';
 
 interface LessonModalProps {
   lesson: RoadLesson | null;
@@ -222,6 +223,7 @@ export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, is
               </div>
 
               <LessonMaterials lessonId={lesson.id} files={lesson.files || []} isAdmin={isAdmin} locked={phaseLocked} onChanged={onChanged} />
+              <LessonNotebooks lessonId={lesson.id} isAdmin={isAdmin} locked={phaseLocked} />
 
               {(isAdmin || (lesson.study_sets || []).length > 0) && (
                 <div className="border-t border-gray-200 dark:border-gray-700 pt-6 mt-6">

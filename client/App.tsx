@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
+import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { Navbar } from './components/Navbar';
 import { RegisterModal } from './components/RegisterModal';
 import { LoginModal } from './components/LoginModal';
@@ -10,8 +10,18 @@ import { CoursePage } from './pages/CoursePage';
 import { UsersPage } from './pages/UsersPage';
 import { LessonScriptPage } from './pages/LessonScriptPage';
 import { SubmissionsPage } from './pages/SubmissionsPage';
+// The notebook editor (CodeMirror, Mermaid) loads only when a notebook page is opened
+const NotebooksPage = lazy(() => import('./pages/NotebooksPage').then((m) => ({ default: m.NotebooksPage })));
+const NotebookPage = lazy(() => import('./pages/NotebookPage').then((m) => ({ default: m.NotebookPage })));
+const pageFallback = <div className="h-full flex items-center justify-center text-gray-400">Loading…</div>;
 import { User } from './types';
 import { apiUrl } from './config';
+
+// One page instance per notebook: unsaved edits of one notebook can never be saved into another
+const NotebookRoute: React.FC<{ currentUser: User }> = ({ currentUser }) => {
+  const { id } = useParams();
+  return <Suspense fallback={pageFallback}><NotebookPage key={id} currentUser={currentUser} /></Suspense>;
+};
 
 const App: React.FC = () => {
   const [isRegisterOpen, setIsRegisterOpen] = useState(false);
@@ -153,6 +163,8 @@ const App: React.FC = () => {
             <Route path="/courses/:courseId/lessons/:lessonId/script" element={<LessonScriptPage currentUser={currentUser} />} />
             <Route path="/users" element={<UsersPage currentUser={currentUser} />} />
             <Route path="/submissions" element={<SubmissionsPage currentUser={currentUser} />} />
+            <Route path="/notebooks" element={<Suspense fallback={pageFallback}><NotebooksPage currentUser={currentUser} /></Suspense>} />
+            <Route path="/notebooks/:id" element={<NotebookRoute currentUser={currentUser} />} />
             <Route path="*" element={<Navigate to="/courses" replace />} />
           </Routes>
         </main>
