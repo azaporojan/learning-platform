@@ -58,8 +58,11 @@ CI job), with no domain:
 
 | Application | Command | Mounts | Env | Limits |
 |---|---|---|---|---|
-| runner-gate | `node src/gate.js` | `/var/run/docker.sock` → `/var/run/docker.sock` | `GATE_TOKEN` | 128 MiB, 0.25 CPU |
-| runner | (image default) | none | `RUNNER_TOKEN`, `GATE_TOKEN`, `GATE_URL=http://<gate appName>:2376` | 128 MiB, 0.5 CPU |
+| runner-gate | `node src/gate.js` | `/var/run/docker.sock` → `/var/run/docker.sock` | `GATE_TOKEN`, `GATE_HOST=0.0.0.0` | 128 MiB, 0.25 CPU |
+| runner | (image default) | none | `RUNNER_TOKEN`, `GATE_TOKEN` (a different secret), `GATE_URL=http://<gate appName>:2376`, `HOST=0.0.0.0` | 128 MiB, 0.5 CPU |
+
+Neither application gets a domain or a published port: the gate holds the Docker socket, and both
+listen on loopback unless `GATE_HOST` / `HOST` opt in to the overlay network.
 
 The platform application gets `RUNNER_URL=http://<runner appName>:8080` and the same
 `RUNNER_TOKEN`. Without `RUNNER_URL` the platform still works; Run buttons answer that the

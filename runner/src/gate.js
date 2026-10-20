@@ -24,9 +24,10 @@ const crypto = require('crypto');
 const DOCKER_SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 const PORT = parseInt(process.env.GATE_PORT || '2376', 10);
 const TOKEN = process.env.GATE_TOKEN || '';
-// 0.0.0.0 because the runner reaches the gate over the Docker overlay network. The gate must
-// never get a published port or a domain; see README "Deployment".
-const HOST = process.env.GATE_HOST || '0.0.0.0';
+// Fails closed: loopback unless the deployment opts in. On Dokploy GATE_HOST=0.0.0.0 is set
+// because the runner reaches the gate over the overlay network; the gate must still never get a
+// published port or a domain (README "Deployment").
+const HOST = process.env.GATE_HOST || '127.0.0.1';
 const MAX_AGE_MS = parseInt(process.env.GATE_MAX_AGE_MS || String(2 * 60 * 60 * 1000), 10);
 // A ceiling of its own, independent of the runner's pool: even a broken or compromised runner
 // cannot fill the host with sandboxes.

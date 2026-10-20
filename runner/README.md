@@ -97,7 +97,7 @@ Check status: `passed`, `failed`, `compile_error`, `no_tests`, `timeout`, `oom`,
 | `GATE_JSHELL_MEMORY_MB`, `GATE_CHECK_MEMORY_MB`, `GATE_SANDBOX_CPUS` | gate | 384, 512, 1 |
 | `SANDBOX_IMAGE` | gate | the gate's own image |
 | `GATE_MAX_SANDBOXES` | gate | 6; the gate's own ceiling, independent of the runner's pool |
-| `HOST` / `GATE_HOST` | runner / gate | `0.0.0.0`; keep both on an internal network with no published port or domain |
+| `HOST` / `GATE_HOST` | runner / gate | `127.0.0.1`; set `0.0.0.0` where the other side is another container (Dokploy), and keep both on an internal network with no published port or domain |
 | `GATE_MAX_AGE_MS` | gate | 2 h; no sandbox outlives it |
 
 ## Deployment (Dokploy)
@@ -105,9 +105,9 @@ Check status: `passed`, `failed`, `compile_error`, `no_tests`, `timeout`, `oom`,
 Two applications in the **Learning Platform** project, both from the runner image with the same
 GHCR credentials as the platform app:
 
-- **runner-gate**: command `node src/gate.js`, bind mount `/var/run/docker.sock`, env `GATE_TOKEN`,
+- **runner-gate**: command `node src/gate.js`, bind mount `/var/run/docker.sock`, env `GATE_TOKEN`, `GATE_HOST=0.0.0.0`,
   limits 128 MiB / 0.25 CPU. No domain.
-- **runner**: default command, env `RUNNER_TOKEN`, `GATE_TOKEN`, `GATE_URL=http://<gate appName>:2376`,
+- **runner**: default command, env `RUNNER_TOKEN`, `GATE_TOKEN`, `GATE_URL=http://<gate appName>:2376`, `HOST=0.0.0.0`,
   limits 128 MiB / 0.5 CPU. No domain.
 
 The platform app gets `RUNNER_URL=http://<runner appName>:8080` and `RUNNER_TOKEN`.

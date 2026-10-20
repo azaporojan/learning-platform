@@ -220,12 +220,14 @@ async function main() {
 
   const server = createRunner({ executor, sessions, pool, token });
   const port = int('PORT', 8080);
-  const host = process.env.HOST || '0.0.0.0';
+  // Loopback unless the deployment opts in (HOST=0.0.0.0 on Dokploy, where the platform calls it over the overlay)
+  const host = process.env.HOST || '127.0.0.1';
   server.listen(port, host, () => console.log(`[runner] listening on ${port}; limits ${JSON.stringify(LIMITS)}`));
 
   setInterval(() => {
-    sessions.sweep();
-    pool.recycle();
+    // A rejection here would be unhandled and stop the process: log it instead
+    sessions.sweep().catch((err) => console.error('[runner] session sweep failed:', err.message));
+    try { pool.recycle(); } catch (err) { console.error('[runner] recycle failed:', err.message); }
     const known = new Set([
       ...pool.warm.map((s) => s.id),
       ...[...sessions.byId.values()].map((s) => s.sandbox.id),
