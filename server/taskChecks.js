@@ -248,7 +248,7 @@ function registerTaskCheckRoutes({ api, db, io, emitToUser, authenticateToken, r
   async function startCheck(submissionId, taskId, userId, files) {
     const checkId = await insertCheck(db, submissionId, files);
     // Not awaited: the answer goes out now, the result arrives as a live event
-    runSubmissionCheck(checkId, submissionId, taskId, userId, files);
+    runSubmissionCheck(checkId, submissionId, taskId, userId, files).catch((err) => console.error('[check] failed:', err));
     return checkId;
   }
 
@@ -300,7 +300,8 @@ function registerTaskCheckRoutes({ api, db, io, emitToUser, authenticateToken, r
         );
         return { submissionId: result[0].id, checkId: await insertCheck(tx, result[0].id, files) };
       });
-      runSubmissionCheck(checkId, submissionId, req.params.id, req.user.id, files); // not awaited
+      // Not awaited; a rejection is logged instead of crashing the process
+      runSubmissionCheck(checkId, submissionId, req.params.id, req.user.id, files).catch((err) => console.error('[check] failed:', err));
       // Not awaited: notifySubmission logs its own failures, and the submission stands either way
       notifySubmission(req.params.id, req.user.id, submissionId, { comment: comment || label, kind: 'code' });
       res.status(201).json({ id: submissionId, check: { status: 'running' } });
