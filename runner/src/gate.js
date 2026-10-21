@@ -216,9 +216,14 @@ async function listSandboxes() {
   return (Array.isArray(r.json) ? r.json : []).filter((c) => c.Labels && c.Labels[LABEL] === LABEL_VALUE);
 }
 
+// Gone, or already being removed by Docker (409 "removal ... already in progress"), counts as done
 async function removeSandbox(id) {
   const r = await docker('DELETE', `/containers/${id}?force=1&v=1`);
-  return r.status === 204 || r.status === 404;
+  if (r.status === 204 || r.status === 404) return true;
+  const message = (r.json && r.json.message) || r.text || '';
+  if (r.status === 409 && /already in progress/i.test(message)) return true;
+  console.error(`[gate] removing ${id.slice(0, 12)} failed: ${r.status} ${message}`.trim());
+  return false;
 }
 
 function createGate({ image }) {

@@ -44,6 +44,7 @@ const docker = http.createServer((req, res) => {
     if (!m || !containers.has(m[1])) return send(404, { message: 'no such container' });
     const c = containers.get(m[1]);
     if (req.method === 'GET' && m[2] === '/json') return send(200, { Id: m[1], Config: { Labels: c.labels }, State: { Running: true, ExitCode: 0, OOMKilled: false }, Created: new Date(c.created * 1000).toISOString() });
+    if (req.method === 'DELETE' && !m[2] && c.deleteAnswer) return send(c.deleteAnswer.status, { message: c.deleteAnswer.message });
     if (req.method === 'DELETE' && !m[2]) { containers.delete(m[1]); removed.push(m[1]); return send(204); }
     if (req.method === 'POST' && m[2] === '/start') return send(204);
     send(404, { message: 'unsupported' });
@@ -195,4 +196,14 @@ test('the sweep removes only old sandboxes', async () => {
   await sweep();
   assert.ok(removed.includes(oldId));
   assert.ok(containers.has(FOREIGN));
+});
+
+test('a removal Docker already has in progress counts as done; a real failure is a 502', async () => {
+  const id = (await (await call('POST', '/sandboxes', { profile: 'jshell' })).json()).id;
+  containers.get(id).deleteAnswer = { status: 409, message: `removal of container ${id} is already in progress` };
+  assert.strictEqual((await call('DELETE', `/sandboxes/${id}`)).status, 200);
+  containers.get(id).deleteAnswer = { status: 500, message: 'driver failed to remove root filesystem' };
+  assert.strictEqual((await call('DELETE', `/sandboxes/${id}`)).status, 502);
+  delete containers.get(id).deleteAnswer;
+  assert.strictEqual((await call('DELETE', `/sandboxes/${id}`)).status, 200);
 });

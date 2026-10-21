@@ -29,6 +29,9 @@ class Pool {
     this.stopped = false;
     this.booting = new Set(); // in-flight boots, awaited on shutdown
     this.leased = new Set(); // handed to a request or session, until released
+    // Every sandbox this pool made, until its removal has finished: booting, warm, leased, or being
+    // destroyed. The stray sweep treats these as known, so it never races the pool's own removal.
+    this.owned = new Set();
   }
 
   track(promise) {
@@ -133,8 +136,20 @@ class Pool {
     this.refill();
   }
 
+  // Makes a sandbox and keeps it in `owned` until its destroy() has finished (or failed: then the
+  // stray sweep is free to retry the removal)
+  create(profile) {
+    const sb = this.makeSandbox(profile);
+    this.owned.add(sb);
+    const destroy = sb.destroy.bind(sb);
+    sb.destroy = async () => {
+      try { await destroy(); } finally { this.owned.delete(sb); }
+    };
+    return sb;
+  }
+
   bootFor(entry) {
-    const sb = this.makeSandbox(entry.profile);
+    const sb = this.create(entry.profile);
     this.track(sb.boot()).then(
       () => this.serve(entry, sb, false),
       (err) => {
@@ -151,7 +166,7 @@ class Pool {
     while (this.live < this.maxContainers && this.warm.length + this.bootingWarm < this.warmTarget) {
       this.live += 1;
       this.bootingWarm += 1;
-      const sb = this.makeSandbox('jshell');
+      const sb = this.create('jshell');
       this.track(sb.boot()).then(
         () => {
           this.bootingWarm -= 1;

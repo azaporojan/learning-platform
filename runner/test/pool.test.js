@@ -4,7 +4,8 @@ const assert = require('node:assert');
 const { Pool, BusyError } = require('../src/pool');
 
 class FakeSandbox {
-  constructor(profile, log, { bootMs = 5, fail = false } = {}) {
+  constructor(profile, log, { bootMs = 5, fail = false, destroyMs = 0 } = {}) {
+    this.destroyMs = destroyMs;
     this.profile = profile;
     this.log = log;
     this.bootMs = bootMs;
@@ -17,7 +18,11 @@ class FakeSandbox {
     this.log.booted.push(this.profile);
     return new Promise((resolve, reject) => setTimeout(() => (this.fail ? reject(new Error('boom')) : resolve(this)), this.bootMs));
   }
-  async destroy() { this.closed = true; this.log.destroyed.push(this.profile); }
+  async destroy() {
+    if (this.destroyMs) await new Promise((r) => setTimeout(r, this.destroyMs));
+    this.closed = true;
+    this.log.destroyed.push(this.profile);
+  }
 }
 
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
@@ -113,4 +118,17 @@ test('recycle replaces warm containers past their age', async () => {
   assert.strictEqual(log.destroyed.length, 2);
   assert.strictEqual(pool.stats().warm, 2);
   await pool.shutdown();
+});
+
+test('a sandbox stays owned by the pool until its removal has finished', async () => {
+  const { pool } = makePool({ warmTarget: 0, sandbox: { destroyMs: 50 } });
+  const lease = await pool.acquire('check');
+  const sb = lease.sandbox;
+  assert.ok(pool.owned.has(sb), 'owned while leased');
+  // A slow removal: no longer leased, but the stray sweep must still see it as known
+  const released = pool.release(sb);
+  assert.strictEqual(pool.leased.has(sb), false);
+  assert.ok(pool.owned.has(sb), 'still owned while being removed');
+  await released;
+  assert.strictEqual(pool.owned.has(sb), false);
 });

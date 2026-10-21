@@ -239,17 +239,21 @@ async function main() {
     // A rejection here would be unhandled and stop the process: log it instead
     sessions.sweep().catch((err) => console.error('[runner] session sweep failed:', err.message));
     try { pool.recycle(); } catch (err) { console.error('[runner] recycle failed:', err.message); }
+    // Everything the pool owns (booting, warm, leased, or still being removed) and every session's
+    // sandbox is known; anything else this old is a leftover from a crash or a redeploy.
     const known = new Set([
-      ...pool.warm.map((s) => s.id),
-      ...[...pool.leased].map((s) => s.id),
+      ...[...pool.owned].map((s) => s.id).filter(Boolean),
       ...[...sessions.byId.values()].map((s) => s.sandbox.id),
     ]);
-    // Warm, leased and session sandboxes are known; anything else this old is a leftover. A sandbox
-    // still booting is in none of those sets, so the cutoff must stay well above a boot (seconds)
-    // and above the longest a request holds one (queue wait plus the longest check).
     gate.list().then((list) => {
       const cutoff = Date.now() - (LIMITS.maxCheckTimeoutMs + LIMITS.checkQueueWaitMs + 60000);
-      return Promise.all(list.filter((s) => !known.has(s.id) && Date.parse(s.createdAt) < cutoff).map((s) => gate.remove(s.id)));
+      const stale = list.filter((s) => !known.has(s.id) && Date.parse(s.createdAt) < cutoff);
+      // One failed removal must not stop the others; each is retried on the next sweep
+      return Promise.allSettled(stale.map((s) => gate.remove(s.id))).then((results) => {
+        results.forEach((r, i) => {
+          if (r.status === 'rejected') console.error(`[runner] could not remove stray sandbox ${stale[i].id.slice(0, 12)}:`, r.reason.message);
+        });
+      });
     }).catch((err) => console.error('[runner] sweep failed:', err.message));
   }, 30000).unref();
 
