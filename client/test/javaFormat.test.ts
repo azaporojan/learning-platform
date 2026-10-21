@@ -1,7 +1,7 @@
 // Ctrl+Alt+L in notebook cells (notebooks/javaFormat.ts). Run: npm test --prefix client
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatJava } from '../notebooks/javaFormat.ts';
+import { formatJava, formatJavaLines } from '../notebooks/javaFormat.ts';
 
 const cases: [string, string, string][] = [
   ['spacing around operators, keywords and braces',
@@ -34,3 +34,11 @@ for (const [name, input, expected] of cases) {
     assert.equal(formatJava(out), out, 'formatting twice changes nothing');
   });
 }
+
+test('a selection is formatted in the context of the whole cell (same lines, right depth)', () => {
+  const src = 'for(int i=0;i<3;i++){\nif(i>1){\nx+=i;\n}\n\n\n}';
+  const lines = formatJavaLines(src);
+  assert.equal(lines.length, src.split('\n').length, 'one output line per input line');
+  // Lines 2-4 (the nested if) keep their depth inside the loop
+  assert.deepEqual(lines.slice(1, 4), ['    if (i > 1) {', '        x += i;', '    }']);
+});

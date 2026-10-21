@@ -9,7 +9,7 @@ import { classHighlighter } from '@lezer/highlight';
 import { java } from '@codemirror/lang-java';
 import { markdown } from '@codemirror/lang-markdown';
 import { javaCompletions } from './javaCompletions';
-import { formatJava } from './javaFormat';
+import { formatJava, formatJavaLines } from './javaFormat';
 
 export interface CodeEditorHandle {
   focus: () => void;
@@ -78,7 +78,8 @@ const expandTemplate = (view: EditorView): boolean => {
   return true;
 };
 
-// Reformats the cell, or only the selected lines; the cursor stays on its line
+// Reformats the cell, or only the selected lines; the cursor stays on its line. Selected lines are
+// formatted in the context of the whole cell, so lines inside a block keep their depth.
 const reformat = (view: EditorView): boolean => {
   const { state } = view;
   const sel = state.selection.main;
@@ -86,12 +87,9 @@ const reformat = (view: EditorView): boolean => {
   const fromLine = state.doc.lineAt(whole ? 0 : sel.from);
   const toLine = state.doc.lineAt(whole ? state.doc.length : sel.to);
   const original = state.sliceDoc(fromLine.from, toLine.to);
-  let formatted = formatJava(original);
-  if (!whole) {
-    // A part keeps the indentation it starts with
-    const base = (fromLine.text.match(/^\s*/) || [''])[0];
-    formatted = formatted.split('\n').map((l) => (l ? base + l : l)).join('\n');
-  }
+  const formatted = whole
+    ? formatJava(original)
+    : formatJavaLines(state.doc.toString()).slice(fromLine.number - 1, toLine.number).join('\n');
   if (formatted === original) return true;
   const cursorLine = state.doc.lineAt(sel.head).number - fromLine.number;
   view.dispatch({ changes: { from: fromLine.from, to: toLine.to, insert: formatted }, userEvent: 'input.format' });

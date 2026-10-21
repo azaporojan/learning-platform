@@ -193,6 +193,14 @@ export function reindent(src: string): string {
   return out.join('\n');
 }
 
+/**
+ * Spacing, indentation and trailing spaces, with exactly the same lines as the input, so a
+ * selection can take its lines from the formatted whole (and keep the right block depth).
+ */
+export function formatJavaLines(src: string): string[] {
+  return reindent(formatSpacing(src)).split('\n').map((l) => l.replace(/[ \t]+$/, ''));
+}
+
 /** The whole "Reformat code": spacing, indentation, trailing spaces, at most one blank line in a row. */
 export function formatJava(src: string): string {
   const spaced = formatSpacing(src);

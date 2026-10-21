@@ -6,9 +6,12 @@ import { useEffect, useState } from 'react';
 export type ThemeChoice = 'light' | 'dark' | 'system';
 const KEY = 'lp-theme';
 const EVENT = 'lp-theme-change';
+// The choice made in this page; it outlives a failed localStorage write (private mode)
+let inMemory: ThemeChoice | null = null;
 const media = () => (typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null);
 
 export function readThemeChoice(): ThemeChoice {
+  if (inMemory) return inMemory;
   try {
     const v = localStorage.getItem(KEY);
     return v === 'dark' || v === 'system' ? v : 'light';
@@ -26,6 +29,7 @@ export function applyTheme(choice: ThemeChoice = readThemeChoice()) {
 }
 
 export function setThemeChoice(choice: ThemeChoice) {
+  inMemory = choice;
   try {
     if (choice === 'light') localStorage.removeItem(KEY);
     else localStorage.setItem(KEY, choice);
@@ -42,10 +46,21 @@ export function useTheme() {
     const sync = () => { const c = readThemeChoice(); setChoice(c); setDark(isDarkChoice(c)); };
     const m = media();
     const onOs = () => { if (readThemeChoice() === 'system') { applyTheme('system'); sync(); } };
+    // Another tab changed the theme: follow it
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== KEY) return;
+      inMemory = null;
+      applyTheme();
+      sync();
+    };
     window.addEventListener(EVENT, sync);
-    window.addEventListener('storage', (e) => { if (e.key === KEY) { applyTheme(); sync(); } });
+    window.addEventListener('storage', onStorage);
     m?.addEventListener?.('change', onOs);
-    return () => { window.removeEventListener(EVENT, sync); m?.removeEventListener?.('change', onOs); };
+    return () => {
+      window.removeEventListener(EVENT, sync);
+      window.removeEventListener('storage', onStorage);
+      m?.removeEventListener?.('change', onOs);
+    };
   }, []);
   return { choice, dark, setChoice: setThemeChoice };
 }
