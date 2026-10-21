@@ -32,7 +32,8 @@ const failedCell = (index, status, message) => ({
 const notRun = (index) => ({ index, status: 'not_run', stdout: '', stderr: '', value: null, error: null, truncated: false, durationMs: 0 });
 
 /**
- * Evaluates cells in order in one sandbox and stops at the first failing cell.
+ * Evaluates cells in order in one sandbox and stops at the first failing cell. A cell is its source,
+ * or {source, input} where input is what System.in reads during that cell.
  * Returns {status, cells[], durationMs}; status is the status of the last evaluated cell.
  */
 async function evaluateCells(sandbox, cells, { timeoutMs, memoryMb, startIndex = 0 }) {
@@ -44,7 +45,8 @@ async function evaluateCells(sandbox, cells, { timeoutMs, memoryMb, startIndex =
   for (let i = 0; i < cells.length; i++) {
     const index = startIndex + i;
     const left = deadline - Date.now();
-    const m = left > 0 ? await sandbox.cell(String(index), cells[i], left) : null;
+    const { source, input } = typeof cells[i] === 'string' ? { source: cells[i], input: '' } : cells[i];
+    const m = left > 0 ? await sandbox.cell(String(index), source, left, input || '') : null;
     if (m === null) {
       status = 'timeout';
       results.push(failedCell(index, 'timeout', text.timeout));
@@ -171,14 +173,14 @@ class Sessions {
     return this.describe(s);
   }
 
-  async run(id, owner, source) {
+  async run(id, owner, source, input = '') {
     const s = this.byId.get(id);
     if (!s || s.owner !== owner) throw new SessionError('no_session', 'This session has ended. Start a new one.');
     if (s.busy) throw new SessionError('busy', 'A cell is still running in this session.');
     s.busy = true;
     try {
       s.count += 1;
-      const r = await evaluateCells(s.sandbox, [source], {
+      const r = await evaluateCells(s.sandbox, [{ source, input }], {
         timeoutMs: this.limits.runTimeoutMs, memoryMb: this.limits.jshellMemoryMb, startIndex: s.count,
       });
       s.lastUsed = Date.now();

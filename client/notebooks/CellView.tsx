@@ -1,4 +1,4 @@
-import React, { forwardRef, useImperativeHandle, useRef } from 'react';
+import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { Cell, CellOutput } from './types';
 import { CodeEditor, CodeEditorHandle } from './CodeEditor';
 import { NotebookMarkdown } from './NotebookMarkdown';
@@ -32,6 +32,7 @@ interface CellViewProps {
   onEdit: () => void;
   onStopEditing: () => void;
   onChange: (source: string) => void;
+  onInputChange: (input: string) => void;
   onRun: (how: 'advance' | 'stay' | 'insert') => void;
   onAction: (action: CellAction) => void;
   onClearOutput: () => void;
@@ -67,6 +68,11 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
   }), []);
 
   const isCode = p.cell.kind === 'code';
+  // The Input box: shown when the cell has input, when its code reads System.in, or when opened
+  const readsInput = isCode && /\bScanner\b|System\.in\b/.test(p.cell.source);
+  const [inputOpen, setInputOpen] = useState(false);
+  const showInput = isCode && (Boolean(p.cell.input) || (p.editable && (readsInput || inputOpen)));
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const isCellDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes(CELL_DRAG_TYPE);
   const half = (e: React.DragEvent): 'before' | 'after' => {
@@ -176,6 +182,32 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
               : <p className="text-sm text-gray-400 italic py-2">{p.editable ? 'Empty text cell. Double-click to write.' : ''}</p>}
           </div>
         )}
+        {showInput && (
+          <div className="mt-1 rounded-lg border border-dashed border-gray-300 bg-white">
+            <label className="flex items-center gap-1 px-3 pt-1.5 text-[11px] font-bold uppercase tracking-wide text-gray-400">
+              <span aria-hidden="true" className="material-icons text-sm leading-none">keyboard</span>
+              Input
+              <span className="normal-case font-normal tracking-normal">· what Scanner reads when this cell runs, one value per line</span>
+            </label>
+            <textarea
+              ref={inputRef}
+              value={p.cell.input || ''}
+              readOnly={!p.editable}
+              onChange={(e) => p.onInputChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.shiftKey || e.ctrlKey || e.metaKey) && p.runnable) {
+                  e.preventDefault();
+                  p.onRun(e.shiftKey ? 'advance' : 'stay');
+                }
+              }}
+              rows={Math.min(8, Math.max(2, (p.cell.input || '').split('\n').length))}
+              spellCheck={false}
+              placeholder={'5 7\nAna'}
+              aria-label="Input for this cell"
+              className="block w-full resize-y border-0 bg-transparent px-3 pb-2 pt-1 font-mono text-[13px] leading-5 text-gray-800 outline-none focus:ring-0"
+            />
+          </div>
+        )}
         {isCode && p.output && (
           <div className="mt-1 rounded-lg bg-white border border-gray-100">
             <CellOutputView output={p.output} flash={p.flash} onClear={p.editable ? p.onClearOutput : undefined} />
@@ -207,6 +239,13 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
           )}
           <ToolButton icon="arrow_upward" title="Move up" onClick={() => p.onAction('up')} disabled={p.isFirst} />
           <ToolButton icon="arrow_downward" title="Move down" onClick={() => p.onAction('down')} disabled={p.isLast} />
+          {isCode && !(p.cell.input || readsInput) && (
+            <ToolButton
+              icon="keyboard"
+              title={inputOpen ? 'Hide the input box' : 'Input: what Scanner / System.in reads'}
+              onClick={() => { const next = !inputOpen; setInputOpen(next); if (next) setTimeout(() => inputRef.current?.focus(), 0); }}
+            />
+          )}
           <ToolButton icon={isCode ? 'notes' : 'code'} title={isCode ? 'Convert to text (M)' : 'Convert to code (Y)'} onClick={() => p.onAction('convert')} />
           <ToolButton icon="delete_outline" title="Delete (D D)" onClick={() => p.onAction('delete')} danger />
         </div>

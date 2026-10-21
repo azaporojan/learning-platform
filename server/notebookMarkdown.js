@@ -11,6 +11,10 @@
 //   Text between code cells is one text cell.
 //   <!-- cell -->                             <- splits two text cells
 //
+//   ```input                                 <- right after a code cell: what its Scanner reads
+//   5 7
+//   ```
+//
 // A ```java fence without "run" (or any other fence) stays inside the text cell, highlighted but
 // not runnable. A code cell whose source contains ``` lines is written with a longer fence.
 // ---------------------------------------------------------------------------
@@ -25,6 +29,8 @@ function parseNotebookMarkdown(markdown) {
   let text = [];
   let code = null; // {fence, lines}
   let textFence = null; // fence marker while inside a non-runnable fence of a text cell
+  let lastCode = null; // the code cell just closed, while only blank lines follow it
+  let input = null; // {fence, lines, cell} while inside an ```input fence
 
   const flushText = () => {
     while (text.length && !text[0].trim()) text.shift();
@@ -34,12 +40,25 @@ function parseNotebookMarkdown(markdown) {
   };
 
   for (const line of lines) {
+    if (input) {
+      if (line.trim() === input.fence) {
+        if (input.lines.length) input.cell.input = input.lines.join('\n');
+        input = null;
+      } else input.lines.push(line);
+      continue;
+    }
     if (code) {
       if (line.trim() === code.fence) {
-        cells.push({ id: newId(), kind: 'code', source: code.lines.join('\n') });
+        lastCode = { id: newId(), kind: 'code', source: code.lines.join('\n') };
+        cells.push(lastCode);
         code = null;
       } else code.lines.push(line);
       continue;
+    }
+    if (lastCode) {
+      const inputOpen = line.match(/^(`{3,})\s*input\s*$/i);
+      if (inputOpen) { input = { fence: inputOpen[1], lines: [], cell: lastCode }; lastCode = null; continue; }
+      if (line.trim()) lastCode = null;
     }
     if (textFence) {
       text.push(line);
@@ -63,6 +82,7 @@ function parseNotebookMarkdown(markdown) {
   }
   // An unclosed code fence still becomes a cell rather than losing the code
   if (code) cells.push({ id: newId(), kind: 'code', source: code.lines.join('\n') });
+  if (input && input.lines.length) input.cell.input = input.lines.join('\n');
   flushText();
 
   const firstText = cells.find((c) => c.kind === 'text');
@@ -84,6 +104,10 @@ function notebookToMarkdown(cells) {
     if (cell.kind === 'code') {
       const fence = fenceFor(cell.source);
       parts.push(`${fence}java run\n${cell.source}\n${fence}`);
+      if (cell.input) {
+        const inputFence = fenceFor(cell.input);
+        parts.push(`${inputFence}input\n${cell.input.replace(/\n$/, '')}\n${inputFence}`);
+      }
     } else {
       if (previous === 'text') parts.push(CELL_SPLIT);
       parts.push(cell.source);

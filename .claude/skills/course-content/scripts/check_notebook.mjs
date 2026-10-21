@@ -22,6 +22,8 @@ function parse(text) {
   let buf = [];
   let code = null;
   let textFence = null;
+  let lastCode = null; // the code cell just closed, while only blank lines follow (an ```input may come)
+  let input = null; // {fence, lines, cell} inside an ```input fence
   let startLine = 1;
   const flush = (lineNo) => {
     while (buf.length && !buf[0].trim()) buf.shift();
@@ -32,10 +34,22 @@ function parse(text) {
   };
   lines.forEach((line, i) => {
     const n = i + 1;
-    if (code) {
-      if (line.trim() === code.fence) { cells.push({ kind: 'code', source: code.lines.join('\n'), line: code.line }); code = null; startLine = n + 1; }
-      else code.lines.push(line);
+    if (input) {
+      if (line.trim() === input.fence) { input.cell.input = input.lines.join('\n'); input = null; startLine = n + 1; }
+      else input.lines.push(line);
       return;
+    }
+    if (code) {
+      if (line.trim() === code.fence) {
+        lastCode = { kind: 'code', source: code.lines.join('\n'), line: code.line };
+        cells.push(lastCode); code = null; startLine = n + 1;
+      } else code.lines.push(line);
+      return;
+    }
+    if (lastCode) {
+      const inputOpen = line.match(/^(`{3,})\s*input\s*$/i);
+      if (inputOpen) { input = { fence: inputOpen[1], lines: [], cell: lastCode }; lastCode = null; return; }
+      if (line.trim()) lastCode = null;
     }
     if (textFence) { buf.push(line); if (line.trim() === textFence) textFence = null; return; }
     const open = line.match(/^(`{3,})\s*java\s+run\s*$/i);
@@ -47,6 +61,7 @@ function parse(text) {
     buf.push(line);
   });
   if (code) cells.push({ kind: 'code', source: code.lines.join('\n'), line: code.line, unclosed: true });
+  if (input) input.cell.input = input.lines.join('\n');
   flush(lines.length);
   return cells;
 }
@@ -66,7 +81,9 @@ for (const c of cells) {
     if (c.unclosed) errors.push(`${at(c)} a \`\`\`java run fence is never closed`);
     if (!c.source.trim()) warnings.push(`${at(c)} empty code cell`);
     if (/^\s*package\s+[\w.]+\s*;/m.test(c.source)) errors.push(`${at(c)} "package" is not allowed in a notebook cell (JShell)`);
-    if (/new\s+Scanner\s*\(\s*System\.in\s*\)|System\.in\.read/.test(c.source)) errors.push(`${at(c)} reads System.in: there is no keyboard input in the sandbox`);
+    if (/new\s+Scanner\s*\(\s*System\.in\s*\)|System\.in\.read/.test(c.source) && !(c.input || '').trim()) {
+      warnings.push(`${at(c)} reads System.in but has no input: add an \`\`\`input fence right after the cell (one value per line)`);
+    }
     if (/public\s+static\s+void\s+main\s*\(/.test(c.source)) warnings.push(`${at(c)} a main method is not needed (cells run top to bottom) and is not called by itself`);
     if (/Thread\.sleep\s*\(\s*(\d{4,})/.test(c.source)) warnings.push(`${at(c)} long Thread.sleep: a whole run gets 15 s`);
     if (/\bwhile\s*\(\s*true\s*\)/.test(c.source)) warnings.push(`${at(c)} while (true): make sure it ends (15 s limit)`);

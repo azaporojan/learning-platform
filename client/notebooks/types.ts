@@ -5,6 +5,7 @@ export interface Cell {
   id: string;
   kind: CellKind;
   source: string;
+  input?: string; // code cells: what Scanner / System.in reads when the cell runs
 }
 
 export type OutputStatus = 'ok' | 'error' | 'timeout' | 'oom' | 'crashed' | 'not_run';

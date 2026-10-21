@@ -6,7 +6,8 @@
 const b64 = (text) => Buffer.from(String(text), 'utf8').toString('base64');
 
 const nonceLine = (nonce) => `NONCE ${nonce}\n`;
-const cellLine = (id, source) => `CELL ${id} ${b64(source)}\n`;
+// The input, when there is one, becomes the cell's System.in (an empty field keeps the old line shape)
+const cellLine = (id, source, input = '') => `CELL ${id} ${b64(source)}${input ? ` ${b64(input)}` : ''}\n`;
 const fileLine = (kind, path, content) => `${kind} ${b64(path)} ${b64(content)}\n`;
 
 /**

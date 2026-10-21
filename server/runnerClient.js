@@ -45,7 +45,7 @@ function createRunnerClient({ url = process.env.RUNNER_URL, token = process.env.
     queue: (requestId) => call('GET', `/queue/${encodeURIComponent(requestId)}`, undefined, { timeoutMs: 5000 }),
     check: (files, tests, timeoutMs) => call('POST', '/check', { files, tests, timeoutMs }, { timeoutMs: 300000 }),
     openSession: (owner) => call('POST', '/sessions', { owner }),
-    runInSession: (id, owner, source) => call('POST', `/sessions/${encodeURIComponent(id)}/cells`, { owner, source }),
+    runInSession: (id, owner, source, input = '') => call('POST', `/sessions/${encodeURIComponent(id)}/cells`, input ? { owner, source, input } : { owner, source }),
     closeSession: (id, owner) => call('DELETE', `/sessions/${encodeURIComponent(id)}?owner=${encodeURIComponent(owner)}`),
     stats: () => call('GET', '/stats', undefined, { timeoutMs: 5000 }),
   };

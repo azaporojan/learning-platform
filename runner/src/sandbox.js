@@ -89,8 +89,8 @@ class Sandbox {
   }
 
   /** Evaluates one cell. Resolves with the kernel's cell message, {type:'closed'} or null (timeout). */
-  async cell(id, source, timeoutMs) {
-    this.write(cellLine(id, source));
+  async cell(id, source, timeoutMs, input = '') {
+    this.write(cellLine(id, source, input));
     return this.next(timeoutMs);
   }
 

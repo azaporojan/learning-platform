@@ -39,6 +39,7 @@ const { RunnerError } = require('./runnerClient');
 const MAX_CELLS = 300;
 const MAX_CELL_CHARS = 20000;
 const MAX_NOTEBOOK_CHARS = 600000;
+const MAX_INPUT_CHARS = 10000; // a code cell's input: what Scanner / System.in reads when it runs
 const MAX_FILES_PER_NOTEBOOK = 200;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const RUNS_PER_MINUTE = Math.max(1, parseInt(process.env.NOTEBOOK_RUNS_PER_MINUTE || '10', 10));
@@ -77,13 +78,16 @@ function normalizeCells(cells) {
     let id = typeof c.id === 'string' && CELL_ID.test(c.id) ? c.id : newCellId();
     while (seen.has(id)) id = newCellId();
     seen.add(id);
-    total += c.source.length;
+    // Code cells may carry an input (stdin); text cells never do, and an empty input is dropped
+    const input = c.kind === 'code' && c.input !== undefined && c.input !== null ? c.input : '';
+    if (typeof input !== 'string' || input.length > MAX_INPUT_CHARS) throw httpError(400, `cells[${i}].input must be text of at most ${MAX_INPUT_CHARS} characters`);
+    total += c.source.length + input.length;
     if (total > MAX_NOTEBOOK_CHARS) throw httpError(400, 'This notebook is too large');
-    return { id, kind: c.kind, source: c.source };
+    return input ? { id, kind: c.kind, source: c.source, input } : { id, kind: c.kind, source: c.source };
   });
 }
 
-const contentSignature = (cells) => crypto.createHash('sha256').update(JSON.stringify(cells.map((c) => [c.kind, c.source]))).digest('hex');
+const contentSignature = (cells) => crypto.createHash('sha256').update(JSON.stringify(cells.map((c) => [c.kind, c.source, c.input || '']))).digest('hex');
 
 // Outputs kept for cells that still exist ("$count" is the execution counter)
 function pruneOutputs(outputs, cells) {
@@ -649,7 +653,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       const started = Date.now();
       let result;
       try {
-        result = await runner.run(code.map((c) => c.source), `${req.user.id}:${requestId}`);
+        result = await runner.run(code.map((c) => (c.input ? { source: c.source, input: c.input } : c.source)), `${req.user.id}:${requestId}`);
       } finally {
         db.query('INSERT INTO notebook_runs (user_id, notebook_id, mode, cell_count, status, duration_ms) VALUES (?, ?, ?, ?, ?, ?)',
           [req.user.id, r.row.id, 'run', code.length, result ? result.status : 'failed', Date.now() - started]).catch(() => {});
@@ -693,8 +697,10 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       const r = await load(req, res, 'run');
       if (!r) return;
       const { cellId, source } = req.body || {};
+      const input = (req.body || {}).input === undefined || (req.body || {}).input === null ? '' : req.body.input;
       if (typeof cellId !== 'string' || !CELL_ID.test(cellId)) throw httpError(400, 'cellId is required');
       if (typeof source !== 'string' || source.length > MAX_CELL_CHARS) throw httpError(400, 'source must be text');
+      if (typeof input !== 'string' || input.length > MAX_INPUT_CHARS) throw httpError(400, `input must be text of at most ${MAX_INPUT_CHARS} characters`);
       await admitRun(req.user.id);
       admitted = true;
       const owner = sessionOwner(req.user.id, r.row.id);
@@ -705,12 +711,12 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       let restarted = false;
       let result;
       try {
-        result = await runner.runInSession(session.id, owner, source);
+        result = await runner.runInSession(session.id, owner, source, input);
       } catch (err) {
         if (!(err instanceof RunnerError) || err.code !== 'no_session') throw err;
         session = await runner.openSession(owner); // idle-closed or runner restarted: start again
         restarted = true;
-        result = await runner.runInSession(session.id, owner, source);
+        result = await runner.runInSession(session.id, owner, source, input);
       }
       db.query('INSERT INTO notebook_runs (user_id, notebook_id, mode, cell_count, status, duration_ms) VALUES (?, ?, ?, ?, ?, ?)',
         [req.user.id, r.row.id, 'session', 1, result.status, result.durationMs || 0]).catch(() => {});

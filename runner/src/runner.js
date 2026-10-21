@@ -85,15 +85,25 @@ function readJson(req, limit) {
   });
 }
 
+const MAX_INPUT_CHARS = 10000;
+
+// A cell is its source, or {source, input}: input is what Scanner / System.in reads in that cell.
+// Returns [{source, input}].
 function validCells(cells) {
-  if (!Array.isArray(cells) || cells.length === 0 || cells.length > MAX_CELLS) throw new HttpError(400, `cells must be an array of 1-${MAX_CELLS} strings`);
+  if (!Array.isArray(cells) || cells.length === 0 || cells.length > MAX_CELLS) throw new HttpError(400, `cells must be an array of 1-${MAX_CELLS} cells`);
   let total = 0;
-  for (const c of cells) {
-    if (typeof c !== 'string' || c.length > MAX_CELL_CHARS) throw new HttpError(400, `each cell must be a string of at most ${MAX_CELL_CHARS} characters`);
-    total += c.length;
-  }
+  const out = cells.map((c) => {
+    const cell = typeof c === 'string' ? { source: c, input: '' } : (c && typeof c === 'object' && !Array.isArray(c) ? c : null);
+    if (!cell || typeof cell.source !== 'string' || cell.source.length > MAX_CELL_CHARS) {
+      throw new HttpError(400, `each cell must be a string, or {source, input}, of at most ${MAX_CELL_CHARS} characters`);
+    }
+    const input = cell.input === undefined || cell.input === null ? '' : cell.input;
+    if (typeof input !== 'string' || input.length > MAX_INPUT_CHARS) throw new HttpError(400, `a cell's input must be text of at most ${MAX_INPUT_CHARS} characters`);
+    total += cell.source.length + input.length;
+    return { source: cell.source, input };
+  });
   if (total > MAX_RUN_CHARS) throw new HttpError(400, `cells may hold at most ${MAX_RUN_CHARS} characters in total`);
-  return cells;
+  return out;
 }
 
 const SAFE_PATH = /^[A-Za-z0-9_$-]+(\/[A-Za-z0-9_$-]+)*\.java$/;
@@ -157,8 +167,8 @@ function createRunner({ executor, sessions, pool, token }) {
         }
         if (req.method === 'POST' && parts.length === 3 && parts[2] === 'cells') {
           const body = await readJson(req, 256 * 1024);
-          if (typeof body.source !== 'string' || body.source.length > MAX_CELL_CHARS) throw new HttpError(400, 'source must be a string');
-          return send(res, 200, await sessions.run(parts[1], ownerOf(body.owner), body.source));
+          const [cell] = validCells([{ source: body.source, input: body.input }]);
+          return send(res, 200, await sessions.run(parts[1], ownerOf(body.owner), cell.source, cell.input));
         }
         if (req.method === 'DELETE' && parts.length === 2) {
           const s = sessions.byId.get(parts[1]);

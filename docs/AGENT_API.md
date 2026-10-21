@@ -341,6 +341,9 @@ users.stream().filter(u -> u.age() >= 18).toList()
 ````
 
 - Every ` ```java run ` fence is a code cell; the text between code cells is one text cell.
+- An ` ```input ` fence right after a code cell is that cell's input: what `Scanner` / `System.in`
+  reads when it runs (at most 10 000 characters). In the JSON API it is the cell's `input` field.
+  Each cell reads only its own input.
   `<!-- cell -->` on its own line splits two text cells.
 - Other fences (` ```java ` without `run`, ` ```mermaid `, …) stay inside the text cell.
 - The first `# ` heading becomes the title unless `title` is sent.
