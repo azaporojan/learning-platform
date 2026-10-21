@@ -132,3 +132,15 @@ test('a sandbox stays owned by the pool until its removal has finished', async (
   await released;
   assert.strictEqual(pool.owned.has(sb), false);
 });
+
+test('a second destroy waits for the same removal, so the sandbox stays owned until it is done', async () => {
+  const { pool } = makePool({ warmTarget: 0, sandbox: { destroyMs: 50 } });
+  const sb = (await pool.acquire('check')).sandbox;
+  const first = sb.destroy();
+  const second = sb.destroy();
+  assert.strictEqual(first, second);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(pool.owned.has(sb), 'still owned while the removal runs');
+  await second;
+  assert.strictEqual(pool.owned.has(sb), false);
+});

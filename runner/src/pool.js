@@ -136,14 +136,18 @@ class Pool {
     this.refill();
   }
 
-  // Makes a sandbox and keeps it in `owned` until its destroy() has finished (or failed: then the
-  // stray sweep is free to retry the removal)
+  // Makes a sandbox and keeps it in `owned` until its removal has finished. Every caller of
+  // destroy() waits for the same removal, so a second caller never clears `owned` early. A removal
+  // the gate refused is logged by Sandbox.destroy and still leaves `owned`: the stray sweep then
+  // retries it.
   create(profile) {
     const sb = this.makeSandbox(profile);
     this.owned.add(sb);
     const destroy = sb.destroy.bind(sb);
-    sb.destroy = async () => {
-      try { await destroy(); } finally { this.owned.delete(sb); }
+    let removing = null;
+    sb.destroy = () => {
+      if (!removing) removing = (async () => { try { await destroy(); } finally { this.owned.delete(sb); } })();
+      return removing;
     };
     return sb;
   }

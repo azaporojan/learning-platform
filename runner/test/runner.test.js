@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { createRunner } = require('../src/runner');
+const { createRunner, sweepStrays } = require('../src/runner');
 const { BusyError } = require('../src/pool');
 
 const TOKEN = 't'.repeat(32);
@@ -103,4 +103,26 @@ test('a body that is not a JSON object is a 400, not a 500', async () => {
       }
     }
   });
+});
+
+test('the stray sweep spares owned and session sandboxes and young ones, and survives a failed removal', async () => {
+  const now = Date.parse('2026-10-21T10:00:00Z');
+  const old = new Date(now - 10 * 60 * 1000).toISOString();
+  const young = new Date(now - 30 * 1000).toISOString();
+  const removedCalls = [];
+  const errors = [];
+  const gate = {
+    list: async () => [
+      { id: 'owned1', createdAt: old }, { id: 'session1', createdAt: old }, { id: 'young1', createdAt: young },
+      { id: 'stray-fails', createdAt: old }, { id: 'stray-ok', createdAt: old },
+    ],
+    remove: async (id) => { removedCalls.push(id); if (id === 'stray-fails') throw new Error('gate DELETE -> 502'); },
+  };
+  const pool = { owned: new Set([{ id: 'owned1' }, { id: null }]) };
+  const sessions = { byId: new Map([['s', { sandbox: { id: 'session1' } }]]) };
+  const removed = await sweepStrays({ gate, pool, sessions, maxAgeMs: 4 * 60 * 1000, now, log: { error: (...a) => errors.push(a.join(' ')) } });
+  assert.deepStrictEqual(removedCalls.sort(), ['stray-fails', 'stray-ok']);
+  assert.deepStrictEqual(removed, ['stray-ok']);
+  assert.strictEqual(errors.length, 1);
+  assert.match(errors[0], /stray-fails/);
 });
