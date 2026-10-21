@@ -212,3 +212,45 @@
 .lp-cm .cm-content, .lp-output-text, .lp-code-block, .lp-code-block code { font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
 .lp-present .lp-code-block { font-size: 18px; }
 .lp-present .lp-output-text { font-size: 17px; }
+
+/* ---- Dark site and the Darcula code theme (client/theme.ts, client/notebooks/codeTheme.ts) ---- */
+/* Token colours: Darcula's palette, used by the dark site and by every Darcula surface */
+.dark .tok-keyword, .dark .tok-modifier, .dark .tok-operatorKeyword, .dark .tok-controlKeyword, .dark .tok-definitionKeyword, .dark .tok-bool, .dark .tok-null, .lp-darcula-scope .lp-code-block .tok-keyword, .lp-darcula-scope .lp-code-block .tok-modifier, .lp-darcula-scope .lp-code-block .tok-operatorKeyword, .lp-darcula-scope .lp-code-block .tok-controlKeyword, .lp-darcula-scope .lp-code-block .tok-definitionKeyword, .lp-darcula-scope .lp-code-block .tok-bool, .lp-darcula-scope .lp-code-block .tok-null { color: #cc7832; font-weight: 400; }
+.dark .tok-typeName, .dark .tok-className, .lp-darcula-scope .lp-code-block .tok-typeName, .lp-darcula-scope .lp-code-block .tok-className { color: #a9b7c6; }
+.dark .tok-string, .dark .tok-string2, .lp-darcula-scope .lp-code-block .tok-string, .lp-darcula-scope .lp-code-block .tok-string2 { color: #6a8759; }
+.dark .tok-number, .dark .tok-atom, .lp-darcula-scope .lp-code-block .tok-number, .lp-darcula-scope .lp-code-block .tok-atom { color: #6897bb; }
+.dark .tok-comment, .dark .tok-lineComment, .dark .tok-blockComment, .lp-darcula-scope .lp-code-block .tok-comment, .lp-darcula-scope .lp-code-block .tok-lineComment, .lp-darcula-scope .lp-code-block .tok-blockComment { color: #808080; font-style: italic; }
+.dark .tok-function, .lp-darcula-scope .lp-code-block .tok-function { color: #ffc66d; }
+.dark .tok-variableName.tok-definition, .lp-darcula-scope .lp-code-block .tok-variableName.tok-definition { color: #a9b7c6; }
+.dark .tok-propertyName, .lp-darcula-scope .lp-code-block .tok-propertyName { color: #9876aa; }
+.dark .tok-meta, .dark .tok-annotation, .lp-darcula-scope .lp-code-block .tok-meta, .lp-darcula-scope .lp-code-block .tok-annotation { color: #bbb529; }
+.dark .tok-punctuation, .dark .tok-operator, .lp-darcula-scope .lp-code-block .tok-punctuation, .lp-darcula-scope .lp-code-block .tok-operator { color: #a9b7c6; }
+.dark .tok-heading, .lp-darcula-scope .lp-code-block .tok-heading { color: #f3f4f6; }
+.dark .tok-link, .dark .tok-url, .lp-darcula-scope .lp-code-block .tok-link, .lp-darcula-scope .lp-code-block .tok-url { color: #589df6; }
+.dark .tok-monospace, .lp-darcula-scope .lp-code-block .tok-monospace { color: #e6a0c4; }
+/* Dark site: editor chrome */
+.dark .lp-cm .cm-content { color: #e5e7eb; }
+.dark .lp-cm .cm-cursor { border-left-color: #e5e7eb; }
+.dark .lp-cm .cm-gutters { color: #6b7280; }
+.dark .lp-cm .cm-activeLine { background: rgba(255, 255, 255, 0.04); }
+.dark .lp-cm .cm-activeLineGutter { color: #d1d5db; }
+.dark .lp-cm .cm-placeholder { color: #6b7280; }
+.dark .lp-cm .cm-selectionBackground, .dark .lp-cm .cm-editor.cm-focused .cm-selectionBackground { background: rgba(88, 157, 246, 0.3) !important; }
+.dark .lp-cm .cm-tooltip-autocomplete { background: #1f2937; border-color: #374151; color: #e5e7eb; }
+.dark .lp-cell-selected { background: rgba(56, 189, 248, 0.06); }
+.dark .lp-code-block { background: #111827 !important; color: #e5e7eb !important; border-color: #374151; }
+/* Darcula: code, input and output boxes, and code blocks in text cells */
+.lp-darcula.lp-code-box, .lp-darcula.lp-code-box:focus-within, .lp-darcula.lp-input-box, .lp-darcula.lp-output-box { background: #2b2b2b !important; border-color: #3c3f41 !important; }
+.lp-darcula.lp-code-box:focus-within { border-color: #4a88c7 !important; }
+.lp-darcula .lp-cm .cm-content { color: #a9b7c6; }
+.lp-darcula .lp-cm .cm-cursor { border-left-color: #bbbbbb; }
+.lp-darcula .lp-cm .cm-gutters { background: #313335; color: #606366; border-right: 1px solid #3c3f41; }
+.lp-darcula .lp-cm .cm-activeLine, .lp-darcula .lp-cm .cm-activeLineGutter { background: #323232; }
+.lp-darcula .lp-cm .cm-activeLineGutter { color: #a4a3a3; }
+.lp-darcula .lp-cm .cm-selectionBackground, .lp-darcula .lp-cm .cm-editor.cm-focused .cm-selectionBackground { background: #214283 !important; }
+.lp-darcula .lp-cm .cm-matchingBracket { background: #3b514d; color: #ffef28; }
+.lp-darcula .lp-cm .cm-placeholder { color: #787878; }
+.lp-darcula .lp-cm .cm-error-line { background: rgba(188, 63, 60, 0.28) !important; }
+.lp-darcula .lp-cm .cm-tooltip-autocomplete { background: #3c3f41; border-color: #515151; color: #bbbbbb; }
+.lp-darcula .lp-cm .cm-tooltip-autocomplete ul li[aria-selected] { background: #0d293e; color: #ffffff; }
+.lp-darcula-scope .lp-code-block { background: #2b2b2b !important; color: #a9b7c6 !important; border-color: #3c3f41; }

@@ -91,6 +91,9 @@ jobs:
       - name: Type-check and build client
         run: npm run build --prefix client
 
+      - name: Test client (code formatter)
+        run: npm test --prefix client
+
       # --- Server ---
       - name: Install server dependencies
         run: npm ci --prefix server

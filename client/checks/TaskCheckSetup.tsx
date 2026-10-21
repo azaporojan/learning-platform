@@ -77,43 +77,43 @@ const TaskCheckSetup: React.FC<{ taskId: number }> = ({ taskId }) => {
 
   const configured = config && config.configured !== false && (config.tests || []).length > 0;
   return (
-    <div className="border-t border-gray-200 pt-6">
+    <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <span className="text-sm font-bold text-gray-500 flex items-center gap-1"><span aria-hidden="true" className="material-icons text-base">science</span>AUTO-CHECK</span>
-          <p className="text-sm text-gray-600 mt-1">
+          <span className="text-sm font-bold text-gray-500 dark:text-gray-400 flex items-center gap-1"><span aria-hidden="true" className="material-icons text-base">science</span>AUTO-CHECK</span>
+          <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">
             {!config ? 'Loading…' : configured
               ? `${config.enabled ? 'On' : 'Off'} · ${(config.tests || []).length} hidden test file${(config.tests || []).length === 1 ? '' : 's'} · ${config.timeout_s} s · ${config.auto_approve ? 'passing code is approved automatically' : 'you approve'}`
               : 'Students submit Java files and hidden JUnit tests check them.'}
           </p>
-          {config && config.runner_configured === false && <p className="text-xs text-amber-700 mt-1">The code runner is not set up on this server yet.</p>}
+          {config && config.runner_configured === false && <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">The code runner is not set up on this server yet.</p>}
         </div>
-        <button type="button" onClick={begin} className="shrink-0 px-4 py-2 rounded-lg border-2 border-gray-200 font-bold text-gray-700 hover:border-primary-dark">{configured ? 'Edit' : 'Set up'}</button>
+        <button type="button" onClick={begin} className="shrink-0 px-4 py-2 rounded-lg border-2 border-gray-200 dark:border-gray-700 font-bold text-gray-700 dark:text-gray-200 hover:border-primary-dark">{configured ? 'Edit' : 'Set up'}</button>
       </div>
 
       {open && (
         <Modal title="Auto-check" onClose={() => setOpen(false)} wide>
           <div className="space-y-4">
-            <div className="flex rounded-xl bg-gray-100 p-1 w-fit" role="tablist">
+            <div className="flex rounded-xl bg-gray-100 dark:bg-gray-700 p-1 w-fit" role="tablist">
               {([['tests', 'Hidden tests'], ['starter', 'Starter code'], ['solution', 'Try with a solution']] as const).map(([k, label]) => (
-                <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={`px-3 py-1.5 rounded-lg text-sm font-bold ${tab === k ? 'bg-white shadow-sm' : 'text-gray-500'}`}>{label}</button>
+                <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={`px-3 py-1.5 rounded-lg text-sm font-bold ${tab === k ? 'bg-white dark:bg-gray-800 shadow-sm' : 'text-gray-500 dark:text-gray-400'}`}>{label}</button>
               ))}
             </div>
             {tab === 'tests' && (
               <>
-                <p className="text-xs text-gray-500">JUnit 5 with AssertJ. Students never see these files; failing test names and assertion messages are shown to them, so name tests the way you want them read.</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">JUnit 5 with AssertJ. Students never see these files; failing test names and assertion messages are shown to them, so name tests the way you want them read.</p>
                 <FileTabsEditor files={tests} onChange={setTests} allowStructure newFileName="MainTest.java" />
               </>
             )}
             {tab === 'starter' && (
               <>
-                <p className="text-xs text-gray-500">What students start from (they can add files). Leave a single empty file for "write it from scratch".</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">What students start from (they can add files). Leave a single empty file for "write it from scratch".</p>
                 <FileTabsEditor files={starter} onChange={setStarter} allowStructure newFileName="Main.java" />
               </>
             )}
             {tab === 'solution' && (
               <>
-                <p className="text-xs text-gray-500">Paste a reference solution and run the hidden tests against it. Nothing here is saved or shown to students.</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Paste a reference solution and run the hidden tests against it. Nothing here is saved or shown to students.</p>
                 <FileTabsEditor files={solution} onChange={setSolution} allowStructure newFileName="Main.java" />
                 <button type="button" onClick={tryTests} disabled={busy} className="px-4 py-2 rounded-lg bg-gray-900 text-white font-bold hover:bg-gray-700 disabled:opacity-50 inline-flex items-center gap-1">
                   <span aria-hidden="true" className="material-icons text-[20px]">play_arrow</span>Save and run the tests
@@ -121,25 +121,25 @@ const TaskCheckSetup: React.FC<{ taskId: number }> = ({ taskId }) => {
                 {result && <CheckResultView result={result} />}
               </>
             )}
-            <div className="grid sm:grid-cols-3 gap-4 pt-2 border-t border-gray-100">
+            <div className="grid sm:grid-cols-3 gap-4 pt-2 border-t border-gray-100 dark:border-gray-800">
               <label className="block">
-                <span className="text-sm font-bold text-gray-700">Time per check</span>
-                <select value={timeoutS} onChange={(e) => setTimeoutS(Number(e.target.value))} className="mt-1 w-full rounded-lg border-gray-300">
+                <span className="text-sm font-bold text-gray-700 dark:text-gray-200">Time per check</span>
+                <select value={timeoutS} onChange={(e) => setTimeoutS(Number(e.target.value))} className="mt-1 w-full rounded-lg border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 dark:text-gray-100">
                   {[10, 20, 30, 45, 60].map((s) => <option key={s} value={s}>{s} seconds</option>)}
                 </select>
               </label>
               <label className="flex items-start gap-2 sm:pt-6">
                 <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="mt-1 rounded text-primary-dark" />
-                <span className="text-sm"><span className="font-bold text-gray-700">On</span><span className="block text-xs text-gray-500">Students see the code editor</span></span>
+                <span className="text-sm"><span className="font-bold text-gray-700 dark:text-gray-200">On</span><span className="block text-xs text-gray-500 dark:text-gray-400">Students see the code editor</span></span>
               </label>
               <label className="flex items-start gap-2 sm:pt-6">
                 <input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} className="mt-1 rounded text-primary-dark" />
-                <span className="text-sm"><span className="font-bold text-gray-700">Auto-approve</span><span className="block text-xs text-gray-500">Approve when every test passes. Student code runs next to the checker, so a determined student could fake a pass: keep it off for graded work.</span></span>
+                <span className="text-sm"><span className="font-bold text-gray-700 dark:text-gray-200">Auto-approve</span><span className="block text-xs text-gray-500 dark:text-gray-400">Approve when every test passes. Student code runs next to the checker, so a determined student could fake a pass: keep it off for graded work.</span></span>
               </label>
             </div>
-            {error && <p className="text-sm text-rose-600">{error}</p>}
+            {error && <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p>}
             <div className="flex items-center justify-between pt-2">
-              {configured ? <button type="button" onClick={remove} className="text-sm font-bold text-rose-600 hover:underline">Remove auto-check</button> : <span />}
+              {configured ? <button type="button" onClick={remove} className="text-sm font-bold text-rose-600 dark:text-rose-400 hover:underline">Remove auto-check</button> : <span />}
               <button type="button" onClick={async () => { if (await save()) setOpen(false); }} disabled={busy} className="px-5 py-2 rounded-full bg-primary font-bold text-gray-900 hover:bg-primary-dark hover:text-white disabled:opacity-50">Save</button>
             </div>
           </div>

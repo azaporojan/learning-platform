@@ -8,6 +8,7 @@ import { AddCellBar, CellAction, CellView, CellViewHandle } from '../notebooks/C
 import { headingsOf } from '../notebooks/NotebookMarkdown';
 import { PresentMode } from '../notebooks/PresentMode';
 import { Modal } from '../notebooks/Modal';
+import { useCodeTheme } from '../notebooks/codeTheme';
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'conflict' | 'error';
 interface Toast { text: string; action?: { label: string; run: () => void } }
@@ -34,6 +35,11 @@ const SHORTCUTS: [string, string][] = [
   ['Ctrl+S', 'Save now (autosave runs anyway)'],
   ['Ctrl+/', 'Comment or uncomment lines'],
   ['Ctrl+Space', 'Suggestions'],
+  ['Ctrl+Alt+L', 'Reformat the code (the selected lines, if any)'],
+  ['Ctrl+D', 'Duplicate the line or the selection'],
+  ['Ctrl+Y', 'Delete the line (redo is Ctrl+Shift+Z in code)'],
+  ['Shift+Alt+↑ / ↓', 'Move the line up / down'],
+  ['sout + Tab', 'System.out.println();  also souf, serr, fori, iter'],
 ];
 
 const isTyping = (target: EventTarget | null) => {
@@ -67,6 +73,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
   const [outlineOpen, setOutlineOpen] = useState(() => readPref(OUTLINE_KEY, true));
   const [outlineDrawer, setOutlineDrawer] = useState(false);
   const [dialog, setDialog] = useState<null | 'shortcuts' | 'settings' | 'copies'>(null);
+  const [codeTheme, setCodeTheme] = useCodeTheme();
   const [editingTitle, setEditingTitle] = useState(false);
   const [title, setTitle] = useState('');
 
@@ -487,8 +494,8 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
       <div className="h-full overflow-y-auto">
         <div className="max-w-xl mx-auto mt-16 text-center">
           <span aria-hidden="true" className="material-icons text-5xl text-gray-300">{loadError.status === 403 ? 'lock' : 'search_off'}</span>
-          <h1 className="text-2xl font-extrabold text-gray-800 mt-2">{loadError.status === 403 ? 'This notebook is locked' : 'Notebook not found'}</h1>
-          <p className="text-gray-500 mt-2">{loadError.status === 403 ? 'It belongs to a lesson you have not reached yet.' : loadError.message}</p>
+          <h1 className="text-2xl font-extrabold text-gray-800 dark:text-gray-100 mt-2">{loadError.status === 403 ? 'This notebook is locked' : 'Notebook not found'}</h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-2">{loadError.status === 403 ? 'It belongs to a lesson you have not reached yet.' : loadError.message}</p>
           <Link to="/notebooks" className="inline-block mt-6 px-5 py-2 rounded-full bg-primary font-bold text-gray-900 hover:bg-primary-dark hover:text-white">All notebooks</Link>
         </div>
       </div>
@@ -510,7 +517,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
             <button
               type="button"
               onClick={() => { setSelectedId(h.cellId); setOutlineDrawer(false); document.querySelector(`[data-cell-id="${h.cellId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
-              className={`block w-full text-left truncate rounded px-2 py-1 hover:bg-gray-100 ${selectedId === h.cellId ? 'text-primary-dark font-bold' : 'text-gray-600'}`}
+              className={`block w-full text-left truncate rounded px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-700 ${selectedId === h.cellId ? 'text-primary-dark font-bold' : 'text-gray-600 dark:text-gray-300'}`}
               style={{ paddingLeft: `${(h.level - 1) * 12 + 8}px` }}
             >
               {h.text}
@@ -522,11 +529,11 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
   );
 
   return (
-    <div className="h-full overflow-y-auto custom-scrollbar" id="notebook-scroll">
+    <div className={`h-full overflow-y-auto custom-scrollbar ${codeTheme === 'darcula' ? 'lp-darcula-scope' : ''}`} id="notebook-scroll">
       {/* Top bar */}
-      <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-100">
+      <div className="sticky top-0 z-20 bg-white/95 dark:bg-gray-900/95 backdrop-blur border-b border-gray-100 dark:border-gray-800">
         <div className="mx-auto max-w-[1180px] px-3 py-2 flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => (window.innerWidth < 1024 ? setOutlineDrawer(true) : (setOutlineOpen(!outlineOpen), writePref(OUTLINE_KEY, !outlineOpen)))} title="Outline" aria-label="Outline" className="w-9 h-9 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-500">
+          <button type="button" onClick={() => (window.innerWidth < 1024 ? setOutlineDrawer(true) : (setOutlineOpen(!outlineOpen), writePref(OUTLINE_KEY, !outlineOpen)))} title="Outline" aria-label="Outline" className="w-9 h-9 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-center text-gray-500 dark:text-gray-400">
             <span aria-hidden="true" className="material-icons">toc</span>
           </button>
           <div className="min-w-0 flex-1 basis-48">
@@ -537,28 +544,28 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
                 onChange={(e) => setTitle(e.target.value)}
                 onBlur={() => saveTitle(title)}
                 onKeyDown={(e) => { if (e.key === 'Enter') saveTitle(title); if (e.key === 'Escape') { setTitle(nb.title); setEditingTitle(false); } }}
-                className="w-full text-lg font-extrabold text-gray-800 border-b-2 border-primary-dark outline-none bg-transparent"
+                className="w-full text-lg font-extrabold text-gray-800 dark:text-gray-100 border-b-2 border-primary-dark outline-none bg-transparent"
                 maxLength={255}
               />
             ) : (
-              <h1 className={`text-lg font-extrabold text-gray-800 truncate ${editable ? 'cursor-text hover:bg-gray-50 rounded px-1 -mx-1' : ''}`} onClick={() => editable && setEditingTitle(true)} title={editable ? 'Rename' : undefined}>
+              <h1 className={`text-lg font-extrabold text-gray-800 dark:text-gray-100 truncate ${editable ? 'cursor-text hover:bg-gray-50 dark:hover:bg-gray-800 rounded px-1 -mx-1' : ''}`} onClick={() => editable && setEditingTitle(true)} title={editable ? 'Rename' : undefined}>
                 {nb.title}
               </h1>
             )}
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-gray-500">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
               {nb.lesson
                 ? <Link to={nb.lesson.course_id ? `/courses/${nb.lesson.course_id}?lesson=${nb.lesson.id}` : '#'} className="inline-flex items-center gap-1 hover:text-primary-dark"><span aria-hidden="true" className="material-icons text-sm">school</span>{nb.lesson.course_name ? `${nb.lesson.course_name} › ` : ''}{nb.lesson.title}</Link>
                 : <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="material-icons text-sm">science</span>Playground</span>}
               {!nb.owner.is_teacher || nb.owner.id !== currentUser.id ? <span>by {nb.owner.id === currentUser.id ? 'you' : nb.owner.name}</span> : null}
               {nb.copied_from && (nb.copied_from.removed
                 ? <span>Copy · original removed</span>
-                : <span>Based on <Link to={`/notebooks/${nb.copied_from.id}`} className="underline hover:text-primary-dark">{nb.copied_from.title}</Link>{nb.copied_from.updated_since_copy && <strong className="text-amber-700"> · updated since you copied</strong>}</span>)}
-              {ownTeacherNotebook && <span className={nb.published ? 'text-emerald-700 font-semibold' : 'text-gray-400'}>{nb.published ? 'Published to students' : 'Draft (students cannot see it)'}</span>}
+                : <span>Based on <Link to={`/notebooks/${nb.copied_from.id}`} className="underline hover:text-primary-dark">{nb.copied_from.title}</Link>{nb.copied_from.updated_since_copy && <strong className="text-amber-700 dark:text-amber-300"> · updated since you copied</strong>}</span>)}
+              {ownTeacherNotebook && <span className={nb.published ? 'text-emerald-700 dark:text-emerald-300 font-semibold' : 'text-gray-400'}>{nb.published ? 'Published to students' : 'Draft (students cannot see it)'}</span>}
             </div>
           </div>
           <div className="flex items-center gap-1 flex-wrap">
             {editable && (
-              <span className={`text-xs font-semibold px-2 ${saveState === 'conflict' || saveState === 'error' ? 'text-rose-600' : saveState === 'saved' ? 'text-gray-400' : 'text-amber-600'}`} aria-live="polite">
+              <span className={`text-xs font-semibold px-2 ${saveState === 'conflict' || saveState === 'error' ? 'text-rose-600 dark:text-rose-400' : saveState === 'saved' ? 'text-gray-400' : 'text-amber-600 dark:text-amber-400'}`} aria-live="polite">
                 {saveLabel[saveState]}
               </span>
             )}
@@ -572,7 +579,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
                 type="button"
                 onClick={() => (liveSession ? endSession() : (setLiveSession(true), showToast({ text: 'Live session on: each run executes only that cell and variables stay between runs.' }, 4000)))}
                 title="Live session: state is kept between runs (teacher only, 10 min idle timeout)"
-                className={`h-9 px-3 rounded-lg text-sm font-bold inline-flex items-center gap-1 ${liveSession ? 'bg-sky-100 text-sky-800' : 'hover:bg-gray-100 text-gray-600'}`}
+                className={`h-9 px-3 rounded-lg text-sm font-bold inline-flex items-center gap-1 ${liveSession ? 'bg-sky-100 dark:bg-sky-900/40 text-sky-800 dark:text-sky-300' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300'}`}
               >
                 <span aria-hidden="true" className="material-icons text-[20px]">{liveSession ? 'sensors' : 'sensors_off'}</span>{liveSession ? 'Live session' : 'Live'}
               </button>
@@ -583,25 +590,36 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
               </button>
             )}
             {editable && nb.copied_from && nb.copied_from.updated_since_copy && nb.copied_from.id && (
-              <button type="button" onClick={() => navigate(`/notebooks/${nb.copied_from!.id}`)} className="h-9 px-3 rounded-lg hover:bg-amber-50 text-amber-800 font-bold text-sm">See the new version</button>
+              <button type="button" onClick={() => navigate(`/notebooks/${nb.copied_from!.id}`)} className="h-9 px-3 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-900/30 text-amber-800 dark:text-amber-300 font-bold text-sm">See the new version</button>
             )}
-            <button type="button" onClick={() => setPresenting(true)} title="Present" aria-label="Present" className="w-9 h-9 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-600">
+            <button type="button" onClick={() => setPresenting(true)} title="Present" aria-label="Present" className="w-9 h-9 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300">
               <span aria-hidden="true" className="material-icons">slideshow</span>
             </button>
             {ownTeacherNotebook && (
-              <button type="button" onClick={() => setDialog('copies')} title="Student copies" aria-label="Student copies" className="h-9 px-2 rounded-lg hover:bg-gray-100 text-gray-600 text-sm font-bold inline-flex items-center gap-1">
+              <button type="button" onClick={() => setDialog('copies')} title="Student copies" aria-label="Student copies" className="h-9 px-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 text-sm font-bold inline-flex items-center gap-1">
                 <span aria-hidden="true" className="material-icons text-[20px]">group</span>{nb.copies_count || 0}
               </button>
             )}
-            <a href={apiUrl(`/notebooks/${nb.id}/export`)} title="Download as Markdown" aria-label="Download as Markdown" className="w-9 h-9 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-600">
+            <a href={apiUrl(`/notebooks/${nb.id}/export`)} title="Download as Markdown" aria-label="Download as Markdown" className="w-9 h-9 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300">
               <span aria-hidden="true" className="material-icons">download</span>
             </a>
             {editable && (
-              <button type="button" onClick={() => setDialog('settings')} title="Settings" aria-label="Settings" className="w-9 h-9 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-600">
+              <button type="button" onClick={() => setDialog('settings')} title="Settings" aria-label="Settings" className="w-9 h-9 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300">
                 <span aria-hidden="true" className="material-icons">tune</span>
               </button>
             )}
-            <button type="button" onClick={() => setDialog('shortcuts')} title="Keyboard shortcuts (H)" aria-label="Keyboard shortcuts" className="w-9 h-9 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-600">
+            <button
+              type="button"
+              onClick={() => setCodeTheme(codeTheme === 'darcula' ? 'default' : 'darcula')}
+              aria-pressed={codeTheme === 'darcula'}
+              title={codeTheme === 'darcula' ? 'Code theme: Darcula (click for the default)' : 'Code theme: default (click for Darcula)'}
+              aria-label="Darcula code theme"
+              className={`h-9 px-2 rounded-lg text-sm font-bold inline-flex items-center gap-1 ${codeTheme === 'darcula' ? 'bg-[#2b2b2b] text-[#cc7832] hover:bg-[#3c3f41]' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+            >
+              <span aria-hidden="true" className="material-icons text-[20px]">contrast</span>
+              <span className="hidden lg:inline">Darcula</span>
+            </button>
+            <button type="button" onClick={() => setDialog('shortcuts')} title="Keyboard shortcuts (H)" aria-label="Keyboard shortcuts" className="w-9 h-9 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300">
               <span aria-hidden="true" className="material-icons">keyboard</span>
             </button>
           </div>
@@ -609,14 +627,14 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
         {(saveState === 'conflict' || runnerNotice || !editable) && (
           <div className="mx-auto max-w-[1180px] px-3 pb-2 space-y-1">
             {saveState === 'conflict' && (
-              <div className="flex items-center justify-between gap-3 rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-sm text-rose-900">
+              <div className="flex items-center justify-between gap-3 rounded-lg bg-rose-50 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800 px-3 py-2 text-sm text-rose-900 dark:text-rose-300">
                 <span>This notebook was changed in another tab or window. Your latest edits here are not saved.</span>
                 <button type="button" onClick={load} className="font-bold underline shrink-0">Reload</button>
               </div>
             )}
-            {runnerNotice && <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-900">{runnerNotice}</div>}
+            {runnerNotice && <div className="rounded-lg bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 px-3 py-2 text-sm text-amber-900 dark:text-amber-300">{runnerNotice}</div>}
             {!editable && (
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-sky-50 border border-sky-200 px-3 py-2 text-sm text-sky-900">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-sky-50 dark:bg-sky-900/30 border border-sky-200 dark:border-sky-800 px-3 py-2 text-sm text-sky-900 dark:text-sky-300">
                 <span>{nb.owner.is_teacher ? "This is the teacher's notebook. Copy it to edit and run the code." : `${nb.owner.name}'s notebook, read-only.`}</span>
               </div>
             )}
@@ -679,7 +697,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
       {outlineDrawer && (
         <div className="fixed inset-0 z-40 lg:hidden" onClick={() => setOutlineDrawer(false)}>
           <div className="absolute inset-0 bg-black/30" />
-          <div className="absolute left-0 top-0 bottom-0 w-72 bg-white p-4 overflow-y-auto shadow-xl" onClick={(e) => e.stopPropagation()}>{outlinePanel}</div>
+          <div className="absolute left-0 top-0 bottom-0 w-72 bg-white dark:bg-gray-800 p-4 overflow-y-auto shadow-xl" onClick={(e) => e.stopPropagation()}>{outlinePanel}</div>
         </div>
       )}
 
@@ -722,8 +740,8 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
             <tbody>
               {SHORTCUTS.map(([k, d]) => (
                 <tr key={k} className="border-b border-gray-50 last:border-0">
-                  <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap text-gray-700">{k}</td>
-                  <td className="py-1.5 text-gray-600">{d}</td>
+                  <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap text-gray-700 dark:text-gray-200">{k}</td>
+                  <td className="py-1.5 text-gray-600 dark:text-gray-300">{d}</td>
                 </tr>
               ))}
             </tbody>
@@ -803,37 +821,37 @@ const SettingsDialog: React.FC<{
     <Modal title="Notebook settings" onClose={onClose}>
       <div className="space-y-4">
         <label className="block">
-          <span className="text-sm font-bold text-gray-700">Title</span>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={255} className="mt-1 w-full rounded-lg border-gray-300 focus:border-primary-dark focus:ring-primary-dark" />
+          <span className="text-sm font-bold text-gray-700 dark:text-gray-200">Title</span>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={255} className="mt-1 w-full rounded-lg border-gray-300 dark:border-gray-600 focus:border-primary-dark focus:ring-primary-dark bg-white dark:bg-gray-900 dark:text-gray-100" />
         </label>
         <label className="block">
-          <span className="text-sm font-bold text-gray-700">Description</span>
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} maxLength={4000} className="mt-1 w-full rounded-lg border-gray-300 focus:border-primary-dark focus:ring-primary-dark" />
+          <span className="text-sm font-bold text-gray-700 dark:text-gray-200">Description</span>
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} maxLength={4000} className="mt-1 w-full rounded-lg border-gray-300 dark:border-gray-600 focus:border-primary-dark focus:ring-primary-dark bg-white dark:bg-gray-900 dark:text-gray-100" />
         </label>
         {canAttach && (
           <>
             <label className="block">
-              <span className="text-sm font-bold text-gray-700">Lesson</span>
-              <select value={lessonId ?? ''} onChange={(e) => setLessonId(e.target.value ? Number(e.target.value) : null)} className="mt-1 w-full rounded-lg border-gray-300 focus:border-primary-dark focus:ring-primary-dark" disabled={lessons === null}>
+              <span className="text-sm font-bold text-gray-700 dark:text-gray-200">Lesson</span>
+              <select value={lessonId ?? ''} onChange={(e) => setLessonId(e.target.value ? Number(e.target.value) : null)} className="mt-1 w-full rounded-lg border-gray-300 dark:border-gray-600 focus:border-primary-dark focus:ring-primary-dark bg-white dark:bg-gray-900 dark:text-gray-100" disabled={lessons === null}>
                 <option value="">Not attached (playground)</option>
                 {(lessons || []).map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
-              <span className="text-xs text-gray-500">Attached notebooks show inside the lesson and follow its phase gates.</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">Attached notebooks show inside the lesson and follow its phase gates.</span>
             </label>
             <label className="flex items-start gap-3">
               <input type="checkbox" checked={published} onChange={(e) => setPublished(e.target.checked)} className="mt-1 rounded text-primary-dark focus:ring-primary-dark" />
               <span>
-                <span className="text-sm font-bold text-gray-700">Published to students</span>
-                <span className="block text-xs text-gray-500">Students can open it read-only and copy it. Unpublished notebooks are yours only.</span>
+                <span className="text-sm font-bold text-gray-700 dark:text-gray-200">Published to students</span>
+                <span className="block text-xs text-gray-500 dark:text-gray-400">Students can open it read-only and copy it. Unpublished notebooks are yours only.</span>
               </span>
             </label>
           </>
         )}
-        {error && <p className="text-sm text-rose-600">{error}</p>}
+        {error && <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p>}
         <div className="flex items-center justify-between pt-2">
           {confirmDelete
-            ? <span className="flex items-center gap-2 text-sm"><span className="text-rose-700 font-semibold">Delete for good?</span><button type="button" onClick={remove} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-bold">Delete</button><button type="button" onClick={() => setConfirmDelete(false)} className="px-3 py-1.5 rounded-lg hover:bg-gray-100">Keep</button></span>
-            : <button type="button" onClick={() => setConfirmDelete(true)} className="text-sm font-bold text-rose-600 hover:underline">Delete notebook</button>}
+            ? <span className="flex items-center gap-2 text-sm"><span className="text-rose-700 dark:text-rose-300 font-semibold">Delete for good?</span><button type="button" onClick={remove} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-bold">Delete</button><button type="button" onClick={() => setConfirmDelete(false)} className="px-3 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700">Keep</button></span>
+            : <button type="button" onClick={() => setConfirmDelete(true)} className="text-sm font-bold text-rose-600 dark:text-rose-400 hover:underline">Delete notebook</button>}
           <button type="button" onClick={save} className="px-5 py-2 rounded-full bg-primary font-bold text-gray-900 hover:bg-primary-dark hover:text-white">Save</button>
         </div>
       </div>
@@ -847,16 +865,16 @@ const CopiesDialog: React.FC<{ notebookId: number; onClose: () => void }> = ({ n
   return (
     <Modal title="Student copies" onClose={onClose} wide>
       {rows === null && <p className="text-gray-400 text-sm">Loading…</p>}
-      {rows && rows.length === 0 && <p className="text-gray-500 text-sm">No student has copied this notebook yet.</p>}
+      {rows && rows.length === 0 && <p className="text-gray-500 dark:text-gray-400 text-sm">No student has copied this notebook yet.</p>}
       {rows && rows.length > 0 && (
-        <ul className="divide-y divide-gray-100">
+        <ul className="divide-y divide-gray-100 dark:divide-gray-800">
           {rows.map((r) => (
             <li key={r.id} className="py-2 flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="font-bold text-gray-800 truncate">{r.owner.name}</div>
-                <div className="text-xs text-gray-500">Last run {timeAgo(r.last_run_at)} · edited {timeAgo(r.updated_at)}</div>
+                <div className="font-bold text-gray-800 dark:text-gray-100 truncate">{r.owner.name}</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Last run {timeAgo(r.last_run_at)} · edited {timeAgo(r.updated_at)}</div>
               </div>
-              <Link to={`/notebooks/${r.id}`} onClick={onClose} className="shrink-0 px-3 py-1.5 rounded-lg border border-gray-200 text-sm font-bold hover:border-primary-dark">Open read-only</Link>
+              <Link to={`/notebooks/${r.id}`} onClick={onClose} className="shrink-0 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-sm font-bold hover:border-primary-dark">Open read-only</Link>
             </li>
           ))}
         </ul>

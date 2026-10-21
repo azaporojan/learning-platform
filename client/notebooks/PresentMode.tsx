@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Cell, CellOutput } from './types';
 import { NotebookMarkdown } from './NotebookMarkdown';
+import { darculaClass, useCodeTheme } from './codeTheme';
 import { CodeEditor } from './CodeEditor';
 import { CellOutputView } from './CellOutputView';
 
@@ -56,13 +57,14 @@ export const PresentMode: React.FC<PresentModeProps> = ({ title, cells, outputs,
     return () => window.removeEventListener('keydown', onKey);
   }, [slides.length, onClose]);
 
+  const [codeTheme] = useCodeTheme();
   return (
-    <div ref={root} tabIndex={-1} className="fixed inset-0 z-[60] bg-white flex flex-col outline-none lp-present" role="dialog" aria-label={`Presenting ${title}`}>
-      <div className="flex items-center justify-between px-6 py-3 border-b border-gray-100 text-sm text-gray-500">
-        <span className="font-bold text-gray-700 truncate">{title}</span>
+    <div ref={root} tabIndex={-1} className={`fixed inset-0 z-[60] bg-white dark:bg-gray-900 flex flex-col outline-none lp-present ${codeTheme === 'darcula' ? 'lp-darcula-scope' : ''}`} role="dialog" aria-label={`Presenting ${title}`}>
+      <div className="flex items-center justify-between px-6 py-3 border-b border-gray-100 dark:border-gray-800 text-sm text-gray-500 dark:text-gray-400">
+        <span className="font-bold text-gray-700 dark:text-gray-200 truncate">{title}</span>
         <div className="flex items-center gap-3">
           <span className="tabular-nums">{index + 1} / {slides.length}</span>
-          <button type="button" onClick={onClose} className="px-3 py-1 rounded-lg hover:bg-gray-100 font-semibold">Exit (Esc)</button>
+          <button type="button" onClick={onClose} className="px-3 py-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 font-semibold">Exit (Esc)</button>
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
@@ -83,20 +85,20 @@ export const PresentMode: React.FC<PresentModeProps> = ({ title, cells, outputs,
                     {runningIds.has(c.id) ? <span className="lp-spinner" /> : <span aria-hidden="true" className="material-icons">play_arrow</span>}
                   </button>
                 )}
-                <div className="min-w-0 flex-1 rounded-xl border border-gray-200 bg-gray-50 overflow-hidden text-lg">
+                <div className={`lp-code-box min-w-0 flex-1 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-950 overflow-hidden text-lg ${darculaClass(codeTheme)}`}>
                   <CodeEditor value={c.source} language="java" readOnly onChange={() => {}} />
                 </div>
               </div>
-              {outputs[c.id] && <div className="ml-[3.25rem] rounded-xl border border-gray-100 text-base"><CellOutputView output={outputs[c.id]} /></div>}
+              {outputs[c.id] && <div className={`lp-output-box ml-[3.25rem] rounded-xl border border-gray-100 dark:border-gray-800 text-base ${darculaClass(codeTheme)}`}><CellOutputView output={outputs[c.id]} /></div>}
             </div>
           )))}
         </div>
       </div>
-      <div className="flex items-center justify-center gap-4 py-3 border-t border-gray-100">
-        <button type="button" onClick={() => setIndex((i) => Math.max(0, i - 1))} disabled={index === 0} className="px-4 py-2 rounded-xl font-bold text-gray-600 hover:bg-gray-100 disabled:opacity-30">
+      <div className="flex items-center justify-center gap-4 py-3 border-t border-gray-100 dark:border-gray-800">
+        <button type="button" onClick={() => setIndex((i) => Math.max(0, i - 1))} disabled={index === 0} className="px-4 py-2 rounded-xl font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30">
           <span aria-hidden="true" className="material-icons align-middle">chevron_left</span> Previous
         </button>
-        <button type="button" onClick={() => setIndex((i) => Math.min(slides.length - 1, i + 1))} disabled={index >= slides.length - 1} className="px-4 py-2 rounded-xl font-bold text-gray-600 hover:bg-gray-100 disabled:opacity-30">
+        <button type="button" onClick={() => setIndex((i) => Math.min(slides.length - 1, i + 1))} disabled={index >= slides.length - 1} className="px-4 py-2 rounded-xl font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30">
           Next <span aria-hidden="true" className="material-icons align-middle">chevron_right</span>
         </button>
       </div>

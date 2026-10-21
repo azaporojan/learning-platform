@@ -8,6 +8,7 @@ import { AlertDialog } from './AlertDialog';
 import { apiUrl, getFileUrl } from '../config';
 import { NotificationDropdown } from './NotificationDropdown';
 import ApiKeysModal from './ApiKeysModal';
+import { ThemeSwitcher } from './ThemeSwitcher';
 
 interface NavbarProps {
   onOpenRegister?: () => void;
@@ -249,12 +250,15 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
 
         <div className="flex items-center space-x-6">
           {!currentUser ? (
+            <div className="flex items-center space-x-3">
+            <ThemeSwitcher />
             <button
               onClick={onOpenLogin}
               className="bg-primary hover:bg-primary-dark text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md transition-colors"
             >
               Authentication
             </button>
+            </div>
           ) : (
             <div className="flex items-center space-x-6">
               {/* Online Users - exclude current user */}
@@ -294,6 +298,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenRegister, onOpenLogin, cur
                   </div>
                 </div>
               )}
+
+              <ThemeSwitcher />
 
               {/* Notification Bell */}
               <NotificationDropdown currentUser={currentUser} />

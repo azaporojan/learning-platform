@@ -58,8 +58,11 @@ const TYPES = [...Object.keys(STATICS), 'ArrayList', 'HashMap', 'HashSet', 'Link
   'Exception', 'RuntimeException', 'IllegalArgumentException', 'IllegalStateException', 'NullPointerException', 'Function', 'Predicate', 'Supplier', 'Consumer', 'BiFunction', 'Record'];
 
 const SNIPPETS: Completion[] = [
-  snippetCompletion('System.out.println(${})', { label: 'sout', detail: 'System.out.println', type: 'function' }),
-  snippetCompletion('for (int ${i} = 0; ${i} < ${n}; ${i}++) {\n\t${}\n}', { label: 'fori', detail: 'for loop', type: 'keyword' }),
+  snippetCompletion('System.out.println(${});', { label: 'sout', detail: 'System.out.println (Tab)', type: 'function' }),
+  snippetCompletion('System.out.printf("${}%n");', { label: 'souf', detail: 'System.out.printf (Tab)', type: 'function' }),
+  snippetCompletion('System.err.println(${});', { label: 'serr', detail: 'System.err.println (Tab)', type: 'function' }),
+  snippetCompletion('for (var ${item} : ${items}) {\n\t${}\n}', { label: 'iter', detail: 'for-each loop (Tab)', type: 'keyword' }),
+  snippetCompletion('for (int ${i} = 0; ${i} < ${n}; ${i}++) {\n\t${}\n}', { label: 'fori', detail: 'for loop (Tab)', type: 'keyword' }),
   snippetCompletion('for (var ${item} : ${items}) {\n\t${}\n}', { label: 'foreach', detail: 'for-each loop', type: 'keyword' }),
   snippetCompletion('record ${Name}(${String name}) {}', { label: 'record', detail: 'record declaration', type: 'keyword' }),
   snippetCompletion('assertThat(${actual}).isEqualTo(${expected});', { label: 'assertThat', detail: 'AssertJ', type: 'function' }),

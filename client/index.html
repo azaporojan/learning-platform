@@ -7,6 +7,16 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%23FACC15%22><path d=%22M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z%22/></svg>">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <script>
+      // The saved theme (client/theme.ts), applied before the first paint so nothing flashes
+      (function () {
+        var c = null;
+        try { c = localStorage.getItem('lp-theme'); } catch (e) { /* private mode */ }
+        var dark = c === 'dark' || (c === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (dark) document.documentElement.classList.add('dark');
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+      })();
+    </script>
     <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
     <script>
       tailwind.config = {
