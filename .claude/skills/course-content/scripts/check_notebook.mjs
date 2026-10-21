@@ -35,9 +35,12 @@ function parse(text) {
   lines.forEach((line, i) => {
     const n = i + 1;
     if (input) {
-      if (line.trim() === input.fence) { input.cell.input = input.lines.join('\n'); input = null; startLine = n + 1; }
-      else input.lines.push(line);
-      return;
+      if (line.trim() === input.fence) { input.cell.input = input.lines.join('\n'); input = null; startLine = n + 1; return; }
+      // Same as the server: a new ```java run fence ends an unclosed input (reported below)
+      if (!/^(`{3,})\s*java\s+run\s*$/i.test(line)) { input.lines.push(line); return; }
+      input.cell.input = input.lines.join('\n');
+      input.cell.inputUnclosed = true;
+      input = null;
     }
     if (code) {
       if (line.trim() === code.fence) {
@@ -61,7 +64,7 @@ function parse(text) {
     buf.push(line);
   });
   if (code) cells.push({ kind: 'code', source: code.lines.join('\n'), line: code.line, unclosed: true });
-  if (input) input.cell.input = input.lines.join('\n');
+  if (input) { input.cell.input = input.lines.join('\n'); input.cell.inputUnclosed = true; }
   flush(lines.length);
   return cells;
 }
@@ -79,6 +82,7 @@ if (!code.length) errors.push('no ```java run cell: nothing for students to run'
 for (const c of cells) {
   if (c.kind === 'code') {
     if (c.unclosed) errors.push(`${at(c)} a \`\`\`java run fence is never closed`);
+    if (c.inputUnclosed) errors.push(`${at(c)} the \`\`\`input fence after this cell is never closed`);
     if (!c.source.trim()) warnings.push(`${at(c)} empty code cell`);
     if (/^\s*package\s+[\w.]+\s*;/m.test(c.source)) errors.push(`${at(c)} "package" is not allowed in a notebook cell (JShell)`);
     if (/new\s+Scanner\s*\(\s*System\.in\s*\)|System\.in\.read/.test(c.source) && !(c.input || '').trim()) {

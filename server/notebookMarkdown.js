@@ -41,11 +41,12 @@ function parseNotebookMarkdown(markdown) {
 
   for (const line of lines) {
     if (input) {
-      if (line.trim() === input.fence) {
-        if (input.lines.length) input.cell.input = input.lines.join('\n');
-        input = null;
-      } else input.lines.push(line);
-      continue;
+      // A new ```java run fence also ends an input someone forgot to close, so nothing after it is lost
+      const closesAt = line.trim() === input.fence ? 'fence' : (/^(`{3,})\s*java\s+run\s*$/i.test(line) ? 'code' : null);
+      if (!closesAt) { input.lines.push(line); continue; }
+      if (input.lines.length) input.cell.input = input.lines.join('\n');
+      input = null;
+      if (closesAt === 'fence') continue;
     }
     if (code) {
       if (line.trim() === code.fence) {

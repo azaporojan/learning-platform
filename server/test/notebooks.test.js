@@ -62,6 +62,16 @@ test('code cells keep their input; text cells and empty inputs drop it; Markdown
   const back = parseNotebookMarkdown(md).cells;
   assert.equal(back[0].input, '5');
   assert.equal(back[1].input, undefined);
+  // Input holding ``` lines gets a longer fence and survives the round trip
+  const fenced = normalizeCells([{ kind: 'code', source: 'x', input: 'a\n```\nb' }]);
+  assert.equal(parseNotebookMarkdown(notebookToMarkdown(fenced)).cells[0].input, 'a\n```\nb');
+  // An input fence after text, or after a non-blank line, is not an input
+  const notInput = parseNotebookMarkdown('```java run\n1\n```\nsome text\n```input\n5\n```\n').cells;
+  assert.equal(notInput[0].input, undefined);
+  assert.equal(notInput[1].kind, 'text');
+  // An unclosed input fence ends at the next code cell instead of swallowing it
+  const unclosed = parseNotebookMarkdown('```java run\na\n```\n```input\n5\n\n```java run\nb\n```\n').cells;
+  assert.deepEqual(unclosed.map((c) => [c.kind, c.source, c.input || null]), [['code', 'a', '5\n'], ['code', 'b', null]]);
 });
 
 test('cells are validated and outputs follow the cells', () => {
@@ -345,6 +355,14 @@ test('notebooks API', { timeout: 120000 }, async (t) => {
   assert.equal(live.status, 200, JSON.stringify(live.body));
   assert.equal(live.body.output.stdout, 'read 9\n');
   assert.equal((await admin(`/notebooks/${withInput.body.id}/session/run`, { method: 'POST', json: { cellId: 'in1', source: '1', input: 5 } })).status, 400);
+  const exportedInput = await admin(`/notebooks/${withInput.body.id}/export`);
+  assert.match(exportedInput.body.toString('utf8'), /```java run\nnew Scanner\(System\.in\)\.nextInt\(\)\n```\n\n```input\n21\n```/);
+  const reimport = new FormData();
+  reimport.append('markdown', exportedInput.body.toString('utf8'));
+  const reimported = await admin('/notebooks/import', { method: 'POST', form: reimport });
+  assert.equal(reimported.status, 201);
+  assert.equal(reimported.body.cells[0].input, '21');
+  assert.equal((await admin(`/notebooks/${reimported.body.id}`, { method: 'DELETE' })).status, 200);
   assert.equal((await admin(`/notebooks/${withInput.body.id}`, { method: 'DELETE' })).status, 200);
 
   // Ids that are not integers are a 404, never a database error

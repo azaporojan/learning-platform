@@ -1,4 +1,4 @@
-import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Cell, CellOutput } from './types';
 import { CodeEditor, CodeEditorHandle } from './CodeEditor';
 import { NotebookMarkdown } from './NotebookMarkdown';
@@ -70,8 +70,11 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
   const isCode = p.cell.kind === 'code';
   // The Input box: shown when the cell has input, when its code reads System.in, or when opened
   const readsInput = isCode && /\bScanner\b|System\.in\b/.test(p.cell.source);
-  const [inputOpen, setInputOpen] = useState(false);
+  // Starts open when the cell has input, so deleting its last character never unmounts the box mid-typing
+  const [inputOpen, setInputOpen] = useState(() => Boolean(p.cell.input));
   const showInput = isCode && (Boolean(p.cell.input) || (p.editable && (readsInput || inputOpen)));
+  // Input that arrives later (an import, a reload) opens the box too
+  useEffect(() => { if (p.cell.input) setInputOpen(true); }, [p.cell.input]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const isCellDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes(CELL_DRAG_TYPE);
@@ -239,7 +242,7 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
           )}
           <ToolButton icon="arrow_upward" title="Move up" onClick={() => p.onAction('up')} disabled={p.isFirst} />
           <ToolButton icon="arrow_downward" title="Move down" onClick={() => p.onAction('down')} disabled={p.isLast} />
-          {isCode && !(p.cell.input || readsInput) && (
+          {isCode && !readsInput && (
             <ToolButton
               icon="keyboard"
               title={inputOpen ? 'Hide the input box' : 'Input: what Scanner / System.in reads'}
