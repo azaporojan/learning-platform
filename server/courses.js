@@ -472,13 +472,13 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
     );
     return rows.length > 0 ? rows[0] : null;
   }
-  async function unlockState(lesson) {
-    const [rows] = await db.query(
+  async function unlockState(lesson, conn = db) {
+    const [rows] = await conn.query(
       `SELECT lu.user_id, u.name, u.email FROM lesson_unlocks lu LEFT JOIN users u ON u.id = lu.user_id
        WHERE lu.lesson_id = ? ORDER BY u.name ASC NULLS FIRST`,
       [lesson.id]
     );
-    const [students] = lesson.course_id === null ? [[]] : await db.query(
+    const [students] = lesson.course_id === null ? [[]] : await conn.query(
       `SELECT u.id, u.name, u.email FROM course_enrollments ce INNER JOIN users u ON u.id = ce.user_id
        WHERE ce.course_id = ? AND u.role <> 'admin' ORDER BY u.name ASC`,
       [lesson.course_id]
@@ -507,26 +507,31 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
   api.put('/lessons/:id/unlocks', authenticateToken, requireAdmin, async (req, res) => {
     const body = req.body || {};
     const all = body.all === true;
-    const userIds = Array.isArray(body.userIds) ? [...new Set(body.userIds.map(Number))] : [];
     if (body.all !== undefined && typeof body.all !== 'boolean') return res.status(400).json({ error: 'all must be a boolean' });
-    if (body.userIds !== undefined && (!Array.isArray(body.userIds) || !userIds.every((n) => Number.isInteger(n) && n > 0))) {
+    if (body.userIds !== undefined && (!Array.isArray(body.userIds) || !body.userIds.every((n) => Number.isInteger(n) && n > 0))) {
       return res.status(400).json({ error: 'userIds must be a list of user ids' });
     }
+    const userIds = [...new Set(body.userIds || [])];
     try {
       const lesson = await lessonForUnlock(req.params.id);
       if (!lesson) return res.status(404).json({ error: 'Lesson not found' });
-      const before = await unlockState(lesson);
-      // Ids must be students of the course — or already on the list (a student who left the
-      // course stays listed, so re-saving the current set never fails because of them).
-      const known = new Set([...before.students.map((s) => s.id), ...before.users.map((u) => u.id)]);
-      const unknown = userIds.filter((id) => !known.has(id));
-      if (unknown.length > 0) return res.status(400).json({ error: `Not students of this course: ${unknown.join(', ')}` });
-
-      await db.transaction(async (tx) => {
+      // The lesson row is locked for the whole save, so two admins saving at once (or a double
+      // click) queue up instead of racing the delete + insert and notifying twice.
+      let before;
+      const invalid = await db.transaction(async (tx) => {
+        await tx.query('SELECT id FROM lessons WHERE id = ? FOR UPDATE', [lesson.id]);
+        before = await unlockState(lesson, tx);
+        // Ids must be students of the course — or already on the list (a student who left the
+        // course stays listed, so re-saving the current set never fails because of them).
+        const known = new Set([...before.students.map((s) => s.id), ...before.users.map((u) => u.id)]);
+        const unknown = userIds.filter((id) => !known.has(id));
+        if (unknown.length > 0) return unknown;
         await tx.query('DELETE FROM lesson_unlocks WHERE lesson_id = ?', [lesson.id]);
         if (all) await tx.query('INSERT INTO lesson_unlocks (lesson_id, user_id, created_by) VALUES (?, NULL, ?)', [lesson.id, req.user.id]);
         else for (const uid of userIds) await tx.query('INSERT INTO lesson_unlocks (lesson_id, user_id, created_by) VALUES (?, ?, ?)', [lesson.id, uid, req.user.id]);
+        return null;
       });
+      if (invalid) return res.status(400).json({ error: `Not students of this course: ${invalid.join(', ')}` });
 
       // Newly opened for: everyone who could not reach it through an unlock before
       const hadAccess = new Set(before.all ? before.students.map((s) => s.id) : before.users.map((u) => u.id));
