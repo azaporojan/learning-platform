@@ -302,11 +302,21 @@ public final class Kernel {
                 System.setErr(realErr);
                 System.setIn(new ByteArrayInputStream(new byte[0]));
             }
-            if (error != null && "runtime".equals(error.get("kind")) && String.valueOf(error.get("message")).startsWith("java.util.NoSuchElementException")
-                && (source.contains("Scanner") || source.contains("System.in"))) {
-                error.put("message", (input.length == 0
-                    ? "This cell reads input, but its Input box is empty. Type the input there, one value per line.\n\n"
-                    : "The cell's input ran out: it read more values than its Input box holds.\n\n") + error.get("message"));
+            // Explain input problems, but only when Scanner itself threw (its frames are in the trace),
+            // so an Optional.get() or an iterator in the same cell keeps its own plain message
+            if (error != null && "runtime".equals(error.get("kind"))) {
+                String text = String.valueOf(error.get("message"));
+                if (text.contains("at java.base/java.util.Scanner.") || text.contains("at java.util.Scanner.")) {
+                    String hint = null;
+                    if (text.startsWith("java.util.InputMismatchException")) {
+                        hint = "The input does not match what the code reads: for example nextInt() found a word. Check the Input box.";
+                    } else if (text.startsWith("java.util.NoSuchElementException")) {
+                        hint = input.length == 0
+                            ? "This cell reads input, but its Input box is empty. Type the input there, one value per line."
+                            : "The cell's input ran out: it read more values than its Input box holds.";
+                    }
+                    if (hint != null) error.put("message", hint + "\n\n" + text);
+                }
             }
             result.put("status", error == null ? "ok" : "error");
             result.put("stdout", capture.out());

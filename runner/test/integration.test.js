@@ -53,6 +53,12 @@ test('sandbox end to end', { skip: !enabled && 'set RUNNER_IT=1 to run against D
     assert.match(empty.cells[0].error.message, /Input box is empty/);
     const short = await executor.runNotebook([{ source: 'var sc = new Scanner(System.in);\nsc.nextInt() + sc.nextInt()', input: '1\n' }]);
     assert.match(short.cells[0].error.message, /input ran out/);
+    const mismatch = await executor.runNotebook([{ source: 'new Scanner(System.in).nextInt()', input: 'five\n' }]);
+    assert.match(mismatch.cells[0].error.message, /does not match what the code reads/);
+    // Not from Scanner: no input hint, even though the cell mentions Scanner
+    const other = await executor.runNotebook([{ source: 'Scanner unused = null;\nOptional.empty().get()' }]);
+    assert.doesNotMatch(other.cells[0].error.message, /Input box|input ran out/);
+    assert.match(other.cells[0].error.message, /NoSuchElementException/);
   });
 
   await t.test('stops at the first failing cell', async () => {

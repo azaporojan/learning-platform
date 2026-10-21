@@ -72,6 +72,9 @@ test('code cells keep their input; text cells and empty inputs drop it; Markdown
   // An unclosed input fence ends at the next code cell instead of swallowing it
   const unclosed = parseNotebookMarkdown('```java run\na\n```\n```input\n5\n\n```java run\nb\n```\n').cells;
   assert.deepEqual(unclosed.map((c) => [c.kind, c.source, c.input || null]), [['code', 'a', '5\n'], ['code', 'b', null]]);
+  // A longer input fence is never closed early: it was chosen to hold a ```java run line
+  const long = parseNotebookMarkdown('```java run\na\n```\n````input\n```java run\n````\n').cells;
+  assert.deepEqual(long.map((c) => [c.kind, c.input || null]), [['code', '```java run']]);
 });
 
 test('cells are validated and outputs follow the cells', () => {

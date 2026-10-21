@@ -37,7 +37,7 @@ function parse(text) {
     if (input) {
       if (line.trim() === input.fence) { input.cell.input = input.lines.join('\n'); input = null; startLine = n + 1; return; }
       // Same as the server: a new ```java run fence ends an unclosed input (reported below)
-      if (!/^(`{3,})\s*java\s+run\s*$/i.test(line)) { input.lines.push(line); return; }
+      if (input.fence !== '```' || !/^(`{3,})\s*java\s+run\s*$/i.test(line)) { input.lines.push(line); return; }
       input.cell.input = input.lines.join('\n');
       input.cell.inputUnclosed = true;
       input = null;

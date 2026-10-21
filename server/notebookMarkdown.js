@@ -42,7 +42,8 @@ function parseNotebookMarkdown(markdown) {
   for (const line of lines) {
     if (input) {
       // A new ```java run fence also ends an input someone forgot to close, so nothing after it is lost
-      const closesAt = line.trim() === input.fence ? 'fence' : (/^(`{3,})\s*java\s+run\s*$/i.test(line) ? 'code' : null);
+      // (only a plain ``` input fence: a longer one was chosen on purpose to hold such lines)
+      const closesAt = line.trim() === input.fence ? 'fence' : (input.fence === '```' && /^(`{3,})\s*java\s+run\s*$/i.test(line) ? 'code' : null);
       if (!closesAt) { input.lines.push(line); continue; }
       if (input.lines.length) input.cell.input = input.lines.join('\n');
       input = null;
