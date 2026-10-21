@@ -9,11 +9,25 @@ import { headingsOf } from '../notebooks/NotebookMarkdown';
 import { PresentMode } from '../notebooks/PresentMode';
 import { Modal } from '../notebooks/Modal';
 import { useCodeTheme } from '../notebooks/codeTheme';
+import { activeHeadingIndex } from '../notebooks/outlineSpy';
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'conflict' | 'error';
 interface Toast { text: string; action?: { label: string; run: () => void } }
 
 const AUTOSAVE_MS = 2000;
+// The outline heading's element: the rendered heading, or its cell while the cell is being edited
+function headingElement(cellId: string, nth: number): Element | null {
+  const cell = document.querySelector(`[data-cell-id="${cellId}"]`);
+  if (!cell) return null;
+  return Array.from(cell.querySelectorAll('h1, h2, h3')).filter((el) => !el.closest('blockquote, li'))[nth] ?? cell;
+}
+
+// Where reading starts in the notebook: a little below its sticky toolbar
+function readingLine(scroller: HTMLElement): number {
+  const toolbar = scroller.firstElementChild;
+  return (toolbar?.getBoundingClientRect().bottom ?? scroller.getBoundingClientRect().top) + 24;
+}
+
 const OUTLINE_KEY = 'notebook-outline-open';
 
 const readPref = (key: string, fallback: boolean) => {
@@ -72,6 +86,8 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
   const [presenting, setPresenting] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(() => readPref(OUTLINE_KEY, true));
   const [outlineDrawer, setOutlineDrawer] = useState(false);
+  // The outline entry for the section being read (follows the scroll)
+  const [activeHeading, setActiveHeading] = useState<number | null>(null);
   const [dialog, setDialog] = useState<null | 'shortcuts' | 'settings' | 'copies'>(null);
   const [codeTheme, setCodeTheme] = useCodeTheme();
   const [editingTitle, setEditingTitle] = useState(false);
@@ -484,7 +500,43 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
     }
   }, [nb, navigate, saveNow, showToast]);
 
-  const outline = useMemo(() => cells.flatMap((c) => (c.kind === 'text' ? headingsOf(c.source).map((h) => ({ ...h, cellId: c.id })) : [])), [cells]);
+  const headings = useMemo(() => cells.flatMap((c) => (c.kind === 'text' ? headingsOf(c.source).map((h, nth) => ({ ...h, cellId: c.id, nth })) : [])), [cells]);
+  // Same array while the headings stay the same (typing in a cell does not reset the scroll-spy)
+  const headingsKey = JSON.stringify(headings);
+  const outline = useMemo(() => headings, [headingsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Scroll-spy: highlight the outline heading of the section on screen and keep it visible in the outline
+  const loaded = nb !== null;
+  useEffect(() => {
+    const scroller = document.getElementById('notebook-scroll');
+    if (!scroller || outline.length === 0) { setActiveHeading(null); return; }
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const atBottom = scroller.scrollTop > 0 && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4;
+      const tops = outline.map((h) => headingElement(h.cellId, h.nth)?.getBoundingClientRect().top ?? null);
+      setActiveHeading(activeHeadingIndex(tops, readingLine(scroller), atBottom));
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
+    update();
+    scroller.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    // Content above the screen can grow without a scroll (an image loads, an output appears)
+    const resized = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+    Array.from(scroller.children).forEach((child) => resized?.observe(child));
+    return () => { scroller.removeEventListener('scroll', schedule); window.removeEventListener('resize', schedule); resized?.disconnect(); if (frame) cancelAnimationFrame(frame); };
+  }, [outline, loaded, outlineOpen]);
+
+  useEffect(() => {
+    if (activeHeading === null) return;
+    document.querySelectorAll<HTMLElement>(`[data-outline-index="${activeHeading}"]`).forEach((btn) => {
+      const list = btn.closest<HTMLElement>('[data-outline-scroll]');
+      if (!list) return;
+      const b = btn.getBoundingClientRect(), l = list.getBoundingClientRect();
+      if (b.top < l.top + 8) list.scrollTop -= l.top + 8 - b.top + l.height / 3;
+      else if (b.bottom > l.bottom - 8) list.scrollTop += b.bottom - (l.bottom - 8) + l.height / 3;
+    });
+  }, [activeHeading, outlineDrawer, outlineOpen]);
 
   // -------------------------------------------------------------------------
   // Render
@@ -516,8 +568,17 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
           <li key={`${h.cellId}-${k}`}>
             <button
               type="button"
-              onClick={() => { setSelectedId(h.cellId); setOutlineDrawer(false); document.querySelector(`[data-cell-id="${h.cellId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
-              className={`block w-full text-left truncate rounded px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-700 ${selectedId === h.cellId ? 'text-primary-dark font-bold' : 'text-gray-600 dark:text-gray-300'}`}
+              data-outline-index={k}
+              aria-current={activeHeading === k ? 'location' : undefined}
+              onClick={() => {
+                setSelectedId(h.cellId); setOutlineDrawer(false);
+                const target = headingElement(h.cellId, h.nth);
+                const scroller = document.getElementById('notebook-scroll');
+                if (!target || !scroller) return;
+                // Just under the sticky toolbar, not behind it
+                scroller.scrollTo({ top: scroller.scrollTop + target.getBoundingClientRect().top - readingLine(scroller) + 12, behavior: 'smooth' });
+              }}
+              className={`block w-full text-left truncate rounded px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-700 ${activeHeading === k ? 'text-primary-dark font-bold bg-primary/10' : 'text-gray-600 dark:text-gray-300'}`}
               style={{ paddingLeft: `${(h.level - 1) * 12 + 8}px` }}
             >
               {h.text}
@@ -645,7 +706,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
       <div className="mx-auto max-w-[1180px] px-3 flex gap-6">
         {outlineOpen && (
           <aside className="hidden lg:block w-56 shrink-0">
-            <div className="sticky top-24 max-h-[calc(100vh-8rem)] overflow-y-auto py-4">{outlinePanel}</div>
+            <div data-outline-scroll className="sticky top-24 max-h-[calc(100vh-8rem)] overflow-y-auto py-4">{outlinePanel}</div>
           </aside>
         )}
         <div className="min-w-0 flex-1 max-w-[900px] mx-auto py-6 pb-40">
@@ -697,7 +758,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
       {outlineDrawer && (
         <div className="fixed inset-0 z-40 lg:hidden" onClick={() => setOutlineDrawer(false)}>
           <div className="absolute inset-0 bg-black/30" />
-          <div className="absolute left-0 top-0 bottom-0 w-72 bg-white dark:bg-gray-800 p-4 overflow-y-auto shadow-xl" onClick={(e) => e.stopPropagation()}>{outlinePanel}</div>
+          <div data-outline-scroll className="absolute left-0 top-0 bottom-0 w-72 bg-white dark:bg-gray-800 p-4 overflow-y-auto shadow-xl" onClick={(e) => e.stopPropagation()}>{outlinePanel}</div>
         </div>
       )}
 
