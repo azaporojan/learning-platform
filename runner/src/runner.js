@@ -185,14 +185,12 @@ function createRunner({ executor, sessions, pool, token }) {
   });
 }
 
-// Sandboxes this process does not know about (left over from a previous run) are removed. Ones
-// created in the last minAgeMs are left alone: during an overlapping redeploy they may still
-// belong to the runner that is shutting down. The runner is meant to run as one replica.
-// Everything the pool owns (booting, warm, leased, or still being removed) and every session's
-// sandbox is known; any other sandbox older than maxAgeMs is a leftover from a crash or a
-// redeploy. A sandbox whose create has not returned yet has no id and so is not in `known`: it is
-// safe only because maxAgeMs stays far above a boot (seconds), so never shorten it below that. Each is removed on its own, so one failure never hides the rest; it is retried on the
-// next sweep. Resolves with the ids it removed.
+// The periodic sweep. Everything the pool owns (booting, warm, leased, or still being removed) and
+// every session's sandbox is known; any other sandbox older than maxAgeMs is a leftover from a
+// crash or a redeploy. A sandbox whose create has not returned yet has no id and so is not in
+// `known`: it is safe only because maxAgeMs stays far above a boot (seconds), so never shorten it
+// below that. Each stray is removed on its own, so one failure never hides the rest; it is
+// retried on the next sweep. Resolves with the ids it removed.
 async function sweepStrays({ gate, pool, sessions, maxAgeMs, now = Date.now(), log = console }) {
   const known = new Set([
     ...[...pool.owned].map((s) => s.id).filter(Boolean),
@@ -208,6 +206,9 @@ async function sweepStrays({ gate, pool, sessions, maxAgeMs, now = Date.now(), l
   return removed;
 }
 
+// At startup: sandboxes this process does not know about (left over from a previous run) are
+// removed. Ones created in the last minAgeMs are left alone: during an overlapping redeploy they
+// may still belong to the runner that is shutting down. The runner is meant to run as one replica.
 async function removeStrays(gate, known, { minAgeMs = 120000, now = Date.now() } = {}) {
   try {
     for (const s of await gate.list()) {

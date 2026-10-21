@@ -158,6 +158,7 @@ class Pool {
       () => this.serve(entry, sb, false),
       (err) => {
         this.live -= 1;
+        sb.destroy().catch(() => {}); // a failed create never reached boot's own cleanup; this also ends `owned`
         clearTimeout(entry.timer);
         entry.reject(err);
         this.schedule();
@@ -181,6 +182,7 @@ class Pool {
         (err) => {
           this.bootingWarm -= 1;
           this.live -= 1;
+          sb.destroy().catch(() => {}); // see bootFor: ends `owned` even when the create failed
           this.log.error('[runner] warm sandbox failed to boot:', err.message);
           // do not spin on a broken image: retry on the next request or recycle tick
         },

@@ -144,3 +144,10 @@ test('a second destroy waits for the same removal, so the sandbox stays owned un
   await second;
   assert.strictEqual(pool.owned.has(sb), false);
 });
+
+test('a sandbox that fails to boot leaves the owned set', async () => {
+  const { pool } = makePool({ warmTarget: 0, sandbox: { fail: true } });
+  await assert.rejects(pool.acquire('check'));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.strictEqual(pool.owned.size, 0);
+});
