@@ -8,6 +8,7 @@ import { NodeStatus } from '../roadState';
 import { apiUrl } from '../config';
 import { LessonMaterials } from './LessonMaterials';
 import { LessonNotebooks } from './LessonNotebooks';
+import { LessonUnlockPanel, unlockSummaryText } from './LessonUnlockPanel';
 
 interface LessonModalProps {
   lesson: RoadLesson | null;
@@ -132,7 +133,19 @@ export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, is
               autoFocus
             />
           ) : (
-            <h3 className="text-2xl font-bold text-gray-800 dark:text-white">{lesson.title}</h3>
+            <div className="min-w-0">
+              <h3 className="text-2xl font-bold text-gray-800 dark:text-white">{lesson.title}</h3>
+              {!isAdmin && lesson.unlocked && (
+                <span className="inline-flex items-center gap-1 mt-1 text-xs font-bold text-amber-700 dark:text-amber-300" title="Your teacher opened this lesson for you ahead of the road">
+                  <span className="material-icons text-sm">lock_open</span>Unlocked for you
+                </span>
+              )}
+              {isAdmin && unlockSummaryText(lesson.unlocks) && (
+                <span className="inline-flex items-center gap-1 mt-1 text-xs font-bold text-amber-700 dark:text-amber-300">
+                  <span className="material-icons text-sm">lock_open</span>{unlockSummaryText(lesson.unlocks)}
+                </span>
+              )}
+            </div>
           )}
           <button onClick={onClose} className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 flex-shrink-0">
             <span className="material-icons">close</span>
@@ -268,6 +281,8 @@ export const LessonModal: React.FC<LessonModalProps> = ({ lesson, taskStatus, is
                   </div>
                 </div>
               )}
+
+              {isAdmin && <LessonUnlockPanel lessonId={lesson.id} summary={lesson.unlocks} onChanged={onChanged} />}
             </>
           )}
         </div>

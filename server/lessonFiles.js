@@ -68,7 +68,7 @@ function serialize(row) {
   };
 }
 
-function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons, uploadsDir }) {
+function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons, lessonLockReasons, uploadsDir }) {
   const dir = path.join(uploadsDir, 'lesson-files');
   fs.mkdirSync(dir, { recursive: true });
   const maxBytes = Math.max(1, parseInt(process.env.MAX_LESSON_FILE_MB || '50', 10)) * 1024 * 1024;
@@ -91,6 +91,7 @@ function registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin
   }));
 
   async function lessonReasons(userId, lessonId) {
+    if (lessonLockReasons) return lessonLockReasons(db, userId, lessonId);
     const [rows] = await db.query('SELECT path_id FROM lessons WHERE id = ?', [lessonId]);
     if (rows.length === 0) return null;
     return phaseLockReasons(db, userId, rows[0].path_id);

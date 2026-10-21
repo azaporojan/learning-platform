@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { Course, CourseDetail, Path, Phase, RoadLesson, RoadStudySet, RoadTask, StudySetKind, User } from '../types';
 import { apiUrl } from '../config';
 import { useSocket } from '../contexts/SocketContext';
@@ -30,6 +30,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
   const { id } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const { socket } = useSocket();
   const { alertState, showAlert, hideAlert } = useDialog();
   const isAdmin = currentUser.role === 'admin';
@@ -43,16 +44,40 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
   });
   const [enrolling, setEnrolling] = useState(false);
 
-  // Modals
-  const [lessonModal, setLessonModal] = useState<RoadLesson | null>(null);
-  const [taskModal, setTaskModal] = useState<RoadTask | null>(null);
-  const [taskModalMode, setTaskModalMode] = useState<'view' | 'submissions'>('view');
+  // What is open on top of the road lives in the URL, so every dialog is a history entry:
+  //   ?phase=<id>                               phase info (student) / phase editor (admin)
+  //   ?lesson=<id>                              lesson
+  //   ?lesson=<id>&task=<id>                    task (details tab)
+  //   …&task=<id>&tab=submissions[&student=…]   admin: its submissions / one student's
+  //   ?lesson=<id>&set=<id>                     quiz / flashcards
+  // Opening pushes an entry, so the browser's Back button closes the dialog and returns to the
+  // one it was opened from (student → students list → task → lesson → road); a deep link from
+  // elsewhere (inbox, notification, notebook) still lands straight on the dialog.
+  const view = useMemo(() => {
+    const num = (k: string) => { const v = searchParams.get(k); return v && /^\d+$/.test(v) ? Number(v) : null; };
+    return {
+      phase: num('phase'), lesson: num('lesson'), task: num('task'), set: num('set'),
+      tab: searchParams.get('tab') === 'submissions' ? 'submissions' as const : 'view' as const,
+      student: searchParams.get('student'),
+    };
+  }, [searchParams]);
+  // How many dialog entries this page pushed: Back pops one; a deep link (0) is replaced instead
+  const depth: number = (location.state as { roadDepth?: number } | null)?.roadDepth || 0;
+  const show = useCallback((params: Record<string, string | number | null | undefined>) => {
+    const next: Record<string, string> = {};
+    Object.entries(params).forEach(([k, v]) => { if (v !== null && v !== undefined && v !== '') next[k] = String(v); });
+    setSearchParams(next, { state: { roadDepth: depth + 1 } });
+  }, [setSearchParams, depth]);
+  const closeView = useCallback(() => {
+    if (depth > 0) navigate(-1);
+    else setSearchParams({}, { replace: true, state: { roadDepth: 0 } });
+  }, [depth, navigate, setSearchParams]);
+
+  // Dialogs that create content stay local: they are forms, not places to come back to
   const [addLesson, setAddLesson] = useState<Phase | null>(null);
   const [addTask, setAddTask] = useState<{ lesson: RoadLesson; phase: Phase } | null>(null);
   const [addPhaseOpen, setAddPhaseOpen] = useState(false);
-  const [editPhase, setEditPhase] = useState<Path | null>(null);
-  const [phaseInfo, setPhaseInfo] = useState<Phase | null>(null);
-  const [studySet, setStudySet] = useState<StudySetTarget | null>(null);
+  const [createStudySet, setCreateStudySet] = useState<StudySetTarget | null>(null);
 
   const fetchCourse = useCallback(async () => {
     if (!id) return;
@@ -61,12 +86,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
       if (res.status === 404) { setNotFound(true); return; }
       if (res.ok) {
         const data: CourseDetail = await res.json();
-        setCourse(data);
-        // Keep the open lesson modal in sync with fresh data
-        setLessonModal((prev) => (prev ? data.phases.flatMap((p) => p.lessons).find((l) => l.id === prev.id) || null : prev));
-        // …and the open task modal (an edit, or a live update from another admin, shows at once)
-        setTaskModal((prev) => (prev ? data.phases.flatMap((p) => p.lessons).flatMap((l) => l.tasks).find((t) => t.id === prev.id) || null : prev));
-        setPhaseInfo((prev) => (prev ? data.phases.find((p) => p.id === prev.id) || null : prev));
+        setCourse(data); // the open dialogs read from `course`, so fresh data shows at once
       }
     } catch (err) {
       console.error('Failed to fetch course', err);
@@ -109,7 +129,6 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
       phases: c.phases.map((p) => ({ ...p, lessons: p.lessons.map((l) => (l.id === lesson.id ? { ...l, taught_at: taught ? new Date().toISOString() : null } : l)) })),
     });
     setCourse(patch);
-    setLessonModal((prev) => (prev && prev.id === lesson.id ? { ...prev, taught_at: taught ? new Date().toISOString() : null } : prev));
     try {
       const res = await fetch(apiUrl(`/lessons/${lesson.id}/taught`), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ taught }) });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to update lesson');
@@ -119,24 +138,39 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
     fetchCourse();
   }, [fetchCourse, showAlert]);
 
+  const phaseToPath = useCallback((phase: Phase): Path => ({
+    id: String(phase.id), title: phase.name, description: phase.description, status: 'in-progress',
+    requiredScore: phase.stars_required, course_id: course?.id ?? null, order_index: phase.order_index, requires_previous: phase.requires_previous,
+  }), [course?.id]);
+
   const state = useMemo(() => (course ? computeRoadState(course, isAdmin) : null), [course, isAdmin]);
+
+  // The open dialogs, resolved from the URL against the course (fresh data shows at once)
+  const allLessons = useMemo(() => (course ? course.phases.flatMap((p) => p.lessons) : []), [course]);
+  const phaseInfo = useMemo(() => (course && view.phase !== null ? course.phases.find((p) => p.id === view.phase) || null : null), [course, view.phase]);
+  const taskModal = useMemo(() => (view.task !== null ? allLessons.flatMap((l) => l.tasks).find((t) => t.id === view.task) || null : null), [allLessons, view.task]);
+  const taskLesson = useMemo(() => (taskModal ? allLessons.find((l) => l.tasks.some((t) => t.id === taskModal.id)) || null : null), [allLessons, taskModal]);
+  const openSet = useMemo(() => (view.set !== null ? allLessons.flatMap((l) => l.study_sets || []).find((st) => st.id === view.set) || null : null), [allLessons, view.set]);
+  const setLesson = useMemo(() => (openSet ? allLessons.find((l) => l.id === openSet.lesson_id) || null : null), [allLessons, openSet]);
+  // The lesson dialog shows when nothing is open on top of it
+  const lessonModal = useMemo(() => (view.lesson !== null && view.task === null && view.set === null ? allLessons.find((l) => l.id === view.lesson) || null : null), [allLessons, view]);
+  const editPhase = useMemo(() => (isAdmin && phaseInfo ? phaseToPath(phaseInfo) : null), [isAdmin, phaseInfo, phaseToPath]);
+  const studySet: StudySetTarget | null = useMemo(() => (openSet ? { mode: 'open', set: openSet } : createStudySet), [openSet, createStudySet]);
   // One object per task version: a new object on every render would make TaskModal reset itself
   const taskForModal = useMemo(() => (taskModal ? { ...taskModal, deadline: taskModal.deadline || undefined } : null), [taskModal]);
 
-  // Deep link from the submissions inbox (and notifications): /courses/:id?lesson=<id>&task=<id>
-  // selects the node on the road and opens the task (or the lesson), then clears the query.
+  // A URL that names something this course does not have (deleted, or another course's id)
+  // falls back to the bare road — and the road follows the dialog: its node stays selected.
   useEffect(() => {
     if (!course) return;
-    const lessonParam = searchParams.get('lesson');
-    const taskParam = searchParams.get('task');
-    if (!lessonParam && !taskParam) return;
-    const lessons = course.phases.flatMap((p) => p.lessons);
-    const lesson = lessons.find((l) => String(l.id) === lessonParam) || lessons.find((l) => l.tasks.some((t) => String(t.id) === taskParam));
-    const task = lesson?.tasks.find((t) => String(t.id) === taskParam) || null;
-    if (task) { setSelected({ type: 'task', id: task.id }); setTaskModalMode(isAdmin ? 'submissions' : 'view'); setTaskModal(task); }
-    else if (lesson) { setSelected({ type: 'lesson', id: lesson.id }); setLessonModal(lesson); }
-    setSearchParams({}, { replace: true });
-  }, [course, searchParams, setSearchParams]);
+    const wanted = view.phase !== null || view.lesson !== null || view.task !== null || view.set !== null;
+    const found = taskModal || openSet || lessonModal || phaseInfo;
+    if (wanted && !found) { setSearchParams({}, { replace: true, state: { roadDepth: 0 } }); return; }
+    if (taskModal) setSelected({ type: 'task', id: taskModal.id });
+    else if (openSet) setSelected({ type: 'study', id: openSet.id });
+    else if (lessonModal) setSelected({ type: 'lesson', id: lessonModal.id });
+    else if (phaseInfo) setSelected({ type: 'phase', id: phaseInfo.id });
+  }, [course, view, taskModal, openSet, lessonModal, phaseInfo, setSearchParams]);
 
   const toggleCollapsed = () => {
     setCollapsed((c) => {
@@ -188,20 +222,19 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
     await fetchCourse();
   };
 
-  const phaseToPath = (phase: Phase): Path => ({
-    id: String(phase.id), title: phase.name, description: phase.description, status: 'in-progress',
-    requiredScore: phase.stars_required, course_id: course?.id ?? null, order_index: phase.order_index, requires_previous: phase.requires_previous,
-  });
-
-  const openPhase = (phase: Phase) => {
-    setSelected({ type: 'phase', id: phase.id });
-    if (isAdmin) setEditPhase(phaseToPath(phase));
-    else setPhaseInfo(phase);
+  const openPhase = (phase: Phase) => { setSelected({ type: 'phase', id: phase.id }); show({ phase: phase.id }); };
+  const openLesson = (lesson: RoadLesson) => { setSelected({ type: 'lesson', id: lesson.id }); show({ lesson: lesson.id }); };
+  // A task or a set opened from its lesson keeps the lesson in the URL, so closing it returns there
+  const openTask = (task: RoadTask) => { setSelected({ type: 'task', id: task.id }); show({ lesson: task.lesson_id, task: task.id }); };
+  const openStudySet = (set: RoadStudySet) => { setSelected({ type: 'study', id: set.id }); show({ lesson: set.lesson_id, set: set.id }); };
+  const addStudySet = (lesson: RoadLesson, kind: StudySetKind) => setCreateStudySet({ mode: 'create', lessonId: lesson.id, lessonTitle: lesson.title, kind });
+  // Inside the task dialog: tab and student changes are history entries too
+  const changeTaskView = ({ mode, student }: { mode: 'view' | 'submissions'; student: string | null }) => {
+    if (!taskModal) return;
+    if (mode === view.tab && (student || null) === (view.student || null)) return;
+    show({ lesson: taskModal.lesson_id, task: taskModal.id, tab: mode === 'submissions' ? 'submissions' : null, student: mode === 'submissions' ? student : null });
   };
-  const openLesson = (lesson: RoadLesson) => { setSelected({ type: 'lesson', id: lesson.id }); setLessonModal(lesson); };
-  const openTask = (task: RoadTask) => { setSelected({ type: 'task', id: task.id }); setTaskModalMode('view'); setTaskModal(task); };
-  const openStudySet = (set: RoadStudySet) => { setSelected({ type: 'study', id: set.id }); setStudySet({ mode: 'open', set }); };
-  const addStudySet = (lesson: RoadLesson, kind: StudySetKind) => setStudySet({ mode: 'create', lessonId: lesson.id, lessonTitle: lesson.title, kind });
+  const backToLesson = (lesson: RoadLesson | null) => (lesson ? { label: lesson.title, onClick: () => show({ lesson: lesson.id }) } : undefined);
 
   if (notFound) {
     return (
@@ -221,7 +254,6 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
 
   const currentPhase = course.phases.find((p) => p.id === state.currentPhaseId) || null;
   const currentLesson = currentPhase?.lessons.find((l) => l.id === state.currentLessonId) || null;
-  const allLessons = course.phases.flatMap((p) => p.lessons);
   const teachingNow = isAdmin ? allLessons.find((l) => state.teach.get(l.id) === 'current') || null : null;
   const upNext = isAdmin ? allLessons.find((l) => state.teach.get(l.id) === 'next') || null : null;
   const taughtCount = allLessons.filter((l) => l.taught_at).length;
@@ -249,7 +281,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
         onOpenTask={openTask}
         onOpenPhase={openPhase}
         onAddPhase={isAdmin ? () => setAddPhaseOpen(true) : undefined}
-        onEditPhase={isAdmin ? (phase) => setEditPhase(phaseToPath(phase)) : undefined}
+        onEditPhase={isAdmin ? openPhase : undefined}
         onAddLesson={isAdmin ? (phase) => setAddLesson(phase) : undefined}
         onAddTask={isAdmin ? (lesson, phase) => setAddTask({ lesson, phase }) : undefined}
         onOpenScript={isAdmin ? (lesson) => navigate(`/courses/${course.id}/lessons/${lesson.id}/script`) : undefined}
@@ -328,38 +360,49 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
       </section>
 
       {/* Modals */}
-      <PhaseModal
-        phase={phaseInfo}
-        previous={phaseInfo ? course.phases[course.phases.indexOf(phaseInfo) - 1] || null : null}
-        status={phaseInfo ? state.phases.get(phaseInfo.id) || 'open' : 'open'}
-        onClose={() => setPhaseInfo(null)}
-        onJumpToFirstLesson={phaseInfo && phaseInfo.lessons.length > 0 ? () => { setSelected({ type: 'lesson', id: phaseInfo.lessons[0].id }); setPhaseInfo(null); } : undefined}
-      />
+      {!isAdmin && (
+        <PhaseModal
+          phase={phaseInfo}
+          previous={phaseInfo ? course.phases[course.phases.indexOf(phaseInfo) - 1] || null : null}
+          status={phaseInfo ? state.phases.get(phaseInfo.id) || 'open' : 'open'}
+          onClose={closeView}
+          onJumpToFirstLesson={phaseInfo && phaseInfo.lessons.length > 0 ? () => { setSelected({ type: 'lesson', id: phaseInfo.lessons[0].id }); closeView(); } : undefined}
+        />
+      )}
       <LessonModal
         lesson={lessonModal}
         taskStatus={(task) => state.tasks.get(task.id) || 'open'}
         isAdmin={isAdmin}
-        onClose={() => setLessonModal(null)}
+        onClose={closeView}
         onChanged={fetchCourse}
-        onOpenTask={(task) => { setLessonModal(null); openTask(task); }}
+        onOpenTask={openTask}
         onOpenScript={isAdmin && lessonModal ? () => navigate(`/courses/${course.id}/lessons/${lessonModal.id}/script`) : undefined}
         onToggleTaught={isAdmin && lessonModal ? () => toggleTaught(lessonModal) : undefined}
         studySetStatus={(set) => state.studySets.get(set.id) || 'open'}
-        phaseLocked={!isAdmin && lessonModal !== null && course.phases.some((p) => p.locked && p.lessons.some((l) => l.id === lessonModal.id))}
-        onOpenStudySet={(set) => { setLessonModal(null); openStudySet(set); }}
-        onAddStudySet={isAdmin && lessonModal ? (kind) => { const l = lessonModal; setLessonModal(null); addStudySet(l, kind); } : undefined}
+        phaseLocked={!isAdmin && lessonModal !== null && !lessonModal.unlocked && course.phases.some((p) => p.locked && p.lessons.some((l) => l.id === lessonModal.id))}
+        onOpenStudySet={openStudySet}
+        onAddStudySet={isAdmin && lessonModal ? (kind) => addStudySet(lessonModal, kind) : undefined}
       />
-      <StudySetModal target={studySet} isAdmin={isAdmin} onClose={() => setStudySet(null)} onChanged={fetchCourse} />
+      <StudySetModal
+        target={studySet}
+        isAdmin={isAdmin}
+        onClose={() => (openSet ? closeView() : setCreateStudySet(null))}
+        onChanged={fetchCourse}
+        onBack={openSet ? backToLesson(setLesson) : undefined}
+      />
       {taskForModal && (
         <TaskModal
           task={taskForModal}
           isOpen={true}
-          onClose={() => { setTaskModal(null); fetchCourse(); }}
+          onClose={() => { closeView(); fetchCourse(); }}
           isAdmin={isAdmin}
           currentUserId={currentUser.id}
           currentUser={currentUser}
           onUpdate={fetchCourse}
-          initialMode={taskModalMode}
+          initialMode={isAdmin ? view.tab : 'view'}
+          initialStudent={isAdmin && view.tab === 'submissions' ? view.student : null}
+          onViewChange={isAdmin ? changeTaskView : undefined}
+          onBack={backToLesson(taskLesson)}
         />
       )}
       {isAdmin && (
@@ -377,7 +420,7 @@ export const CoursePage: React.FC<CoursePageProps> = ({ currentUser }) => {
             onSubmit={(title, type, xp, deadline) => (addTask ? createTask(addTask.lesson, title, type, xp, deadline) : Promise.resolve())}
           />
           <AddPathModal isOpen={addPhaseOpen} courses={courses} defaultCourseId={course.id} onClose={() => setAddPhaseOpen(false)} onSuccess={fetchCourse} />
-          <EditPathModal isOpen={editPhase !== null} path={editPhase} courses={courses} onClose={() => setEditPhase(null)} onSuccess={fetchCourse} />
+          <EditPathModal isOpen={editPhase !== null} path={editPhase} courses={courses} onClose={closeView} onSuccess={fetchCourse} />
         </>
       )}
     </div>

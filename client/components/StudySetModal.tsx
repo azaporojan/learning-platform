@@ -13,6 +13,7 @@ interface StudySetModalProps {
   target: StudySetTarget | null;
   isAdmin: boolean;
   onClose: () => void;
+  onBack?: { label: string; onClick: () => void }; // "← Lesson title" in the header
   onChanged: () => void;
 }
 
@@ -38,7 +39,7 @@ function shuffled<T>(list: T[]): T[] {
 }
 
 // A quiz or a flashcard deck: students practise; admins edit (form or raw JSON), preview, delete.
-export const StudySetModal: React.FC<StudySetModalProps> = ({ target, isAdmin, onClose, onChanged }) => {
+export const StudySetModal: React.FC<StudySetModalProps> = ({ target, isAdmin, onClose, onChanged, onBack }) => {
   const [set, setSet] = useState<StudySet | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<'practice' | 'edit' | 'delete'>('practice');
@@ -83,9 +84,16 @@ export const StudySetModal: React.FC<StudySetModalProps> = ({ target, isAdmin, o
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center gap-3">
           <span className={`material-icons ${kind === 'quiz' ? 'text-purple-500' : 'text-pink-500'}`}>{KIND_ICON[kind]}</span>
           <div className="min-w-0 flex-1">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-              {KIND_LABEL[kind]}{target.mode === 'create' ? ` · ${target.lessonTitle}` : ''}
-            </div>
+            {onBack ? (
+              <button type="button" onClick={() => !busy && onBack.onClick()} className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-primary-dark dark:hover:text-primary max-w-full" title={`Back to ${onBack.label}`}>
+                <span className="material-icons text-xs">arrow_back</span>
+                <span className="truncate">{KIND_LABEL[kind]} · {onBack.label}</span>
+              </button>
+            ) : (
+              <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                {KIND_LABEL[kind]}{target.mode === 'create' ? ` · ${target.lessonTitle}` : ''}
+              </div>
+            )}
             <h3 className="text-xl font-bold text-gray-800 dark:text-white truncate">{title}</h3>
           </div>
           {isAdmin && set && (

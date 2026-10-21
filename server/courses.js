@@ -73,11 +73,33 @@ async function phaseLockReasons(db, userId, pathId) {
   });
 }
 
+// An admin can open a lesson early for everyone (user_id NULL) or for one student: the road's
+// "previous lesson / previous phase" gate is skipped for that lesson. Enrolment and star gates
+// still apply, so an unlock never shows a course the student has not joined.
+async function lessonUnlockedFor(db, userId, lessonId) {
+  if (!userId) return false;
+  const [rows] = await db.query(
+    'SELECT 1 FROM lesson_unlocks WHERE lesson_id = ? AND (user_id IS NULL OR user_id = ?) LIMIT 1',
+    [lessonId, userId]
+  );
+  return rows.length > 0;
+}
+
+// Why a lesson is locked for a user: its phase's reasons, minus 'previous' when the lesson was
+// unlocked for them. null when the lesson does not exist.
+async function lessonLockReasons(db, userId, lessonId) {
+  const [rows] = await db.query('SELECT path_id FROM lessons WHERE id = ?', [lessonId]);
+  if (rows.length === 0) return null;
+  const reasons = await phaseLockReasons(db, userId, rows[0].path_id);
+  if (reasons.includes('previous') && await lessonUnlockedFor(db, userId, lessonId)) return reasons.filter((r) => r !== 'previous');
+  return reasons;
+}
+
 // null when the task does not exist (so callers can answer 404 instead of inserting).
 async function taskLockReasons(db, userId, taskId) {
-  const [rows] = await db.query('SELECT l.path_id FROM tasks t INNER JOIN lessons l ON l.id = t.lesson_id WHERE t.id = ?', [taskId]);
+  const [rows] = await db.query('SELECT lesson_id FROM tasks WHERE id = ?', [taskId]);
   if (rows.length === 0) return null;
-  return phaseLockReasons(db, userId, rows[0].path_id);
+  return lessonLockReasons(db, userId, rows[0].lesson_id);
 }
 
 // Renumber a course's phases 1..n (by current order_index, then id).
@@ -130,7 +152,7 @@ async function placePhase(tx, pathId, courseId, position) {
   if (previousCourseId !== null && previousCourseId !== courseId) await renumberCourse(tx, previousCourseId);
 }
 
-function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId }) {
+function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId, notifyUser }) {
 
   async function getCaller(userId) {
     if (!userId) return null;
@@ -313,6 +335,28 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
       }
       const taskIds = tasks.map((t) => t.id);
 
+      // Admin unlocks: for a student, the set of lessons opened for them (by name or for all);
+      // for an admin, who each lesson is open for (shown in the lesson dialog).
+      const unlockedLessons = new Set();
+      const unlocksByLesson = new Map(); // admin: lesson_id -> { all, users: [{id, name}] }
+      const allLessonIds = lessons.map((l) => l.id);
+      if (caller && allLessonIds.length > 0) {
+        const [unlocks] = await db.query(
+          `SELECT lu.lesson_id, lu.user_id, u.name AS user_name FROM lesson_unlocks lu
+           LEFT JOIN users u ON u.id = lu.user_id
+           WHERE lu.lesson_id = ANY(?) ${admin ? '' : 'AND (lu.user_id IS NULL OR lu.user_id = ?)'}
+           ORDER BY u.name ASC NULLS FIRST`,
+          admin ? [allLessonIds] : [allLessonIds, caller.id]
+        );
+        unlocks.forEach((u) => {
+          unlockedLessons.add(u.lesson_id);
+          const entry = unlocksByLesson.get(u.lesson_id) || { all: false, users: [] };
+          if (u.user_id === null) entry.all = true;
+          else entry.users.push({ id: u.user_id, name: u.user_name });
+          unlocksByLesson.set(u.lesson_id, entry);
+        });
+      }
+
       // Caller-specific flags: completion, NEW badges (students), unviewed submissions (admin)
       const completed = new Set();
       let enrolled = false;
@@ -391,10 +435,17 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
           previousDone: previousPhaseDone, stars: caller?.stars, starsRequired: p.stars_required,
         });
         previousPhaseDone = phaseLessons.every(lessonMandatoryDone);
+        // An unlocked lesson is reachable even when its phase (or the lesson before it) is not
+        // finished — unless the phase is closed for another reason (not enrolled, stars).
+        const onlyPrevious = lockReasons.every((r) => r === 'previous');
+        phaseLessons.forEach((l) => {
+          if (admin) l.unlocks = unlocksByLesson.get(l.id) || { all: false, users: [] };
+          else l.unlocked = unlockedLessons.has(l.id) && onlyPrevious;
+        });
         // Locked phases keep their lesson titles, summaries and task titles (so a student can see
         // what is coming); only the task briefs are held back until the phase is reached.
         if (lockReasons.length > 0) {
-          phaseLessons.forEach((l) => { l.tasks.forEach((t) => { t.description = ''; }); });
+          phaseLessons.forEach((l) => { if (!l.unlocked) l.tasks.forEach((t) => { t.description = ''; }); });
         }
         return {
           id: p.id, name: p.name, description: p.description || '', order_index: p.order_index,
@@ -407,6 +458,93 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
     } catch (err) {
       console.error('[GET /courses/:id] Error:', err);
       res.status(500).json({ error: 'Failed to fetch course' });
+    }
+  });
+
+  // ---- lesson unlocks (admin) ----------------------------------------------
+  // Who a lesson is opened early for, plus the course's students to pick from.
+  async function lessonForUnlock(lessonId) {
+    if (!/^\d+$/.test(String(lessonId))) return null;
+    const [rows] = await db.query(
+      `SELECT l.id, l.title, p.course_id, c.name AS course_name FROM lessons l
+       INNER JOIN paths p ON p.id = l.path_id LEFT JOIN courses c ON c.id = p.course_id WHERE l.id = ?`,
+      [lessonId]
+    );
+    return rows.length > 0 ? rows[0] : null;
+  }
+  async function unlockState(lesson) {
+    const [rows] = await db.query(
+      `SELECT lu.user_id, u.name, u.email FROM lesson_unlocks lu LEFT JOIN users u ON u.id = lu.user_id
+       WHERE lu.lesson_id = ? ORDER BY u.name ASC NULLS FIRST`,
+      [lesson.id]
+    );
+    const [students] = lesson.course_id === null ? [[]] : await db.query(
+      `SELECT u.id, u.name, u.email FROM course_enrollments ce INNER JOIN users u ON u.id = ce.user_id
+       WHERE ce.course_id = ? AND u.role <> 'admin' ORDER BY u.name ASC`,
+      [lesson.course_id]
+    );
+    return {
+      lesson_id: lesson.id,
+      all: rows.some((r) => r.user_id === null),
+      users: rows.filter((r) => r.user_id !== null).map((r) => ({ id: r.user_id, name: r.name, email: r.email })),
+      students,
+    };
+  }
+
+  api.get('/lessons/:id/unlocks', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const lesson = await lessonForUnlock(req.params.id);
+      if (!lesson) return res.status(404).json({ error: 'Lesson not found' });
+      res.json(await unlockState(lesson));
+    } catch (err) {
+      console.error('[GET /lessons/:id/unlocks] Error:', err);
+      res.status(500).json({ error: 'Failed to load lesson unlocks' });
+    }
+  });
+
+  // Replace the unlock set: { all: boolean, userIds: number[] }. Students who gain access are
+  // told (in the app and by email) with a link to the lesson.
+  api.put('/lessons/:id/unlocks', authenticateToken, requireAdmin, async (req, res) => {
+    const body = req.body || {};
+    const all = body.all === true;
+    const userIds = Array.isArray(body.userIds) ? [...new Set(body.userIds.map(Number))] : [];
+    if (body.all !== undefined && typeof body.all !== 'boolean') return res.status(400).json({ error: 'all must be a boolean' });
+    if (body.userIds !== undefined && (!Array.isArray(body.userIds) || !userIds.every((n) => Number.isInteger(n) && n > 0))) {
+      return res.status(400).json({ error: 'userIds must be a list of user ids' });
+    }
+    try {
+      const lesson = await lessonForUnlock(req.params.id);
+      if (!lesson) return res.status(404).json({ error: 'Lesson not found' });
+      const before = await unlockState(lesson);
+      const known = new Set(before.students.map((s) => s.id));
+      const unknown = userIds.filter((id) => !known.has(id));
+      if (unknown.length > 0) return res.status(400).json({ error: `Not students of this course: ${unknown.join(', ')}` });
+
+      await db.transaction(async (tx) => {
+        await tx.query('DELETE FROM lesson_unlocks WHERE lesson_id = ?', [lesson.id]);
+        if (all) await tx.query('INSERT INTO lesson_unlocks (lesson_id, user_id, created_by) VALUES (?, NULL, ?)', [lesson.id, req.user.id]);
+        else for (const uid of userIds) await tx.query('INSERT INTO lesson_unlocks (lesson_id, user_id, created_by) VALUES (?, ?, ?)', [lesson.id, uid, req.user.id]);
+      });
+
+      // Newly opened for: everyone who could not reach it through an unlock before
+      const hadAccess = new Set(before.all ? before.students.map((s) => s.id) : before.users.map((u) => u.id));
+      const nowHas = all ? before.students.map((s) => s.id) : userIds;
+      const gained = nowHas.filter((id) => !hadAccess.has(id));
+      if (notifyUser && lesson.course_id !== null) {
+        const link = `/courses/${lesson.course_id}?lesson=${lesson.id}`;
+        for (const uid of gained) {
+          notifyUser(uid, {
+            type: 'lesson_unlocked', title: 'Lesson unlocked 🔓',
+            message: `"${lesson.title}" in ${lesson.course_name || 'your course'} is open for you now — you can start it without finishing the previous steps.`,
+            link, metadata: { lessonId: lesson.id, courseId: lesson.course_id }, actionLabel: 'Open the lesson',
+          });
+        }
+      }
+      io.emit('lesson:updated', { lessonId: lesson.id });
+      res.json(await unlockState(lesson));
+    } catch (err) {
+      console.error('[PUT /lessons/:id/unlocks] Error:', err);
+      res.status(500).json({ error: 'Failed to update lesson unlocks' });
     }
   });
 
@@ -425,4 +563,4 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
   });
 }
 
-module.exports = { registerCourseRoutes, placePhase, renumberCourse, lockCourses, phaseLockReasons, taskLockReasons };
+module.exports = { registerCourseRoutes, placePhase, renumberCourse, lockCourses, phaseLockReasons, lessonLockReasons, lessonUnlockedFor, taskLockReasons };

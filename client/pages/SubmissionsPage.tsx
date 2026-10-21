@@ -38,9 +38,10 @@ interface InboxRow {
 
 type Filter = 'pending' | 'approved' | 'rejected' | 'all';
 
-// The URL that opens the lesson and task on the course road (CoursePage reads ?lesson=&task=).
+// The URL that opens the task's submissions on the course road (CoursePage reads
+// ?lesson=&task=&tab=submissions).
 export const submissionDeepLink = (row: { course_id: number | null; lesson_id: number; task_id: number }) =>
-  row.course_id ? `/courses/${row.course_id}?lesson=${row.lesson_id}&task=${row.task_id}` : null;
+  row.course_id ? `/courses/${row.course_id}?lesson=${row.lesson_id}&task=${row.task_id}&tab=submissions` : null;
 
 const shortPhase = (name: string) => {
   const m = name.match(/^(phase|faza|etapa|level|stage|week|part)\s*\d+/i);
