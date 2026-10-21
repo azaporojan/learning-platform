@@ -518,7 +518,10 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
     update();
     scroller.addEventListener('scroll', schedule, { passive: true });
     window.addEventListener('resize', schedule);
-    return () => { scroller.removeEventListener('scroll', schedule); window.removeEventListener('resize', schedule); if (frame) cancelAnimationFrame(frame); };
+    // Content above the screen can grow without a scroll (an image loads, an output appears)
+    const resized = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+    Array.from(scroller.children).forEach((child) => resized?.observe(child));
+    return () => { scroller.removeEventListener('scroll', schedule); window.removeEventListener('resize', schedule); resized?.disconnect(); if (frame) cancelAnimationFrame(frame); };
   }, [outline, loaded, outlineOpen]);
 
   useEffect(() => {
@@ -530,7 +533,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
       if (b.top < l.top + 8) list.scrollTop -= l.top + 8 - b.top + l.height / 3;
       else if (b.bottom > l.bottom - 8) list.scrollTop += b.bottom - (l.bottom - 8) + l.height / 3;
     });
-  }, [activeHeading]);
+  }, [activeHeading, outlineDrawer, outlineOpen]);
 
   // -------------------------------------------------------------------------
   // Render
