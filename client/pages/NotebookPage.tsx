@@ -53,6 +53,9 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
   const [outputs, setOutputs] = useState<Record<string, CellOutput>>({});
   const [saveState, setSaveState] = useState<SaveState>('saved');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Drag and drop of cells: the cell being dragged, and where it would land
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<{ id: string; position: 'before' | 'after' } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
   const [queuedAhead, setQueuedAhead] = useState(0);
@@ -227,6 +230,20 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
     setSaveState('dirty');
     scheduleSave();
   }, [scheduleSave, showToast]);
+
+  // One undoable move, like the arrows; dropping a cell next to itself changes nothing
+  const moveCellTo = useCallback((fromId: string, targetId: string, position: 'before' | 'after') => {
+    const list = [...cellsRef.current];
+    const from = list.findIndex((c) => c.id === fromId);
+    if (from === -1 || fromId === targetId) return;
+    const [moved] = list.splice(from, 1);
+    const target = list.findIndex((c) => c.id === targetId);
+    if (target === -1) return;
+    list.splice(position === 'before' ? target : target + 1, 0, moved);
+    if (list.every((c, i) => c.id === cellsRef.current[i].id)) return;
+    updateCells(list, { structural: true });
+    setSelectedId(fromId);
+  }, [updateCells]);
 
   const cellAction = useCallback((cellId: string, action: CellAction) => {
     const i = indexOf(cellId);
@@ -620,6 +637,18 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
                 onAction={(a) => cellAction(cell.id, a)}
                 onClearOutput={() => clearOutput(cell.id)}
                 onFiles={(files) => uploadImages(cell.id, files)}
+                dragging={dragId === cell.id}
+                dropPosition={dragId && dragId !== cell.id && dropAt?.id === cell.id ? dropAt.position : null}
+                onDragStart={editable ? () => { setDragId(cell.id); setEditingId(null); } : undefined}
+                onDragEnd={() => { setDragId(null); setDropAt(null); }}
+                onDragOverCell={editable ? (position) => {
+                  if (!dropAt || dropAt.id !== cell.id || dropAt.position !== position) setDropAt({ id: cell.id, position });
+                } : undefined}
+                onDropCell={editable ? (position) => {
+                  if (dragId) moveCellTo(dragId, cell.id, position);
+                  setDragId(null);
+                  setDropAt(null);
+                } : undefined}
               />
               {editable && <AddCellBar onAdd={(k) => addCell(i + 1, k)} />}
             </React.Fragment>
