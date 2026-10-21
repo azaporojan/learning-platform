@@ -189,8 +189,6 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
           {p.onDragStart && (
             <span
               draggable
-              role="button"
-              tabIndex={-1}
               title="Drag to move"
               aria-label="Drag to move the cell"
               onMouseDown={(e) => e.stopPropagation()}

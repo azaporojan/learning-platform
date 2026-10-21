@@ -231,6 +231,12 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
     scheduleSave();
   }, [scheduleSave, showToast]);
 
+  // A dragged cell that disappears mid-drag (deleted, or the notebook reloaded) never fires
+  // dragend: drop the drag state with it so no drop line stays behind
+  useEffect(() => {
+    if (dragId && !cells.some((c) => c.id === dragId)) { setDragId(null); setDropAt(null); }
+  }, [cells, dragId]);
+
   // One undoable move, like the arrows; dropping a cell next to itself changes nothing
   const moveCellTo = useCallback((fromId: string, targetId: string, position: 'before' | 'after') => {
     const list = [...cellsRef.current];

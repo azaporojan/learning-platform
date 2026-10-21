@@ -190,7 +190,8 @@ function createRunner({ executor, sessions, pool, token }) {
 // belong to the runner that is shutting down. The runner is meant to run as one replica.
 // Everything the pool owns (booting, warm, leased, or still being removed) and every session's
 // sandbox is known; any other sandbox older than maxAgeMs is a leftover from a crash or a
-// redeploy. Each is removed on its own, so one failure never hides the rest; it is retried on the
+// redeploy. A sandbox whose create has not returned yet has no id and so is not in `known`: it is
+// safe only because maxAgeMs stays far above a boot (seconds), so never shorten it below that. Each is removed on its own, so one failure never hides the rest; it is retried on the
 // next sweep. Resolves with the ids it removed.
 async function sweepStrays({ gate, pool, sessions, maxAgeMs, now = Date.now(), log = console }) {
   const known = new Set([
