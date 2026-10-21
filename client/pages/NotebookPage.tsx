@@ -500,7 +500,10 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
     }
   }, [nb, navigate, saveNow, showToast]);
 
-  const outline = useMemo(() => cells.flatMap((c) => (c.kind === 'text' ? headingsOf(c.source).map((h, nth) => ({ ...h, cellId: c.id, nth })) : [])), [cells]);
+  const headings = useMemo(() => cells.flatMap((c) => (c.kind === 'text' ? headingsOf(c.source).map((h, nth) => ({ ...h, cellId: c.id, nth })) : [])), [cells]);
+  // Same array while the headings stay the same (typing in a cell does not reset the scroll-spy)
+  const headingsKey = JSON.stringify(headings);
+  const outline = useMemo(() => headings, [headingsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Scroll-spy: highlight the outline heading of the section on screen and keep it visible in the outline
   const loaded = nb !== null;
