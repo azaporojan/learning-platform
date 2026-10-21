@@ -6,6 +6,10 @@ import { CellOutputView } from './CellOutputView';
 
 export type CellAction = 'up' | 'down' | 'convert' | 'delete' | 'image';
 
+// Cells move by dragging their handle; the payload type keeps a dragged cell apart from dropped files
+export const CELL_DRAG_TYPE = 'application/x-lp-cell';
+export type DropPosition = 'before' | 'after' | null;
+
 export interface CellViewHandle {
   focusEditor: () => void;
   insert: (text: string) => void;
@@ -32,6 +36,12 @@ interface CellViewProps {
   onAction: (action: CellAction) => void;
   onClearOutput: () => void;
   onFiles: (files: File[]) => void;
+  dragging?: boolean; // this cell is the one being dragged
+  dropPosition?: DropPosition; // where a dragged cell would land relative to this one
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  onDragOverCell?: (position: 'before' | 'after') => void;
+  onDropCell?: (position: 'before' | 'after') => void;
 }
 
 const ToolButton: React.FC<{ icon: string; title: string; onClick: () => void; disabled?: boolean; danger?: boolean }> = ({ icon, title, onClick, disabled, danger }) => (
@@ -57,6 +67,12 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
   }), []);
 
   const isCode = p.cell.kind === 'code';
+  const root = useRef<HTMLDivElement>(null);
+  const isCellDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes(CELL_DRAG_TYPE);
+  const half = (e: React.DragEvent): 'before' | 'after' => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return e.clientY < r.top + r.height / 2 ? 'before' : 'after';
+  };
   const errorLine = p.output && p.output.status === 'error' && p.output.error ? p.output.error.line : null;
   const count = p.output && p.output.executionCount;
 
@@ -85,10 +101,26 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
 
   return (
     <div
-      className={`lp-cell group relative flex rounded-xl transition-shadow ${p.selected ? 'lp-cell-selected' : ''} ${p.running ? 'lp-cell-running' : ''}`}
+      ref={root}
+      className={`lp-cell group relative flex rounded-xl transition-shadow ${p.selected ? 'lp-cell-selected' : ''} ${p.running ? 'lp-cell-running' : ''} ${p.dragging ? 'opacity-40' : ''}`}
       onMouseDown={() => { if (!p.selected) p.onSelect(); }}
       data-cell-id={p.cell.id}
+      // Only cell drags are handled here; dropped image files go on to the text editor as before
+      onDragOver={(e) => {
+        if (!p.onDragOverCell || !isCellDrag(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        p.onDragOverCell(half(e));
+      }}
+      onDrop={(e) => {
+        if (!p.onDropCell || !isCellDrag(e)) return;
+        e.preventDefault();
+        p.onDropCell(half(e));
+      }}
     >
+      {p.dropPosition && (
+        <div aria-hidden="true" className={`pointer-events-none absolute left-10 right-2 h-1 rounded-full bg-sky-500 z-20 ${p.dropPosition === 'before' ? '-top-3.5' : '-bottom-3.5'}`} />
+      )}
       <div className={`absolute left-0 top-2 bottom-2 w-1 rounded-full ${p.selected ? (p.editing ? 'bg-primary-dark' : 'bg-sky-400') : 'bg-transparent'}`} />
       {gutter}
       <div className="min-w-0 flex-1 py-1 pr-2">
@@ -154,6 +186,25 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
         <div className={`absolute -top-3 right-3 z-10 flex items-center gap-0.5 rounded-lg border border-gray-200 bg-white shadow-sm px-1 py-0.5 transition-opacity ${p.selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}`}>
           {!isCode && !p.editing && <ToolButton icon="edit" title="Edit (Enter)" onClick={p.onEdit} />}
           {!isCode && <ToolButton icon="image" title="Insert an image (or paste / drop one while editing)" onClick={() => p.onAction('image')} />}
+          {p.onDragStart && (
+            <span
+              draggable
+              title="Drag to move"
+              aria-label="Drag to move the cell"
+              onMouseDown={(e) => e.stopPropagation()}
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData(CELL_DRAG_TYPE, p.cell.id);
+                e.dataTransfer.setData('text/plain', '');
+                if (root.current) e.dataTransfer.setDragImage(root.current, 24, 24);
+                p.onDragStart!();
+              }}
+              onDragEnd={() => p.onDragEnd && p.onDragEnd()}
+              className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:bg-gray-100 hover:text-gray-800 cursor-grab active:cursor-grabbing"
+            >
+              <span aria-hidden="true" className="material-icons text-[18px] leading-none">drag_indicator</span>
+            </span>
+          )}
           <ToolButton icon="arrow_upward" title="Move up" onClick={() => p.onAction('up')} disabled={p.isFirst} />
           <ToolButton icon="arrow_downward" title="Move down" onClick={() => p.onAction('down')} disabled={p.isLast} />
           <ToolButton icon={isCode ? 'notes' : 'code'} title={isCode ? 'Convert to text (M)' : 'Convert to code (Y)'} onClick={() => p.onAction('convert')} />

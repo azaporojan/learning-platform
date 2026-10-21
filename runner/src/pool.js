@@ -29,6 +29,9 @@ class Pool {
     this.stopped = false;
     this.booting = new Set(); // in-flight boots, awaited on shutdown
     this.leased = new Set(); // handed to a request or session, until released
+    // Every sandbox this pool made, until its removal has finished: booting, warm, leased, or being
+    // destroyed. The stray sweep treats these as known, so it never races the pool's own removal.
+    this.owned = new Set();
   }
 
   track(promise) {
@@ -133,12 +136,29 @@ class Pool {
     this.refill();
   }
 
+  // Makes a sandbox and keeps it in `owned` until its removal has finished. Every caller of
+  // destroy() waits for the same removal, so a second caller never clears `owned` early. A removal
+  // the gate refused is logged by Sandbox.destroy and still leaves `owned`: the stray sweep then
+  // retries it.
+  create(profile) {
+    const sb = this.makeSandbox(profile);
+    this.owned.add(sb);
+    const destroy = sb.destroy.bind(sb);
+    let removing = null;
+    sb.destroy = () => {
+      if (!removing) removing = (async () => { try { await destroy(); } finally { this.owned.delete(sb); } })();
+      return removing;
+    };
+    return sb;
+  }
+
   bootFor(entry) {
-    const sb = this.makeSandbox(entry.profile);
+    const sb = this.create(entry.profile);
     this.track(sb.boot()).then(
       () => this.serve(entry, sb, false),
       (err) => {
         this.live -= 1;
+        sb.destroy().catch(() => {}); // a failed create never reached boot's own cleanup; this also ends `owned`
         clearTimeout(entry.timer);
         entry.reject(err);
         this.schedule();
@@ -151,7 +171,7 @@ class Pool {
     while (this.live < this.maxContainers && this.warm.length + this.bootingWarm < this.warmTarget) {
       this.live += 1;
       this.bootingWarm += 1;
-      const sb = this.makeSandbox('jshell');
+      const sb = this.create('jshell');
       this.track(sb.boot()).then(
         () => {
           this.bootingWarm -= 1;
@@ -162,6 +182,7 @@ class Pool {
         (err) => {
           this.bootingWarm -= 1;
           this.live -= 1;
+          sb.destroy().catch(() => {}); // see bootFor: ends `owned` even when the create failed
           this.log.error('[runner] warm sandbox failed to boot:', err.message);
           // do not spin on a broken image: retry on the next request or recycle tick
         },

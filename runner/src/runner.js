@@ -185,9 +185,30 @@ function createRunner({ executor, sessions, pool, token }) {
   });
 }
 
-// Sandboxes this process does not know about (left over from a previous run) are removed. Ones
-// created in the last minAgeMs are left alone: during an overlapping redeploy they may still
-// belong to the runner that is shutting down. The runner is meant to run as one replica.
+// The periodic sweep. Everything the pool owns (booting, warm, leased, or still being removed) and
+// every session's sandbox is known; any other sandbox older than maxAgeMs is a leftover from a
+// crash or a redeploy. A sandbox whose create has not returned yet has no id and so is not in
+// `known`: it is safe only because maxAgeMs stays far above a boot (seconds), so never shorten it
+// below that. Each stray is removed on its own, so one failure never hides the rest; it is
+// retried on the next sweep. Resolves with the ids it removed.
+async function sweepStrays({ gate, pool, sessions, maxAgeMs, now = Date.now(), log = console }) {
+  const known = new Set([
+    ...[...pool.owned].map((s) => s.id).filter(Boolean),
+    ...[...sessions.byId.values()].map((s) => s.sandbox.id),
+  ]);
+  const stale = (await gate.list()).filter((s) => !known.has(s.id) && Date.parse(s.createdAt) < now - maxAgeMs);
+  const results = await Promise.allSettled(stale.map((s) => gate.remove(s.id)));
+  const removed = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') removed.push(stale[i].id);
+    else log.error(`[runner] could not remove stray sandbox ${stale[i].id.slice(0, 12)}:`, r.reason.message);
+  });
+  return removed;
+}
+
+// At startup: sandboxes this process does not know about (left over from a previous run) are
+// removed. Ones created in the last minAgeMs are left alone: during an overlapping redeploy they
+// may still belong to the runner that is shutting down. The runner is meant to run as one replica.
 async function removeStrays(gate, known, { minAgeMs = 120000, now = Date.now() } = {}) {
   try {
     for (const s of await gate.list()) {
@@ -239,18 +260,8 @@ async function main() {
     // A rejection here would be unhandled and stop the process: log it instead
     sessions.sweep().catch((err) => console.error('[runner] session sweep failed:', err.message));
     try { pool.recycle(); } catch (err) { console.error('[runner] recycle failed:', err.message); }
-    const known = new Set([
-      ...pool.warm.map((s) => s.id),
-      ...[...pool.leased].map((s) => s.id),
-      ...[...sessions.byId.values()].map((s) => s.sandbox.id),
-    ]);
-    // Warm, leased and session sandboxes are known; anything else this old is a leftover. A sandbox
-    // still booting is in none of those sets, so the cutoff must stay well above a boot (seconds)
-    // and above the longest a request holds one (queue wait plus the longest check).
-    gate.list().then((list) => {
-      const cutoff = Date.now() - (LIMITS.maxCheckTimeoutMs + LIMITS.checkQueueWaitMs + 60000);
-      return Promise.all(list.filter((s) => !known.has(s.id) && Date.parse(s.createdAt) < cutoff).map((s) => gate.remove(s.id)));
-    }).catch((err) => console.error('[runner] sweep failed:', err.message));
+    sweepStrays({ gate, pool, sessions, maxAgeMs: LIMITS.maxCheckTimeoutMs + LIMITS.checkQueueWaitMs + 60000 })
+      .catch((err) => console.error('[runner] sweep failed:', err.message));
   }, 30000).unref();
 
   // Remove our sandboxes, then exit whatever happens; a stuck shutdown never outlives 10 s
@@ -273,4 +284,4 @@ async function main() {
 
 if (require.main === module) main().catch((err) => { console.error('[runner] fatal:', err.message || err); process.exit(1); });
 
-module.exports = { createRunner, validCells, validFiles, removeStrays, LIMITS };
+module.exports = { createRunner, validCells, validFiles, removeStrays, sweepStrays, LIMITS };
