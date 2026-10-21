@@ -516,7 +516,9 @@ function registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, op
       const lesson = await lessonForUnlock(req.params.id);
       if (!lesson) return res.status(404).json({ error: 'Lesson not found' });
       const before = await unlockState(lesson);
-      const known = new Set(before.students.map((s) => s.id));
+      // Ids must be students of the course — or already on the list (a student who left the
+      // course stays listed, so re-saving the current set never fails because of them).
+      const known = new Set([...before.students.map((s) => s.id), ...before.users.map((u) => u.id)]);
       const unknown = userIds.filter((id) => !known.has(id));
       if (unknown.length > 0) return res.status(400).json({ error: `Not students of this course: ${unknown.join(', ')}` });
 

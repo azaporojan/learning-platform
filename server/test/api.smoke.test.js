@@ -684,10 +684,15 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   // …and clearing it locks the lesson again (an unlock never bypasses the enrolment gate either)
   await admin(`/lessons/${ulLesson.body.id}/unlocks`, { method: 'PUT', json: { all: false, userIds: [] } });
   assert.equal((await stud(`/courses/${course.body.id}`)).body.phases[2].lessons[0].unlocked, false);
-  await admin(`/lessons/${ulLesson.body.id}/unlocks`, { method: 'PUT', json: { all: true } });
+  await admin(`/lessons/${ulLesson.body.id}/unlocks`, { method: 'PUT', json: { userIds: [student.id] } });
   await stud(`/courses/${course.body.id}/enroll`, { method: 'DELETE' });
   assert.equal((await stud(`/courses/${course.body.id}`)).body.phases[2].lessons[0].unlocked, false);
   assert.equal((await stud(`/tasks/${ulTask.body.id}/submit`, { method: 'POST', body: earlyForm3 })).status, 403);
+  // A student who left the course stays on the list: re-saving the same set is not an error
+  const resave = await admin(`/lessons/${ulLesson.body.id}/unlocks`, { method: 'PUT', json: { userIds: [student.id] } });
+  assert.equal(resave.status, 200, JSON.stringify(resave.body));
+  assert.deepEqual(resave.body.users.map((u) => u.id), [student.id]);
+  assert.deepEqual(resave.body.students, []); // …but is no longer offered to pick
   await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' });
   assert.equal((await admin(`/lessons/${ulLesson.body.id}`, { method: 'DELETE' })).status, 200);
   assert.equal((await admin(`/paths/${ulPhase.body.id}`, { method: 'DELETE' })).status, 200);
