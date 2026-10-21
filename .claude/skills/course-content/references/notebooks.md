@@ -46,6 +46,21 @@ assertThat(adults).extracting(User::name).containsExactly("Ana", "Mia");
 
 Rules of the format (the server's parser, `server/notebookMarkdown.js`):
 - Every ` ```java run ` fence becomes a **code cell**. Everything between code cells is one **text cell**.
+- An ` ```input ` fence **right after** a ` ```java run ` fence (only blank lines between) is that
+  cell's **input**: what `Scanner` / `System.in` reads when it runs, one value per line. Students see it
+  in an Input box under the cell and can change it.
+
+  ````markdown
+  ```java run
+  var sc = new Scanner(System.in);
+  int a = sc.nextInt(), b = sc.nextInt();
+  System.out.println(a + b);
+  ```
+
+  ```input
+  5 7
+  ```
+  ````
 - `<!-- cell -->` on its own line splits two text cells (use it before a new `##` you want as its own cell).
 - Other fences stay in the text cell: ` ```java ` (no `run`) is highlighted but not runnable,
   ` ```mermaid ` is drawn as a diagram.
@@ -67,7 +82,11 @@ Rules of the format (the server's parser, `server/notebookMarkdown.js`):
   `java.math.*`, `java.time.*`, `java.nio.file.*`, and AssertJ's `assertThat` (static).
   JUnit 5 and AssertJ are on the class path for anything else (`import org.junit.jupiter.api.*;`).
 - Limits per run: **15 s**, **384 MB**, **no network**, no files outside a small temp folder. Keep loops
-  bounded and data small; no `Scanner(System.in)` (there is no keyboard input).
+  bounded and data small.
+- **Input**: `Scanner(System.in)` reads the cell's Input box (an ` ```input ` fence in Markdown), never a
+  live keyboard. Each cell has its own input, so **create the Scanner in the cell that reads**. Prompts
+  print without the typed values (`Two numbers: ` then the result), as on online judges. A cell that
+  reads more values than its input holds fails with "the cell's input ran out".
 - Compile errors show the line inside the cell; exceptions show the line and the stack.
 
 ## How to write a good notebook lesson

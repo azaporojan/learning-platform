@@ -281,6 +281,18 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
     updateCells(list);
   }, [updateCells]);
 
+  // A code cell's input; an empty box removes it
+  const setInput = useCallback((cellId: string, input: string) => {
+    const current = cellsRef.current.find((c) => c.id === cellId);
+    if (!current || (current.input || '') === input) return;
+    const list = cellsRef.current.map((c) => {
+      if (c.id !== cellId) return c;
+      const { input: _old, ...rest } = c;
+      return input ? { ...rest, input } : rest;
+    });
+    updateCells(list);
+  }, [updateCells]);
+
   // Images: a placeholder goes in at once, the real link replaces it when the upload is done
   const uploadImages = useCallback(async (cellId: string, files: File[]) => {
     if (!nb) return;
@@ -358,7 +370,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
     if (!liveSession) poll();
     try {
       if (liveSession) {
-        const r = await api<{ output: CellOutput; sessionEnded: boolean; sessionRestarted: boolean }>(`/notebooks/${nb.id}/session/run`, { json: { cellId, source: cell.source } });
+        const r = await api<{ output: CellOutput; sessionEnded: boolean; sessionRestarted: boolean }>(`/notebooks/${nb.id}/session/run`, { json: { cellId, source: cell.source, input: cell.input || '' } });
         applyOutputs({ [cellId]: r.output });
         if (r.sessionEnded) showToast({ text: 'The live session ended (timeout or crash). The next run starts a fresh one.' });
         else if (r.sessionRestarted) showToast({ text: 'Started a fresh live session: earlier variables are gone.' }, 3500);
@@ -639,6 +651,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
                 onEdit={() => { setSelectedId(cell.id); setEditingId(cell.id); }}
                 onStopEditing={() => setEditingId((e) => (e === cell.id ? null : e))}
                 onChange={(src) => setSource(cell.id, src)}
+                onInputChange={(input) => setInput(cell.id, input)}
                 onRun={(how) => runCell(cell.id, how)}
                 onAction={(a) => cellAction(cell.id, a)}
                 onClearOutput={() => clearOutput(cell.id)}

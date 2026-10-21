@@ -71,7 +71,8 @@ import org.junit.platform.launcher.core.LauncherFactory;
  * Protocol, one line per message, UTF-8:
  * <pre>
  *   in   NONCE &lt;hex&gt;                   first line, always
- *   in   CELL &lt;id&gt; &lt;base64 source&gt;     jshell: evaluate one cell
+ *   in   CELL &lt;id&gt; &lt;base64 source&gt; [&lt;base64 input&gt;]
+ *                                      jshell: evaluate one cell; the input, if any, is its System.in
  *   in   FILE &lt;b64 path&gt; &lt;b64 source&gt;   check: a student file
  *   in   TEST &lt;b64 path&gt; &lt;b64 source&gt;   check: a hidden test file
  *   in   END                          jshell: exit after the last cell; check: start
@@ -136,10 +137,11 @@ public final class Kernel {
                 if (line.equals("END")) break;
                 if (line.equals("PING")) { channel.emit(Map.of("type", "pong")); continue; }
                 if (!line.startsWith("CELL ")) continue;
-                String[] parts = line.split(" ", 3);
+                String[] parts = line.split(" ", 4);
                 if (parts.length < 3) continue;
                 String source = new String(Base64.getDecoder().decode(parts[2].trim()), StandardCharsets.UTF_8);
-                channel.emit(nb.run(parts[1], source));
+                byte[] input = parts.length > 3 ? Base64.getDecoder().decode(parts[3].trim()) : new byte[0];
+                channel.emit(nb.run(parts[1], source, input));
             }
         }
         // A stray non-daemon thread started by a cell must not keep the container alive
@@ -149,9 +151,11 @@ public final class Kernel {
     /** Builds the AppCDS archive at image build time and proves the image works. */
     private static void selfTest() throws Exception {
         try (Notebook nb = new Notebook()) {
-            Map<String, Object> r = nb.run("1", "record P(int x) {}\nvar ps = List.of(new P(1), new P(2));\nps.stream().map(P::x).toList()");
+            Map<String, Object> r = nb.run("1", "record P(int x) {}\nvar ps = List.of(new P(1), new P(2));\nps.stream().map(P::x).toList()", new byte[0]);
             if (!"ok".equals(r.get("status"))) throw new IllegalStateException("self-test failed: " + r);
-            Map<String, Object> a = nb.run("2", "assertThat(ps).hasSize(2);");
+            Map<String, Object> a = nb.run("2", "assertThat(ps).hasSize(2);", new byte[0]);
+            Map<String, Object> in = nb.run("3", "new Scanner(System.in).nextInt() * 2", "21\n".getBytes(StandardCharsets.UTF_8));
+            if (!"42".equals(in.get("value"))) throw new IllegalStateException("input self-test failed: " + in);
             if (!"ok".equals(a.get("status"))) throw new IllegalStateException("assertj self-test failed: " + a);
             System.err.println("selftest ok: " + r.get("value"));
         }
@@ -229,11 +233,13 @@ public final class Kernel {
             }
         }
 
-        Map<String, Object> run(String id, String source) {
+        /** Evaluates one cell; {@code input} is what System.in reads during this cell (and only this cell). */
+        Map<String, Object> run(String id, String source, byte[] input) {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("type", "cell");
             result.put("id", id);
             capture = new Capture();
+            System.setIn(new ByteArrayInputStream(input));
             System.setOut(capture.stream(capture.out));
             System.setErr(capture.stream(capture.err));
             long started = System.nanoTime();
@@ -294,6 +300,23 @@ public final class Kernel {
                 System.err.flush();
                 System.setOut(realOut);
                 System.setErr(realErr);
+                System.setIn(new ByteArrayInputStream(new byte[0]));
+            }
+            // Explain input problems, but only when Scanner itself threw (its frames are in the trace),
+            // so an Optional.get() or an iterator in the same cell keeps its own plain message
+            if (error != null && "runtime".equals(error.get("kind"))) {
+                String text = String.valueOf(error.get("message"));
+                if (text.contains("at java.base/java.util.Scanner.") || text.contains("at java.util.Scanner.")) {
+                    String hint = null;
+                    if (text.startsWith("java.util.InputMismatchException")) {
+                        hint = "The input does not match what the code reads: for example nextInt() found a word. Check the Input box.";
+                    } else if (text.startsWith("java.util.NoSuchElementException")) {
+                        hint = input.length == 0
+                            ? "This cell reads input, but its Input box is empty. Type the input there, one value per line."
+                            : "The cell's input ran out: it read more values than its Input box holds.";
+                    }
+                    if (hint != null) error.put("message", hint + "\n\n" + text);
+                }
             }
             result.put("status", error == null ? "ok" : "error");
             result.put("stdout", capture.out());

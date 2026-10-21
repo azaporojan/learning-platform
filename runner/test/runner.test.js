@@ -29,7 +29,7 @@ test('health is open, everything else needs the token', async () => {
 test('run validates cells and maps busy to 429', async () => {
   let seen;
   const executor = {
-    runNotebook: async (cells) => { seen = cells; if (cells[0] === 'busy') throw new BusyError(); return { status: 'ok', cells: [] }; },
+    runNotebook: async (cells) => { seen = cells; if (cells[0].source === 'busy') throw new BusyError(); return { status: 'ok', cells: [] }; },
   };
   await withServer(executor, async (base) => {
     assert.strictEqual((await call(base, 'POST', '/run', { cells: [] })).status, 400);
@@ -37,7 +37,14 @@ test('run validates cells and maps busy to 429', async () => {
     assert.strictEqual((await call(base, 'POST', '/run', { cells: ['x'.repeat(20001)] })).status, 400);
     const ok = await call(base, 'POST', '/run', { cells: ['int x = 1;', 'x'] });
     assert.strictEqual(ok.status, 200);
-    assert.deepStrictEqual(seen, ['int x = 1;', 'x']);
+    assert.deepStrictEqual(seen, [{ source: 'int x = 1;', input: '' }, { source: 'x', input: '' }]);
+    // A cell can carry its input (System.in); it must be text and bounded
+    const withInput = await call(base, 'POST', '/run', { cells: [{ source: 'new Scanner(System.in).nextInt()', input: '5\n' }] });
+    assert.strictEqual(withInput.status, 200);
+    assert.deepStrictEqual(seen, [{ source: 'new Scanner(System.in).nextInt()', input: '5\n' }]);
+    assert.strictEqual((await call(base, 'POST', '/run', { cells: [{ source: 'x', input: 5 }] })).status, 400);
+    assert.strictEqual((await call(base, 'POST', '/run', { cells: [{ source: 'x', input: 'y'.repeat(10001) }] })).status, 400);
+    assert.strictEqual((await call(base, 'POST', '/run', { cells: [{ input: 'no source' }] })).status, 400);
     const busy = await call(base, 'POST', '/run', { cells: ['busy'] });
     assert.strictEqual(busy.status, 429);
     assert.strictEqual((await busy.json()).code, 'busy');
@@ -79,8 +86,8 @@ test('a check never waits longer than the maximum timeout', async () => {
 test('an unexpected error is a 500, a gate failure a 502', async () => {
   const executor = {
     runNotebook: async (cells) => {
-      if (cells[0] === 'gate') throw Object.assign(new Error('gate POST /sandboxes -> 502'), { status: 502 });
-      if (cells[0] === 'full') throw Object.assign(new Error('gate POST /sandboxes -> 429'), { status: 429 });
+      if (cells[0].source === 'gate') throw Object.assign(new Error('gate POST /sandboxes -> 502'), { status: 502 });
+      if (cells[0].source === 'full') throw Object.assign(new Error('gate POST /sandboxes -> 429'), { status: 429 });
       throw new TypeError('bug');
     },
   };

@@ -43,5 +43,8 @@ test('kernel reader decodes multi-byte characters split across chunks', () => {
 
 test('encoders base64 the payloads', () => {
   assert.strictEqual(cellLine(3, 'int x = 1;'), `CELL 3 ${Buffer.from('int x = 1;').toString('base64')}\n`);
+  // With input, a third base64 field; without, the line keeps its old shape
+  assert.strictEqual(cellLine(4, 'x', '5\n'), `CELL 4 ${Buffer.from('x').toString('base64')} ${Buffer.from('5\n').toString('base64')}\n`);
+  assert.strictEqual(cellLine(4, 'x', ''), `CELL 4 ${Buffer.from('x').toString('base64')}\n`);
   assert.match(fileLine('TEST', 'a/B.java', 'x'), /^TEST YS9CLmphdmE= eA==\n$/);
 });

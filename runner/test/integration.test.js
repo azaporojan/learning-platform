@@ -38,6 +38,29 @@ test('sandbox end to end', { skip: !enabled && 'set RUNNER_IT=1 to run against D
     assert.ok(Date.now() - started < 3000, `warm run took ${Date.now() - started} ms`);
   });
 
+  await t.test('a cell reads its own input through Scanner', async () => {
+    const r = await executor.runNotebook([
+      { source: 'var sc = new Scanner(System.in);\nint a = sc.nextInt(), b = sc.nextInt();\nString name = sc.next();\nSystem.out.println("Hi " + name + ", " + (a + b));', input: '5 7\nAna\n' },
+      // the next cell gets its own input, not what the previous one left over
+      { source: 'new Scanner(System.in).nextLine()', input: 'second cell\n' },
+      { source: 'System.in.read()' },
+    ]);
+    assert.strictEqual(r.status, 'ok', JSON.stringify(r));
+    assert.strictEqual(r.cells[0].stdout, 'Hi Ana, 12\n');
+    assert.strictEqual(r.cells[1].value, '"second cell"');
+    assert.strictEqual(r.cells[2].value, '-1', 'a cell without input reads end of input');
+    const empty = await executor.runNotebook([{ source: 'new Scanner(System.in).nextInt()' }]);
+    assert.match(empty.cells[0].error.message, /Input box is empty/);
+    const short = await executor.runNotebook([{ source: 'var sc = new Scanner(System.in);\nsc.nextInt() + sc.nextInt()', input: '1\n' }]);
+    assert.match(short.cells[0].error.message, /input ran out/);
+    const mismatch = await executor.runNotebook([{ source: 'new Scanner(System.in).nextInt()', input: 'five\n' }]);
+    assert.match(mismatch.cells[0].error.message, /does not match what the code reads/);
+    // Not from Scanner: no input hint, even though the cell mentions Scanner
+    const other = await executor.runNotebook([{ source: 'Scanner unused = null;\nOptional.empty().get()' }]);
+    assert.doesNotMatch(other.cells[0].error.message, /Input box|input ran out/);
+    assert.match(other.cells[0].error.message, /NoSuchElementException/);
+  });
+
   await t.test('stops at the first failing cell', async () => {
     const r = await executor.runNotebook(['int x = 1;', 'String s = x;', 'System.out.println("never");']);
     assert.strictEqual(r.status, 'error');
@@ -125,6 +148,8 @@ test('sandbox end to end', { skip: !enabled && 'set RUNNER_IT=1 to run against D
     const b = await sessions.run(s.id, 'teacher-1', 'counter + 1');
     assert.strictEqual(b.value, '42');
     assert.strictEqual(b.executionCount, 2);
+    const c = await sessions.run(s.id, 'teacher-1', 'counter + new Scanner(System.in).nextInt()', '9\n');
+    assert.strictEqual(c.value, '50');
     await assert.rejects(sessions.run(s.id, 'someone-else', '1'), /ended/);
     await assert.rejects(sessions.open('teacher-2'), /At most 1/);
     assert.strictEqual(await sessions.close(s.id), true);

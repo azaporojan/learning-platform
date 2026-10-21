@@ -46,6 +46,37 @@ test('Markdown: code fences, text cells, title, round trip', () => {
   assert.deepEqual(again.map((c) => [c.kind, c.source]), cells.map((c) => [c.kind, c.source]));
 });
 
+test('code cells keep their input; text cells and empty inputs drop it; Markdown carries it', () => {
+  const cells = normalizeCells([
+    { id: 'c1', kind: 'code', source: 'new Scanner(System.in).nextInt()', input: '5\n' },
+    { id: 'c2', kind: 'code', source: '1', input: '' },
+    { id: 't1', kind: 'text', source: 'x', input: 'ignored' },
+  ]);
+  assert.equal(cells[0].input, '5\n');
+  assert.equal('input' in cells[1], false);
+  assert.equal('input' in cells[2], false);
+  assert.throws(() => normalizeCells([{ kind: 'code', source: '', input: 7 }]), /input/);
+  assert.throws(() => normalizeCells([{ kind: 'code', source: '', input: 'x'.repeat(10001) }]), /input/);
+  const md = notebookToMarkdown(cells);
+  assert.match(md, /```java run\nnew Scanner\(System\.in\)\.nextInt\(\)\n```\n\n```input\n5\n```/);
+  const back = parseNotebookMarkdown(md).cells;
+  assert.equal(back[0].input, '5');
+  assert.equal(back[1].input, undefined);
+  // Input holding ``` lines gets a longer fence and survives the round trip
+  const fenced = normalizeCells([{ kind: 'code', source: 'x', input: 'a\n```\nb' }]);
+  assert.equal(parseNotebookMarkdown(notebookToMarkdown(fenced)).cells[0].input, 'a\n```\nb');
+  // An input fence after text, or after a non-blank line, is not an input
+  const notInput = parseNotebookMarkdown('```java run\n1\n```\nsome text\n```input\n5\n```\n').cells;
+  assert.equal(notInput[0].input, undefined);
+  assert.equal(notInput[1].kind, 'text');
+  // An unclosed input fence ends at the next code cell instead of swallowing it
+  const unclosed = parseNotebookMarkdown('```java run\na\n```\n```input\n5\n\n```java run\nb\n```\n').cells;
+  assert.deepEqual(unclosed.map((c) => [c.kind, c.source, c.input || null]), [['code', 'a', '5\n'], ['code', 'b', null]]);
+  // A longer input fence is never closed early: it was chosen to hold a ```java run line
+  const long = parseNotebookMarkdown('```java run\na\n```\n````input\n```java run\n````\n').cells;
+  assert.deepEqual(long.map((c) => [c.kind, c.input || null]), [['code', '```java run']]);
+});
+
 test('cells are validated and outputs follow the cells', () => {
   assert.throws(() => normalizeCells([{ kind: 'shell', source: '' }]), /kind/);
   assert.throws(() => normalizeCells([{ kind: 'code', source: 'x'.repeat(20001) }]), /at most/);
@@ -67,10 +98,12 @@ function fakeRunner() {
       calls.push({ method: req.method, url: req.url, json, auth: req.headers.authorization });
       const send = (status, data) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
       if (req.headers.authorization !== 'Bearer runner-token-for-tests-0123456789') return send(401, { error: 'unauthorized' });
-      if (req.url === '/run' && json.cells.some((c) => c.includes('SLOW'))) {
+      if (req.url === '/run' && json.cells.some((c) => String(c.source || c).includes('SLOW'))) {
         return setTimeout(() => send(200, { status: 'ok', cells: json.cells.map((src, index) => ({ index, status: 'ok', stdout: '', stderr: '', value: src, error: null, durationMs: 300 })), durationMs: 300, warm: true, queuedMs: 0 }), 300);
       }
       if (req.url === '/run') {
+        runner.lastRunCells = json.cells;
+        json.cells = json.cells.map((c) => (typeof c === 'string' ? c : c.source));
         const failAt = json.cells.findIndex((c) => c.includes('FAIL'));
         const cells = json.cells.map((src, index) => {
           if (failAt !== -1 && index > failAt) return { index, status: 'not_run', stdout: '', stderr: '', value: null, error: null, durationMs: 0 };
@@ -93,12 +126,13 @@ function fakeRunner() {
         const s = sessions.get(m[1]);
         if (!s) return send(404, { error: 'ended', code: 'no_session' });
         s.executionCount += 1;
-        return send(200, { index: s.executionCount, status: 'ok', stdout: '', stderr: '', value: json.source, error: null, executionCount: s.executionCount, sessionEnded: false, durationMs: 1 });
+        return send(200, { index: s.executionCount, status: 'ok', stdout: json.input ? `read ${json.input}` : '', stderr: '', value: json.source, error: null, executionCount: s.executionCount, sessionEnded: false, durationMs: 1 });
       }
       send(404, { error: 'not found' });
     });
   });
-  return { server, calls, sessions };
+  const runner = { server, calls, sessions, lastRunCells: null };
+  return runner;
 }
 
 test('notebooks API', { timeout: 120000 }, async (t) => {
@@ -312,6 +346,27 @@ test('notebooks API', { timeout: 120000 }, async (t) => {
   notMine.append('markdown', '# Taken over');
   const refusedMd = await stud(`/notebooks/${imported.body.id}/markdown`, { method: 'PUT', form: notMine });
   assert.ok([403, 404].includes(refusedMd.status), String(refusedMd.status));
+
+  // A code cell's input is saved with the cell and sent to the runner with it, in batch runs and live sessions
+  const withInput = await admin('/notebooks', { method: 'POST', json: { title: 'Input', cells: [
+    { id: 'in1', kind: 'code', source: 'new Scanner(System.in).nextInt()', input: '21\n' }, { id: 'in2', kind: 'code', source: '2' },
+  ] } });
+  assert.equal(withInput.body.cells[0].input, '21\n');
+  assert.equal((await admin(`/notebooks/${withInput.body.id}/run`, { method: 'POST', json: {} })).status, 200);
+  assert.deepEqual(runner.lastRunCells, [{ source: 'new Scanner(System.in).nextInt()', input: '21\n' }, '2']);
+  const live = await admin(`/notebooks/${withInput.body.id}/session/run`, { method: 'POST', json: { cellId: 'in1', source: 'new Scanner(System.in).nextInt()', input: '9\n' } });
+  assert.equal(live.status, 200, JSON.stringify(live.body));
+  assert.equal(live.body.output.stdout, 'read 9\n');
+  assert.equal((await admin(`/notebooks/${withInput.body.id}/session/run`, { method: 'POST', json: { cellId: 'in1', source: '1', input: 5 } })).status, 400);
+  const exportedInput = await admin(`/notebooks/${withInput.body.id}/export`);
+  assert.match(exportedInput.body.toString('utf8'), /```java run\nnew Scanner\(System\.in\)\.nextInt\(\)\n```\n\n```input\n21\n```/);
+  const reimport = new FormData();
+  reimport.append('markdown', exportedInput.body.toString('utf8'));
+  const reimported = await admin('/notebooks/import', { method: 'POST', form: reimport });
+  assert.equal(reimported.status, 201);
+  assert.equal(reimported.body.cells[0].input, '21');
+  assert.equal((await admin(`/notebooks/${reimported.body.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await admin(`/notebooks/${withInput.body.id}`, { method: 'DELETE' })).status, 200);
 
   // Ids that are not integers are a 404, never a database error
   for (const p of ['/notebooks/abc', '/notebooks/1e3/copies', '/notebook-files/x', '/lessons/abc/notebooks']) {
