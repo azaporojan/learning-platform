@@ -111,6 +111,11 @@ export interface LessonFile {
   order_index: number;
 }
 
+export interface LessonUnlocks {
+  all: boolean;
+  users: { id: number; name: string }[];
+}
+
 export interface RoadLesson {
   id: number;
   path_id: number;
@@ -121,6 +126,8 @@ export interface RoadLesson {
   position_y: number;
   completed: boolean;
   taught_at?: string | null; // admin only: when the teacher marked the lesson as taught
+  unlocked?: boolean;        // student: an admin opened this lesson early for them (or for everyone)
+  unlocks?: LessonUnlocks;   // admin: who the lesson is opened early for
   tasks: RoadTask[];
   study_sets?: RoadStudySet[];
   files?: LessonFile[];

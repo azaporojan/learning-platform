@@ -112,7 +112,11 @@ function storedOutput(r, executionCount) {
   };
 }
 
-function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phaseLockReasons, uploadsDir, runner }) {
+function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phaseLockReasons, lessonLockReasons, uploadsDir, runner }) {
+  // A lesson's gate (its phase, minus an admin unlock of that lesson); the phase alone otherwise
+  const gateReasons = (userId, lessonId, pathId) =>
+    lessonLockReasons && lessonId ? lessonLockReasons(db, userId, lessonId) : phaseLockReasons(db, userId, pathId);
+
   const dir = path.join(uploadsDir, 'notebook-files');
   fs.mkdirSync(dir, { recursive: true });
   const isAdmin = (req) => req.user && req.user.role === 'admin';
@@ -146,7 +150,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
     if (isAdmin(req)) return { read: true, edit: false, run: false };
     if (row.owner_role !== 'admin' || !row.published) return { read: false, notFound: true };
     if (row.lesson_id) {
-      const reasons = row.lesson_path_id ? await phaseLockReasons(db, req.user.id, row.lesson_path_id) : [];
+      const reasons = row.lesson_path_id ? await gateReasons(req.user.id, row.lesson_id, row.lesson_path_id) : [];
       if (reasons.includes('unpublished')) return { read: false, notFound: true };
       if (reasons.length) return { read: false, locked: true, reasons };
     }
@@ -367,8 +371,8 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       for (const row of rows) {
         let locked = false;
         if (!isAdmin(req) && row.owner_id !== req.user.id && row.lesson_id && row.lesson_path_id) {
-          if (!gateCache.has(row.lesson_path_id)) gateCache.set(row.lesson_path_id, await phaseLockReasons(db, req.user.id, row.lesson_path_id));
-          const reasons = gateCache.get(row.lesson_path_id);
+          if (!gateCache.has(row.lesson_id)) gateCache.set(row.lesson_id, await gateReasons(req.user.id, row.lesson_id, row.lesson_path_id));
+          const reasons = gateCache.get(row.lesson_id);
           if (reasons.includes('unpublished')) continue;
           locked = reasons.length > 0;
         }
@@ -385,7 +389,7 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       if (!validId(req.params.id)) return res.status(404).json({ error: 'Lesson not found' });
       const [lessons] = await db.query('SELECT id, path_id FROM lessons WHERE id = ?', [req.params.id]);
       if (lessons.length === 0) return res.status(404).json({ error: 'Lesson not found' });
-      const reasons = isAdmin(req) ? [] : await phaseLockReasons(db, req.user.id, lessons[0].path_id);
+      const reasons = isAdmin(req) ? [] : await gateReasons(req.user.id, lessons[0].id, lessons[0].path_id);
       if (reasons.includes('unpublished')) return res.status(404).json({ error: 'Lesson not found' });
       const [rows] = await db.query(
         `${SUMMARY_SQL} WHERE n.lesson_id = ? AND (u.role = 'admin' ${isAdmin(req) ? '' : 'AND n.published = TRUE'})

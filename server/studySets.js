@@ -118,14 +118,15 @@ const sameAnswer = (given, correct) => {
   return g.length === correct.length && g.every((v, i) => v === correct[i]);
 };
 
-function registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons }) {
+function registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons, lessonLockReasons }) {
   async function isAdminUser(userId) {
     const [rows] = await db.query('SELECT role FROM users WHERE id = ?', [userId]);
     return rows.length > 0 && rows[0].role === 'admin';
   }
 
   // null = lesson not found; [] = accessible
-  async function lessonLockReasons(userId, lessonId) {
+  async function lessonReasons(userId, lessonId) {
+    if (lessonLockReasons) return lessonLockReasons(db, userId, lessonId);
     const [rows] = await db.query('SELECT path_id FROM lessons WHERE id = ?', [lessonId]);
     if (rows.length === 0) return null;
     return phaseLockReasons(db, userId, rows[0].path_id);
@@ -140,7 +141,7 @@ function registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, 
   api.get('/lessons/:id/study-sets', authenticateToken, async (req, res) => {
     try {
       if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'Lesson not found' });
-      const reasons = await lessonLockReasons(req.user.id, req.params.id);
+      const reasons = await lessonReasons(req.user.id, req.params.id);
       if (reasons === null) return res.status(404).json({ error: 'Lesson not found' });
       if (reasons.length > 0) return res.status(403).json({ error: 'This lesson is locked', lockReasons: reasons });
       const admin = await isAdminUser(req.user.id);
@@ -188,7 +189,7 @@ function registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, 
     try {
       const set = await loadSet(req.params.id);
       if (!set) return res.status(404).json({ error: 'Study set not found' });
-      const reasons = (await lessonLockReasons(req.user.id, set.lesson_id)) || [];
+      const reasons = (await lessonReasons(req.user.id, set.lesson_id)) || [];
       if (reasons.length > 0) return res.status(403).json({ error: 'This lesson is locked', lockReasons: reasons });
       const admin = await isAdminUser(req.user.id);
       const [prog] = await db.query('SELECT * FROM study_set_progress WHERE user_id = ? AND study_set_id = ?', [req.user.id, set.id]);
@@ -259,7 +260,7 @@ function registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, 
     try {
       const set = await loadSet(req.params.id);
       if (!set) return res.status(404).json({ error: 'Study set not found' });
-      const reasons = (await lessonLockReasons(req.user.id, set.lesson_id)) || [];
+      const reasons = (await lessonReasons(req.user.id, set.lesson_id)) || [];
       if (reasons.length > 0) return res.status(403).json({ error: 'This lesson is locked', lockReasons: reasons });
       const b = req.body || {};
       const outcome = await db.transaction(async (tx) => {

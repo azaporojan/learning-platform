@@ -550,7 +550,7 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   const studNotifs = (await stud('/notifications')).body;
   assert.equal(studNotifs.find((n) => n.type === 'account_approved').link, '/courses');
   assert.equal(studNotifs.find((n) => n.type === 'submission_approved').link, taskDeepLink);
-  assert.equal((await admin('/notifications')).body.find((n) => n.type === 'task_submission').link, taskDeepLink);
+  assert.equal((await admin('/notifications')).body.find((n) => n.type === 'task_submission').link, `${taskDeepLink}&tab=submissions`);
   await waitForOutput(child, new RegExp(`to=student@example\\.test subject="Task Approved! ✅" link=\\S+${taskDeepLink.replace(/[?]/g, '\\?')}`));
   // Stars: in-app + email, linking to the leaderboard
   const stars = await admin(`/admin/users/${student.id}/add-stars`, { method: 'POST', json: { stars: 5 } });
@@ -636,6 +636,67 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   assert.equal(roadAfter.body.phases[1].lessons[0].tasks[0].is_new, true);
   assert.equal(roadAfter.body.phases[1].lessons[0].tasks[0].description, 'secret brief'); // reached → full content
   assert.equal((await stud(`/tasks/${phase2Task.body.id}`)).body.description, 'secret brief');
+
+  // Lesson unlocks: an admin opens a lesson early, for everyone or for chosen students
+  const ulPhase = await admin('/paths', { method: 'POST', json: { name: 'Phase 3', description: '', stars_required: 0, course_id: course.body.id, requires_previous: true } });
+  assert.equal(ulPhase.status, 200, JSON.stringify(ulPhase.body));
+  const ulLesson = await admin('/lessons', { method: 'POST', json: { pathId: ulPhase.body.id, title: 'P3 L1', description: '', order: 1 } });
+  const ulTask = await admin('/tasks', { method: 'POST', json: { lessonId: ulLesson.body.id, title: 'P3 T1', type: 'mandatory', xp: 10, deadline: '2030-01-01' } });
+  await admin(`/tasks/${ulTask.body.id}`, { method: 'PUT', json: { title: 'P3 T1', type: 'mandatory', xp: 10, deadline: '2030-01-01', description: 'phase 3 brief' } });
+  // Phase 2's mandatory task is not done → phase 3 is locked, its brief withheld, submissions refused
+  let ulRoad = await stud(`/courses/${course.body.id}`);
+  assert.deepEqual(ulRoad.body.phases[2].lockReasons, ['previous']);
+  assert.equal(ulRoad.body.phases[2].lessons[0].unlocked, false);
+  assert.equal(ulRoad.body.phases[2].lessons[0].tasks[0].description, '');
+  const earlyForm3 = new FormData();
+  earlyForm3.append('file', new Blob(['x'], { type: 'text/plain' }), 'early.txt');
+  assert.equal((await stud(`/tasks/${ulTask.body.id}/submit`, { method: 'POST', body: earlyForm3 })).status, 403);
+  // Students cannot manage unlocks; unknown students are refused
+  assert.equal((await stud(`/lessons/${ulLesson.body.id}/unlocks`)).status, 403);
+  assert.equal((await admin(`/lessons/${ulLesson.body.id}/unlocks`, { method: 'PUT', json: { userIds: [999999] } })).status, 400);
+  assert.equal((await admin('/lessons/999999/unlocks')).status, 404);
+  const unlockState0 = await admin(`/lessons/${ulLesson.body.id}/unlocks`);
+  assert.equal(unlockState0.status, 200);
+  assert.deepEqual({ all: unlockState0.body.all, users: unlockState0.body.users }, { all: false, users: [] });
+  assert.deepEqual(unlockState0.body.students.map((u) => u.id), [student.id]);
+  // Unlock for this student only
+  const unlockOne = await admin(`/lessons/${ulLesson.body.id}/unlocks`, { method: 'PUT', json: { userIds: [student.id] } });
+  assert.equal(unlockOne.status, 200, JSON.stringify(unlockOne.body));
+  assert.deepEqual(unlockOne.body.users.map((u) => u.id), [student.id]);
+  ulRoad = await stud(`/courses/${course.body.id}`);
+  assert.deepEqual(ulRoad.body.phases[2].lockReasons, ['previous']); // the phase itself stays gated
+  assert.equal(ulRoad.body.phases[2].lessons[0].unlocked, true);
+  assert.equal(ulRoad.body.phases[2].lessons[0].tasks[0].description, 'phase 3 brief');
+  assert.equal((await stud(`/tasks/${ulTask.body.id}`)).body.description, 'phase 3 brief');
+  const unlockedForm = new FormData();
+  unlockedForm.append('file', new Blob(['x'], { type: 'text/plain' }), 'unlocked.txt');
+  const unlockedSubmit = await stud(`/tasks/${ulTask.body.id}/submit`, { method: 'POST', body: unlockedForm });
+  assert.equal(unlockedSubmit.status, 201, JSON.stringify(unlockedSubmit.body));
+  assert.equal((await stud(`/submissions/${unlockedSubmit.body.id}`, { method: 'DELETE' })).status, 200);
+  const unlockNotif = (await stud('/notifications')).body.find((n) => n.type === 'lesson_unlocked');
+  assert.equal(unlockNotif.link, `/courses/${course.body.id}?lesson=${ulLesson.body.id}`);
+  // The admin sees who it is open for; switching to "everyone" replaces the list
+  const ulAdminRoad = await admin(`/courses/${course.body.id}`);
+  assert.deepEqual(ulAdminRoad.body.phases[2].lessons[0].unlocks, { all: false, users: [{ id: student.id, name: 'Student' }] });
+  const unlockAll = await admin(`/lessons/${ulLesson.body.id}/unlocks`, { method: 'PUT', json: { all: true } });
+  assert.deepEqual({ all: unlockAll.body.all, users: unlockAll.body.users }, { all: true, users: [] });
+  assert.equal((await stud(`/courses/${course.body.id}`)).body.phases[2].lessons[0].unlocked, true);
+  // …and clearing it locks the lesson again (an unlock never bypasses the enrolment gate either)
+  await admin(`/lessons/${ulLesson.body.id}/unlocks`, { method: 'PUT', json: { all: false, userIds: [] } });
+  assert.equal((await stud(`/courses/${course.body.id}`)).body.phases[2].lessons[0].unlocked, false);
+  await admin(`/lessons/${ulLesson.body.id}/unlocks`, { method: 'PUT', json: { userIds: [student.id] } });
+  await stud(`/courses/${course.body.id}/enroll`, { method: 'DELETE' });
+  assert.equal((await stud(`/courses/${course.body.id}`)).body.phases[2].lessons[0].unlocked, false);
+  assert.equal((await stud(`/tasks/${ulTask.body.id}/submit`, { method: 'POST', body: earlyForm3 })).status, 403);
+  // A student who left the course stays on the list: re-saving the same set is not an error
+  const resave = await admin(`/lessons/${ulLesson.body.id}/unlocks`, { method: 'PUT', json: { userIds: [student.id] } });
+  assert.equal(resave.status, 200, JSON.stringify(resave.body));
+  assert.deepEqual(resave.body.users.map((u) => u.id), [student.id]);
+  assert.deepEqual(resave.body.students, []); // …but is no longer offered to pick
+  await stud(`/courses/${course.body.id}/enroll`, { method: 'POST' });
+  assert.equal((await admin(`/lessons/${ulLesson.body.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await admin(`/paths/${ulPhase.body.id}`, { method: 'DELETE' })).status, 200);
+
   // Study sets (quizzes + flashcards) under a lesson: admin-managed, students practise
   const anonSet = await anon('/study-sets', { method: 'POST', json: {} });
   assert.equal(anonSet.status, 401);

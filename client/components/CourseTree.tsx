@@ -160,6 +160,11 @@ export const CourseTree: React.FC<CourseTreeProps> = ({
                                 <span className={`block whitespace-nowrap text-[9px] font-extrabold uppercase tracking-wider ${teach === 'current' ? 'text-green-600 dark:text-green-400' : 'text-blue-500 dark:text-blue-400'}`}>{teach === 'current' ? 'Teaching now' : 'Up next'}</span>
                               )}
                             </button>
+                            {(isAdmin ? !!(lesson.unlocks && (lesson.unlocks.all || lesson.unlocks.users.length > 0)) : !!lesson.unlocked) && (
+                              <span title={isAdmin ? (lesson.unlocks!.all ? 'Unlocked early for everyone' : `Unlocked early for ${lesson.unlocks!.users.map((u) => u.name).join(', ')}`) : 'Unlocked for you ahead of the road'} className="flex items-center text-amber-500 flex-shrink-0">
+                                <span className="material-icons text-sm">lock_open</span>
+                              </span>
+                            )}
                             {(lesson.files || []).length > 0 && (
                               <span title={`${(lesson.files || []).length} attached file(s)`} className="flex items-center text-[10px] font-bold text-gray-400 flex-shrink-0">
                                 <span className="material-icons text-sm">attach_file</span>{(lesson.files || []).length}

@@ -1,4 +1,4 @@
-import { CourseDetail, Phase, RoadLesson, RoadStudySet, RoadTask } from './types';
+import type { CourseDetail, Phase, RoadLesson, RoadStudySet, RoadTask } from './types';
 
 // Per-node status on the course road, derived once from GET /courses/:id and shared by the
 // tree pane and the map.
@@ -30,6 +30,13 @@ export const studySetMastered = (set: RoadStudySet) =>
   set.progress !== null && set.item_count > 0 && set.progress.total === set.item_count && set.progress.best_score >= set.item_count;
 
 const mandatoryDone = (lesson: RoadLesson) => lesson.tasks.filter((t) => t.type === 'mandatory').every((t) => t.completed);
+// Optional tasks never gate anything: a lesson "has work left" only while a mandatory task is
+// open; a lesson with optional tasks only has work left until they are all done.
+const hasWorkLeft = (lesson: RoadLesson) => {
+  const mandatory = lesson.tasks.filter((t) => t.type === 'mandatory');
+  if (mandatory.length > 0) return mandatory.some((t) => !t.completed);
+  return lesson.tasks.some((t) => !t.completed);
+};
 
 export function computeRoadState(course: CourseDetail, isAdmin: boolean): RoadState {
   const state: RoadState = {
@@ -43,12 +50,19 @@ export function computeRoadState(course: CourseDetail, isAdmin: boolean): RoadSt
     teach: new Map(),
   };
 
+  // "You are here": the first reachable lesson with a mandatory task still open; failing that,
+  // the first reachable lesson with any task still open (e.g. an optional-only lesson).
+  let fallbackLessonId: number | null = null;
+  let fallbackPhaseId: number | null = null;
+
   for (const phase of course.phases) {
     let previousIncomplete = false;
     let phaseAllDone = phase.lessons.length > 0;
 
     for (const lesson of phase.lessons) {
-      const lessonLocked = !isAdmin && (phase.locked || previousIncomplete);
+      // An admin unlock opens the lesson even when the phase or the previous lesson is not done
+      const lessonLocked = !isAdmin && !lesson.unlocked && (phase.locked || previousIncomplete);
+      const mandatoryLeft = lesson.tasks.some((t) => t.type === 'mandatory' && !t.completed);
       let lessonStatus: NodeStatus;
       if (isAdmin) {
         lessonStatus = 'open';
@@ -56,19 +70,22 @@ export function computeRoadState(course: CourseDetail, isAdmin: boolean): RoadSt
         lessonStatus = 'completed';
       } else if (lessonLocked) {
         lessonStatus = 'locked';
-      } else if (state.currentLessonId === null && lesson.tasks.length > 0) {
+      } else if (state.currentLessonId === null && mandatoryLeft) {
         lessonStatus = 'current';
         state.currentLessonId = lesson.id;
         state.currentPhaseId = phase.id;
       } else {
         lessonStatus = 'open';
+        if (fallbackLessonId === null && hasWorkLeft(lesson)) { fallbackLessonId = lesson.id; fallbackPhaseId = phase.id; }
       }
       state.lessons.set(lesson.id, lessonStatus);
       if (!lesson.completed) phaseAllDone = false;
 
-      lesson.tasks.forEach((task: RoadTask, index: number) => {
-        const prev = index > 0 ? lesson.tasks[index - 1] : null;
-        const taskLocked = !isAdmin && (lessonLocked || (prev !== null && !prev.completed));
+      // Inside a lesson, tasks open in order — but only a mandatory task holds the next one
+      // back; an optional task that is skipped never blocks the homework after it.
+      let previousMandatoryOpen = false;
+      lesson.tasks.forEach((task: RoadTask) => {
+        const taskLocked = !isAdmin && (lessonLocked || previousMandatoryOpen);
         let taskStatus: NodeStatus;
         if (isAdmin) {
           taskStatus = 'open';
@@ -76,13 +93,14 @@ export function computeRoadState(course: CourseDetail, isAdmin: boolean): RoadSt
           taskStatus = 'completed';
         } else if (taskLocked) {
           taskStatus = 'locked';
-        } else if (lessonStatus === 'current' && state.currentTaskId === null) {
+        } else if (lessonStatus === 'current' && state.currentTaskId === null && task.type === 'mandatory') {
           taskStatus = 'current';
           state.currentTaskId = task.id;
         } else {
           taskStatus = 'open';
         }
         state.tasks.set(task.id, taskStatus);
+        if (task.type === 'mandatory' && !task.completed) previousMandatoryOpen = true;
       });
 
       // Quizzes / flashcards open with their lesson and never gate anything; "completed" = a
@@ -106,6 +124,16 @@ export function computeRoadState(course: CourseDetail, isAdmin: boolean): RoadSt
     else if (state.currentPhaseId === phase.id) phaseStatus = 'current';
     else phaseStatus = 'open';
     state.phases.set(phase.id, phaseStatus);
+  }
+
+  if (!isAdmin && state.currentLessonId === null && fallbackLessonId !== null) {
+    state.currentLessonId = fallbackLessonId;
+    state.currentPhaseId = fallbackPhaseId;
+    state.lessons.set(fallbackLessonId, 'current');
+    const lesson = course.phases.flatMap((p) => p.lessons).find((l) => l.id === fallbackLessonId)!;
+    const next = lesson.tasks.find((t) => !t.completed && state.tasks.get(t.id) === 'open');
+    if (next) { state.tasks.set(next.id, 'current'); state.currentTaskId = next.id; }
+    if (state.phases.get(fallbackPhaseId!) === 'open') state.phases.set(fallbackPhaseId!, 'current');
   }
 
   if (isAdmin) state.teach = computeTeachState(course);

@@ -60,6 +60,11 @@ interface TaskModalProps {
   currentUser?: any;
   onUpdate?: () => void;
   initialMode?: 'view' | 'submissions'; // e.g. the review inbox deep-links straight to the submissions tab
+  initialStudent?: string | null;       // admin: the student (email) whose submissions are open
+  // The tab / student shown changed: the course page mirrors it into the URL, so the browser's
+  // Back button returns to the previous screen (students list → task → lesson).
+  onViewChange?: (view: { mode: 'view' | 'submissions'; student: string | null }) => void;
+  onBack?: { label: string; onClick: () => void }; // "← Lesson title" in the header
 }
 
 export const TaskModal: React.FC<TaskModalProps> = ({
@@ -70,7 +75,10 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   currentUserId,
   currentUser,
   onUpdate,
-  initialMode = 'view'
+  initialMode = 'view',
+  initialStudent = null,
+  onViewChange,
+  onBack,
 }) => {
   const [mode, setMode] = useState<'view' | 'edit' | 'submissions'>(initialMode);
   // What the modal shows. Updated right after a save and whenever the parent passes a newer
@@ -95,7 +103,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [comment, setComment] = useState('');
   const [uploading, setUploading] = useState(false);
-  const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
+  const [selectedStudent, setSelectedStudent] = useState<string | null>(initialStudent);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
   const [showRejectDialog, setShowRejectDialog] = useState(false);
@@ -129,6 +137,18 @@ export const TaskModal: React.FC<TaskModalProps> = ({
     setOriginalData(data);
   }, [task]);
 
+  // The URL moved (Back/Forward, a deep link): follow it, unless an edit is in progress
+  useEffect(() => {
+    setMode((m) => (m === 'edit' ? m : initialMode));
+  }, [initialMode]);
+  useEffect(() => { setSelectedStudent(initialStudent); }, [initialStudent]);
+
+  const changeView = (newMode: 'view' | 'submissions', student: string | null = null) => {
+    setMode(newMode);
+    setSelectedStudent(student);
+    onViewChange?.({ mode: newMode, student });
+  };
+
   // Check if there are unsaved changes
   const hasUnsavedChanges = () => {
     if (mode !== 'edit') return false;
@@ -158,9 +178,6 @@ export const TaskModal: React.FC<TaskModalProps> = ({
     if (isOpen) {
       // Always fetch submissions when modal opens (for count in tab)
       fetchSubmissions();
-      if (mode === 'submissions') {
-        setSelectedStudent(null); // Reset selection when entering submissions tab
-      }
 
       // Mark task as viewed for students (remove NEW badge)
       if (!isAdmin) {
@@ -268,11 +285,12 @@ export const TaskModal: React.FC<TaskModalProps> = ({
 
   // Handle mode change with unsaved changes check
   const handleModeChange = (newMode: 'view' | 'edit' | 'submissions') => {
+    const apply = () => (newMode === 'edit' ? setMode('edit') : changeView(newMode));
     if (hasUnsavedChanges() && newMode !== 'edit') {
-      setPendingAction(() => () => setMode(newMode));
+      setPendingAction(() => apply);
       setShowUnsavedWarning(true);
     } else {
-      setMode(newMode);
+      apply();
     }
   };
 
@@ -556,13 +574,21 @@ export const TaskModal: React.FC<TaskModalProps> = ({
         <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-[1100px] max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
           {/* Header */}
           <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              {shown.type === 'mandatory' && (
-                <span className="material-icons text-red-500">priority_high</span>
+            <div className="min-w-0">
+              {onBack && mode !== 'edit' && (
+                <button type="button" onClick={onBack.onClick} className="flex items-center gap-1 text-xs font-bold text-gray-500 hover:text-primary-dark dark:text-gray-400 dark:hover:text-primary mb-1 max-w-full" title={`Back to ${onBack.label}`}>
+                  <span className="material-icons text-sm">arrow_back</span>
+                  <span className="truncate">{onBack.label}</span>
+                </button>
               )}
-              <h2 className="text-2xl font-bold text-gray-800 dark:text-white">
-                {mode === 'edit' ? 'Edit Task' : shown.title}
-              </h2>
+              <div className="flex items-center space-x-3">
+                {shown.type === 'mandatory' && (
+                  <span className="material-icons text-red-500">priority_high</span>
+                )}
+                <h2 className="text-2xl font-bold text-gray-800 dark:text-white">
+                  {mode === 'edit' ? 'Edit Task' : shown.title}
+                </h2>
+              </div>
             </div>
             <button onClick={handleClose} className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
               <span className="material-icons">close</span>
@@ -843,7 +869,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                   // Show selected student's files
                   <div>
                     <button
-                      onClick={() => setSelectedStudent(null)}
+                      onClick={() => changeView('submissions', null)}
                       className="flex items-center space-x-2 text-primary hover:text-primary/80 mb-4"
                     >
                       <span className="material-icons">arrow_back</span>
@@ -956,7 +982,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                       return Array.from(studentMap.values()).map(student => (
                         <div
                           key={student.email}
-                          onClick={() => setSelectedStudent(student.email)}
+                          onClick={() => changeView('submissions', student.email)}
                           className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg hover:shadow-md transition-shadow cursor-pointer border-l-4 border-primary"
                         >
                           <div className="flex items-center justify-between">

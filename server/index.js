@@ -816,16 +816,17 @@ async function notifyAdmins(type, title, message, link = null, metadata = null, 
   }
 }
 
-// Deep link to a task on its course road (CoursePage opens it from ?lesson=&task=; for an admin
-// it opens the task's submissions). Falls back to the catalogue for a phase outside any course.
-async function taskLink(taskId) {
+// Deep link to a task on its course road (CoursePage opens it from ?lesson=&task=; with
+// `submissions`, straight on its submissions tab — for the admins' review notices).
+// Falls back to the catalogue for a phase outside any course.
+async function taskLink(taskId, { submissions = false } = {}) {
   const [rows] = await db.query(
     `SELECT t.id, l.id AS lesson_id, p.course_id FROM tasks t
      INNER JOIN lessons l ON l.id = t.lesson_id INNER JOIN paths p ON p.id = l.path_id WHERE t.id = ?`,
     [taskId]
   );
   if (rows.length === 0 || rows[0].course_id === null) return '/courses';
-  return `/courses/${rows[0].course_id}?lesson=${rows[0].lesson_id}&task=${rows[0].id}`;
+  return `/courses/${rows[0].course_id}?lesson=${rows[0].lesson_id}&task=${rows[0].id}${submissions ? '&tab=submissions' : ''}`;
 }
 
 // The account-approved notice, shared by POST /users/:id/approve and the admin user editor.
@@ -1351,13 +1352,13 @@ api.post('/tasks/:taskId/mark-viewed', authenticateToken, async (req, res) => {
 // Get all paths with unlock status for current user
 // Courses (course → phases → lessons → tasks), enrolment and the users directory.
 const courseRoutes = require('./courses');
-courseRoutes.registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId });
+courseRoutes.registerCourseRoutes({ api, db, io, authenticateToken, requireAdmin, optionalUserId, notifyUser });
 const studySets = require('./studySets');
-studySets.registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons });
-const lessonFiles = require('./lessonFiles').registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons, uploadsDir });
+studySets.registerStudySetRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons, lessonLockReasons: courseRoutes.lessonLockReasons });
+const lessonFiles = require('./lessonFiles').registerLessonFileRoutes({ api, db, io, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons, lessonLockReasons: courseRoutes.lessonLockReasons, uploadsDir });
 // Java notebooks; code runs in the sandbox runner (runner/, RUNNER_URL + RUNNER_TOKEN)
 const runner = require('./runnerClient').createRunnerClient();
-require('./notebooks').registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons, uploadsDir, runner });
+require('./notebooks').registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phaseLockReasons: courseRoutes.phaseLockReasons, lessonLockReasons: courseRoutes.lessonLockReasons, uploadsDir, runner });
 // Auto-checked tasks (hidden JUnit tests, same runner). Uses notifySubmission/approveSubmission,
 // which are function declarations below (hoisted).
 const taskChecks = require('./taskChecks');
@@ -1994,7 +1995,7 @@ async function notifySubmission(id, userId, submissionId, { fileName = null, com
       'task_submission',
       'New Task Submission! 📤',
       notificationMessage,
-      await taskLink(id), // opens the task's submissions on the road
+      await taskLink(id, { submissions: true }), // opens the task's submissions on the road
       {
         taskId: id,
         userId,
