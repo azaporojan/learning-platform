@@ -66,16 +66,16 @@ const TaskCheckPanel: React.FC<{ taskId: number; lastFiles?: CodeFile[] | null; 
 
   if (!config || !config.enabled) return null;
   return (
-    <div className="border-t border-gray-200 pt-6">
+    <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
       <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-        <span className="text-sm font-bold text-gray-500 flex items-center gap-1">
+        <span className="text-sm font-bold text-gray-500 dark:text-gray-400 flex items-center gap-1">
           <span aria-hidden="true" className="material-icons text-base">science</span>YOUR CODE · CHECKED AUTOMATICALLY
         </span>
         {config.starter && config.starter.length > 0 && (
-          <button type="button" onClick={resetToStarter} className="text-xs font-bold text-gray-500 hover:text-gray-800">Reset to the starter code</button>
+          <button type="button" onClick={resetToStarter} className="text-xs font-bold text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100">Reset to the starter code</button>
         )}
       </div>
-      <p className="text-xs text-gray-500 mb-3">
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
         Hidden tests check your files. <strong>Check</strong> as often as you like: it only shows the result.
         <strong> Submit</strong> sends the code for review{config.auto_approve ? ', and it is approved automatically when every test passes' : ''}.
         Each check gets {config.timeout_s || 30} s.
@@ -87,17 +87,17 @@ const TaskCheckPanel: React.FC<{ taskId: number; lastFiles?: CodeFile[] | null; 
         rows={2}
         maxLength={4000}
         placeholder="Optional note for the reviewer"
-        className="w-full mt-3 p-3 rounded-xl border border-gray-200 text-sm focus:ring-2 focus:ring-primary outline-none resize-y"
+        className="w-full mt-3 p-3 rounded-xl border border-gray-200 dark:border-gray-700 text-sm focus:ring-2 focus:ring-primary outline-none resize-y bg-white dark:bg-gray-900 dark:text-gray-100"
       />
       <div className="flex flex-wrap items-center gap-2 mt-2">
-        <button type="button" onClick={check} disabled={busy !== null || files.length === 0} className="px-4 py-2 rounded-lg border-2 border-gray-200 font-bold text-gray-700 hover:border-primary-dark disabled:opacity-50 inline-flex items-center gap-1">
+        <button type="button" onClick={check} disabled={busy !== null || files.length === 0} className="px-4 py-2 rounded-lg border-2 border-gray-200 dark:border-gray-700 font-bold text-gray-700 dark:text-gray-200 hover:border-primary-dark disabled:opacity-50 inline-flex items-center gap-1">
           <span aria-hidden="true" className={`material-icons text-[20px] ${busy === 'check' ? 'animate-spin' : ''}`}>{busy === 'check' ? 'refresh' : 'play_arrow'}</span>Check my code
         </button>
         <button type="button" onClick={submit} disabled={busy !== null || files.length === 0} className="px-5 py-2 rounded-lg bg-primary font-bold text-gray-900 hover:bg-primary-dark hover:text-white disabled:opacity-50 inline-flex items-center gap-1 shadow">
           <span aria-hidden="true" className="material-icons text-[20px]">send</span>{busy === 'submit' ? 'Submitting…' : 'Submit code'}
         </button>
       </div>
-      {error && <p className="text-sm text-rose-600 mt-2">{error}</p>}
+      {error && <p className="text-sm text-rose-600 dark:text-rose-400 mt-2">{error}</p>}
       {result && <div ref={resultRef} className="mt-3" aria-live="polite"><CheckResultView result={result} /></div>}
     </div>
   );

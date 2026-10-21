@@ -1,14 +1,15 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
-import { EditorState, StateEffect, StateField, Compartment, Extension, Prec, Annotation } from '@codemirror/state';
+import { EditorState, EditorSelection, StateEffect, StateField, Compartment, Extension, Prec, Annotation } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, placeholder as placeholderExt, Decoration, DecorationSet, rectangularSelection, crosshairCursor } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap, indentWithTab, copyLineDown, deleteLine, moveLineUp, moveLineDown } from '@codemirror/commands';
 import { bracketMatching, indentOnInput, indentUnit, syntaxHighlighting } from '@codemirror/language';
-import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap } from '@codemirror/autocomplete';
+import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap, snippet } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { classHighlighter } from '@lezer/highlight';
 import { java } from '@codemirror/lang-java';
 import { markdown } from '@codemirror/lang-markdown';
 import { javaCompletions } from './javaCompletions';
+import { formatJava, formatJavaLines } from './javaFormat';
 
 export interface CodeEditorHandle {
   focus: () => void;
@@ -52,6 +53,74 @@ const errorLineField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
+// ---------------------------------------------------------------------------
+// IntelliJ IDEA habits: Ctrl+Alt+L reformat, Ctrl+D duplicate, Ctrl+Y delete line, live templates
+// on Tab (sout, souf, serr, fori, iter), Shift+Alt+Up/Down move the line
+// ---------------------------------------------------------------------------
+const TEMPLATES: Record<string, string> = {
+  sout: 'System.out.println(${});',
+  souf: 'System.out.printf("${}%n");',
+  serr: 'System.err.println(${});',
+  fori: 'for (int ${i} = 0; ${i} < ${n}; ${i}++) {\n\t${}\n}',
+  iter: 'for (var ${item} : ${items}) {\n\t${}\n}',
+};
+
+// Tab right after a template's abbreviation expands it; any other Tab indents as before
+const expandTemplate = (view: EditorView): boolean => {
+  const sel = view.state.selection;
+  if (sel.ranges.length !== 1 || !sel.main.empty) return false;
+  const pos = sel.main.head;
+  const line = view.state.doc.lineAt(pos);
+  const m = line.text.slice(0, pos - line.from).match(/(^|[^\w$.])([a-z]+)$/);
+  if (!m || !TEMPLATES[m[2]]) return false;
+  const from = pos - m[2].length;
+  snippet(TEMPLATES[m[2]])(view, { label: m[2] }, from, pos);
+  return true;
+};
+
+// Reformats the cell, or only the selected lines; the cursor stays on its line. Selected lines are
+// formatted in the context of the whole cell, so lines inside a block keep their depth.
+const reformat = (view: EditorView): boolean => {
+  const { state } = view;
+  const sel = state.selection.main;
+  const whole = sel.empty;
+  const fromLine = state.doc.lineAt(whole ? 0 : sel.from);
+  const toLine = state.doc.lineAt(whole ? state.doc.length : sel.to);
+  const original = state.sliceDoc(fromLine.from, toLine.to);
+  const formatted = whole
+    ? formatJava(original)
+    : formatJavaLines(state.doc.toString()).slice(fromLine.number - 1, toLine.number).join('\n');
+  if (formatted === original) return true;
+  const cursorLine = state.doc.lineAt(sel.head).number - fromLine.number;
+  view.dispatch({ changes: { from: fromLine.from, to: toLine.to, insert: formatted }, userEvent: 'input.format' });
+  const target = view.state.doc.line(Math.min(view.state.doc.lines, fromLine.number + Math.max(0, cursorLine)));
+  const indent = (target.text.match(/^\s*/) || [''])[0].length;
+  view.dispatch({ selection: { anchor: target.from + indent } });
+  return true;
+};
+
+// Ctrl+D: the line(s) under the cursor, or the selection, once more right after
+const duplicate = (view: EditorView): boolean => {
+  const { state } = view;
+  if (state.selection.ranges.every((r) => r.empty)) return copyLineDown(view);
+  view.dispatch(state.changeByRange((r) => {
+    const text = state.sliceDoc(r.from, r.to);
+    return { changes: { from: r.to, insert: text }, range: EditorSelection.range(r.to, r.to + text.length) };
+  }), { userEvent: 'input.duplicate' });
+  return true;
+};
+
+const intellijKeys = (isJava: boolean) => Prec.high(keymap.of([
+  { key: 'Mod-d', run: duplicate, preventDefault: true },
+  { key: 'Mod-y', run: deleteLine, preventDefault: true },
+  { key: 'Shift-Alt-ArrowUp', run: moveLineUp },
+  { key: 'Shift-Alt-ArrowDown', run: moveLineDown },
+  ...(isJava ? [
+    { key: 'Mod-Alt-l', run: reformat, preventDefault: true },
+    { key: 'Tab', run: expandTemplate },
+  ] : []),
+]));
+
 export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor(props, ref) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -88,6 +157,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     const isJava = props.language === 'java';
     const extensions: Extension[] = [
       runKeys,
+      intellijKeys(isJava),
       history(),
       drawSelection(),
       rectangularSelection(),

@@ -38,7 +38,7 @@ export const LessonNotebooks: React.FC<{ lessonId: number; isAdmin: boolean; loc
   return (
     <div className="mt-6">
       <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1">
+        <h3 className="text-sm font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 flex items-center gap-1">
           <span aria-hidden="true" className="material-icons text-base">menu_book</span>Notebooks
         </h3>
         {isAdmin && (
@@ -47,14 +47,14 @@ export const LessonNotebooks: React.FC<{ lessonId: number; isAdmin: boolean; loc
           </button>
         )}
       </div>
-      {error && <p className="text-sm text-rose-600 mb-2">{error}</p>}
+      {error && <p className="text-sm text-rose-600 dark:text-rose-400 mb-2">{error}</p>}
       {rows.length === 0 && <p className="text-sm text-gray-400">No notebook for this lesson yet.</p>}
       <ul className="space-y-2">
         {rows.map((r) => (
-          <li key={r.id} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 px-3 py-2">
+          <li key={r.id} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 dark:border-gray-700 px-3 py-2">
             <div className="min-w-0">
-              <div className="font-bold text-gray-800 truncate">{r.title}</div>
-              <div className="text-xs text-gray-500">
+              <div className="font-bold text-gray-800 dark:text-gray-100 truncate">{r.title}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">
                 {r.code_cell_count} code · {r.cell_count - r.code_cell_count} text
                 {isAdmin && !r.published && ' · draft, students cannot see it'}
                 {isAdmin && r.copies_count ? ` · ${r.copies_count} student ${r.copies_count === 1 ? 'copy' : 'copies'}` : ''}
@@ -65,7 +65,7 @@ export const LessonNotebooks: React.FC<{ lessonId: number; isAdmin: boolean; loc
                 <span className="text-xs text-gray-400 inline-flex items-center gap-1"><span aria-hidden="true" className="material-icons text-sm">lock</span>Locked</span>
               ) : (
                 <>
-                  <button type="button" onClick={() => navigate(`/notebooks/${r.id}`)} className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm font-bold hover:border-primary-dark">Open</button>
+                  <button type="button" onClick={() => navigate(`/notebooks/${r.id}`)} className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-sm font-bold hover:border-primary-dark">Open</button>
                   {!isAdmin && (r.my_copy_id
                     ? <button type="button" onClick={() => navigate(`/notebooks/${r.my_copy_id}`)} className="px-3 py-1.5 rounded-lg bg-primary text-sm font-bold text-gray-900 hover:bg-primary-dark hover:text-white">Your copy</button>
                     : <button type="button" onClick={() => copyAndOpen(r.id)} className="px-3 py-1.5 rounded-lg bg-primary text-sm font-bold text-gray-900 hover:bg-primary-dark hover:text-white">Copy &amp; run</button>)}

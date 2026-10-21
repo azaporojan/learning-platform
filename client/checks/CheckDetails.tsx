@@ -23,7 +23,7 @@ const CheckDetails: React.FC<{ submissionId: number; isAdmin: boolean; onClose: 
 
   return (
     <Modal title="Code check" onClose={onClose} wide>
-      {error && <p className="text-sm text-rose-600">{error}</p>}
+      {error && <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p>}
       {!check && !error && <p className="text-sm text-gray-400">Loading…</p>}
       {check && (
         <div className="space-y-4">
@@ -31,7 +31,7 @@ const CheckDetails: React.FC<{ submissionId: number; isAdmin: boolean; onClose: 
           <FileTabsEditor files={check.files} readOnly />
           {isAdmin && (
             <div className="flex justify-end">
-              <button type="button" onClick={recheck} disabled={check.status === 'running'} className="px-4 py-2 rounded-lg border-2 border-gray-200 font-bold text-gray-700 hover:border-primary-dark disabled:opacity-50">Check again</button>
+              <button type="button" onClick={recheck} disabled={check.status === 'running'} className="px-4 py-2 rounded-lg border-2 border-gray-200 dark:border-gray-700 font-bold text-gray-700 dark:text-gray-200 hover:border-primary-dark disabled:opacity-50">Check again</button>
             </div>
           )}
         </div>

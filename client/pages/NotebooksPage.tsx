@@ -84,11 +84,11 @@ export const NotebooksPage: React.FC<{ currentUser: User }> = ({ currentUser }) 
       <div className="max-w-5xl mx-auto py-4">
         <div className="flex flex-wrap items-end justify-between gap-4 mb-5">
           <div>
-            <h1 className="text-3xl font-extrabold text-gray-800">Notebooks</h1>
-            <p className="text-gray-500 mt-1">Java you can run right here. {isAdmin ? 'Attach notebooks to lessons and publish them for students.' : "Copy the teacher's notebooks to try the code yourself, or start a playground."}</p>
+            <h1 className="text-3xl font-extrabold text-gray-800 dark:text-gray-100">Notebooks</h1>
+            <p className="text-gray-500 dark:text-gray-400 mt-1">Java you can run right here. {isAdmin ? 'Attach notebooks to lessons and publish them for students.' : "Copy the teacher's notebooks to try the code yourself, or start a playground."}</p>
           </div>
           <div className="flex gap-2">
-            <button type="button" onClick={() => importInput.current?.click()} disabled={busy} className="h-10 px-4 rounded-full border-2 border-gray-200 font-bold text-gray-700 hover:border-primary-dark inline-flex items-center gap-1">
+            <button type="button" onClick={() => importInput.current?.click()} disabled={busy} className="h-10 px-4 rounded-full border-2 border-gray-200 dark:border-gray-700 font-bold text-gray-700 dark:text-gray-200 hover:border-primary-dark inline-flex items-center gap-1">
               <span aria-hidden="true" className="material-icons text-[20px]">upload_file</span>Import .md
             </button>
             <button type="button" onClick={() => { setNewTitle(''); setCreating(true); }} className="h-10 px-4 rounded-full bg-primary font-bold text-gray-900 hover:bg-primary-dark hover:text-white inline-flex items-center gap-1">
@@ -98,10 +98,10 @@ export const NotebooksPage: React.FC<{ currentUser: User }> = ({ currentUser }) 
         </div>
 
         <div className="flex flex-wrap items-center gap-3 mb-4">
-          <div className="flex rounded-xl bg-gray-100 p-1" role="tablist">
+          <div className="flex rounded-xl bg-gray-100 dark:bg-gray-700 p-1" role="tablist">
             {scopes.map((s) => (
               <button key={s.key} role="tab" aria-selected={scope === s.key} type="button" onClick={() => setParam('scope', s.key === 'mine' ? '' : s.key)}
-                className={`px-4 py-1.5 rounded-lg text-sm font-bold ${scope === s.key ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-800'}`}>
+                className={`px-4 py-1.5 rounded-lg text-sm font-bold ${scope === s.key ? 'bg-white dark:bg-gray-800 shadow-sm text-gray-900 dark:text-gray-100' : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100'}`}>
                 {s.label}
               </button>
             ))}
@@ -109,50 +109,50 @@ export const NotebooksPage: React.FC<{ currentUser: User }> = ({ currentUser }) 
           <div className="flex gap-1">
             {([['', 'All'], ['lesson', 'Lessons'], ['playground', 'Playgrounds']] as [Kind, string][]).map(([k, label]) => (
               <button key={k || 'all'} type="button" onClick={() => setParam('kind', k)}
-                className={`px-3 py-1 rounded-full text-sm font-semibold border ${kind === k ? 'border-primary-dark bg-primary/20 text-gray-900' : 'border-gray-200 text-gray-500 hover:border-gray-400'}`}>
+                className={`px-3 py-1 rounded-full text-sm font-semibold border ${kind === k ? 'border-primary-dark bg-primary/20 text-gray-900' : 'border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-400'}`}>
                 {label}
               </button>
             ))}
           </div>
           <div className="relative flex-1 min-w-[200px]">
             <span aria-hidden="true" className="material-icons absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-[20px]">search</span>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAdmin ? 'Title, lesson, course or student' : 'Title, lesson or course'} className="w-full pl-10 pr-3 py-2 rounded-xl border-gray-200 focus:border-primary-dark focus:ring-primary-dark" aria-label="Search notebooks" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAdmin ? 'Title, lesson, course or student' : 'Title, lesson or course'} className="w-full pl-10 pr-3 py-2 rounded-xl border-gray-200 dark:border-gray-700 focus:border-primary-dark focus:ring-primary-dark bg-white dark:bg-gray-900 dark:text-gray-100" aria-label="Search notebooks" />
           </div>
         </div>
 
-        {error && <div className="mb-4 rounded-lg bg-rose-50 border border-rose-200 px-4 py-2 text-sm text-rose-800">{error}</div>}
+        {error && <div className="mb-4 rounded-lg bg-rose-50 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800 px-4 py-2 text-sm text-rose-800 dark:text-rose-300">{error}</div>}
         {rows === null && <p className="text-gray-400 py-10 text-center">Loading…</p>}
         {rows && rows.length === 0 && (
-          <div className="text-center py-16 rounded-2xl border-2 border-dashed border-gray-200">
+          <div className="text-center py-16 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
             <span aria-hidden="true" className="material-icons text-4xl text-gray-300">menu_book</span>
-            <p className="text-gray-500 mt-2">
+            <p className="text-gray-500 dark:text-gray-400 mt-2">
               {params.get('q') ? 'No notebook matches that search.' : scope === 'mine' ? 'No notebooks yet. Start one, or copy a lesson notebook.' : scope === 'teacher' ? 'The teacher has not published notebooks yet.' : 'No student notebooks yet.'}
             </p>
           </div>
         )}
         {rows && rows.length > 0 && (
-          <ul className="divide-y divide-gray-100 rounded-2xl border border-gray-100 bg-white">
+          <ul className="divide-y divide-gray-100 dark:divide-gray-800 rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-800">
             {rows.map((r) => (
               <li key={r.id}>
                 <Link to={r.locked ? '#' : `/notebooks/${r.id}`} onClick={(e) => { if (r.locked) e.preventDefault(); }}
-                  className={`flex items-center gap-4 px-4 py-3 ${r.locked ? 'opacity-60 cursor-not-allowed' : 'hover:bg-gray-50'}`}>
-                  <span aria-hidden="true" className={`material-icons shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${r.kind === 'lesson' ? 'bg-lime-100 text-lime-800' : 'bg-sky-100 text-sky-800'}`}>
+                  className={`flex items-center gap-4 px-4 py-3 ${r.locked ? 'opacity-60 cursor-not-allowed' : 'hover:bg-gray-50 dark:hover:bg-gray-800'}`}>
+                  <span aria-hidden="true" className={`material-icons shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${r.kind === 'lesson' ? 'bg-lime-100 dark:bg-lime-900/40 text-lime-800 dark:text-lime-300' : 'bg-sky-100 dark:bg-sky-900/40 text-sky-800 dark:text-sky-300'}`}>
                     {r.locked ? 'lock' : r.kind === 'lesson' ? 'school' : 'science'}
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-gray-800 truncate">{r.title}</span>
-                      {isAdmin && r.owner.is_teacher && !r.published && <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 border border-gray-200 rounded px-1.5">Draft</span>}
-                      {r.copied_from && r.copied_from.updated_since_copy && <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-50 rounded px-1.5">Updated original</span>}
+                      <span className="font-bold text-gray-800 dark:text-gray-100 truncate">{r.title}</span>
+                      {isAdmin && r.owner.is_teacher && !r.published && <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 border border-gray-200 dark:border-gray-700 rounded px-1.5">Draft</span>}
+                      {r.copied_from && r.copied_from.updated_since_copy && <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 rounded px-1.5">Updated original</span>}
                     </div>
-                    <div className="text-xs text-gray-500 truncate">
+                    <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
                       {r.lesson ? `${r.lesson.course_name ? `${r.lesson.course_name} › ` : ''}${r.lesson.title}` : 'Playground'}
                       {scope !== 'mine' && ` · ${r.owner.name}`}
                       {r.copied_from && !r.copied_from.removed && r.copied_from.title && ` · copy of ${r.copied_from.title}`}
                       {r.locked && ' · lesson not reached yet'}
                     </div>
                   </div>
-                  <div className="hidden sm:block text-right text-xs text-gray-500 shrink-0 tabular-nums">
+                  <div className="hidden sm:block text-right text-xs text-gray-500 dark:text-gray-400 shrink-0 tabular-nums">
                     <div>{r.code_cell_count} code · {r.cell_count - r.code_cell_count} text</div>
                     <div>{r.last_run_at ? `ran ${timeAgo(r.last_run_at)}` : `edited ${timeAgo(r.updated_at)}`}</div>
                     {isAdmin && r.owner.is_teacher && r.copies_count ? <div>{r.copies_count} student {r.copies_count === 1 ? 'copy' : 'copies'}</div> : null}
@@ -170,10 +170,10 @@ export const NotebooksPage: React.FC<{ currentUser: User }> = ({ currentUser }) 
         <Modal title="New notebook" onClose={() => setCreating(false)}>
           <form onSubmit={(e) => { e.preventDefault(); create(); }} className="space-y-4">
             <label className="block">
-              <span className="text-sm font-bold text-gray-700">Title</span>
-              <input id="new-notebook-title" autoFocus value={newTitle} onChange={(e) => setNewTitle(e.target.value)} maxLength={255} placeholder={isAdmin ? 'Streams: filter, map, collect' : 'My playground'} className="mt-1 w-full rounded-lg border-gray-300 focus:border-primary-dark focus:ring-primary-dark" />
+              <span className="text-sm font-bold text-gray-700 dark:text-gray-200">Title</span>
+              <input id="new-notebook-title" autoFocus value={newTitle} onChange={(e) => setNewTitle(e.target.value)} maxLength={255} placeholder={isAdmin ? 'Streams: filter, map, collect' : 'My playground'} className="mt-1 w-full rounded-lg border-gray-300 dark:border-gray-600 focus:border-primary-dark focus:ring-primary-dark bg-white dark:bg-gray-900 dark:text-gray-100" />
             </label>
-            <p className="text-xs text-gray-500">{isAdmin ? 'It starts as a draft playground; attach it to a lesson and publish it from its settings.' : 'A playground is yours only.'}</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">{isAdmin ? 'It starts as a draft playground; attach it to a lesson and publish it from its settings.' : 'A playground is yours only.'}</p>
             <div className="flex justify-end">
               <button type="submit" disabled={!newTitle.trim() || busy} className="px-5 py-2 rounded-full bg-primary font-bold text-gray-900 hover:bg-primary-dark hover:text-white disabled:opacity-50">Create</button>
             </div>

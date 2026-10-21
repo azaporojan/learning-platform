@@ -8,13 +8,13 @@ import { notebookFileSrc } from './api';
 // Callouts: a blockquote whose first word is bold and one of these becomes a coloured box
 //   > **Note** Streams are lazy.
 const CALLOUTS: Record<string, { label: string; className: string }> = {
-  note: { label: 'Note', className: 'border-sky-400 bg-sky-50 text-sky-950' },
-  tip: { label: 'Tip', className: 'border-emerald-400 bg-emerald-50 text-emerald-950' },
-  goal: { label: 'Goal', className: 'border-lime-500 bg-lime-50 text-lime-950' },
-  warning: { label: 'Warning', className: 'border-amber-400 bg-amber-50 text-amber-950' },
-  important: { label: 'Important', className: 'border-rose-400 bg-rose-50 text-rose-950' },
-  istqb: { label: 'ISTQB', className: 'border-violet-400 bg-violet-50 text-violet-950' },
-  exercise: { label: 'Exercise', className: 'border-indigo-400 bg-indigo-50 text-indigo-950' },
+  note: { label: 'Note', className: 'border-sky-400 bg-sky-50 dark:bg-sky-900/30 text-sky-950 dark:text-sky-300' },
+  tip: { label: 'Tip', className: 'border-emerald-400 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-950 dark:text-emerald-300' },
+  goal: { label: 'Goal', className: 'border-lime-500 bg-lime-50 dark:bg-lime-900/30 text-lime-950 dark:text-lime-300' },
+  warning: { label: 'Warning', className: 'border-amber-400 bg-amber-50 dark:bg-amber-900/30 text-amber-950 dark:text-amber-300' },
+  important: { label: 'Important', className: 'border-rose-400 bg-rose-50 dark:bg-rose-900/30 text-rose-950 dark:text-rose-300' },
+  istqb: { label: 'ISTQB', className: 'border-violet-400 bg-violet-50 dark:bg-violet-900/30 text-violet-950 dark:text-violet-300' },
+  exercise: { label: 'Exercise', className: 'border-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-950 dark:text-indigo-300' },
 };
 
 const textOf = (node: any): string => (node ? (node.type === 'text' ? node.value : (node.children || []).map(textOf).join('')) : '');
@@ -42,7 +42,7 @@ let mermaidLoader: Promise<any> | null = null;
 const loadMermaid = () => {
   if (!mermaidLoader) {
     mermaidLoader = import('mermaid').then((m) => {
-      m.default.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', fontFamily: 'Inter, sans-serif' });
+      m.default.initialize({ startOnLoad: false, securityLevel: 'strict', theme: document.documentElement.classList.contains('dark') ? 'dark' : 'neutral', fontFamily: 'Inter, sans-serif' });
       return m.default;
     });
   }
@@ -61,7 +61,7 @@ const Mermaid: React.FC<{ code: string }> = ({ code }) => {
       .catch((e: Error) => { if (!cancelled) setError(e.message || 'Diagram error'); });
     return () => { cancelled = true; };
   }, [code, id]);
-  if (error) return <pre className="text-xs text-rose-700 bg-rose-50 rounded-lg p-3 whitespace-pre-wrap">Diagram error: {error}</pre>;
+  if (error) return <pre className="text-xs text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-900/30 rounded-lg p-3 whitespace-pre-wrap">Diagram error: {error}</pre>;
   if (!svg) return <div className="text-sm text-gray-400 py-6 text-center">Drawing diagram…</div>;
   // securityLevel "strict": Mermaid sanitises the SVG (no scripts, no HTML labels)
   return <div className="lp-mermaid flex justify-center my-4 overflow-x-auto" dangerouslySetInnerHTML={{ __html: svg }} />;
@@ -77,7 +77,7 @@ const NotebookImage: React.FC<{ src?: string; alt?: string }> = ({ src, alt }) =
   try { host = new URL(String(src)).host; } catch { /* not a URL */ }
   if (!host) return <span className="text-xs text-gray-400">[image: {alt || 'unavailable'}]</span>;
   return (
-    <button type="button" onClick={() => setAllowed(true)} className="inline-flex items-center gap-1 text-xs font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg px-3 py-2 my-2">
+    <button type="button" onClick={() => setAllowed(true)} className="inline-flex items-center gap-1 text-xs font-bold text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg px-3 py-2 my-2">
       <span aria-hidden="true" className="material-icons text-base">image</span>
       Show image{alt ? ` "${alt}"` : ''} from {host}
     </button>
@@ -106,7 +106,7 @@ const components = {
 };
 
 export const NotebookMarkdown: React.FC<{ source: string; className?: string }> = ({ source, className = '' }) => (
-  <div className={`prose max-w-none prose-headings:font-extrabold prose-pre:p-0 prose-pre:bg-transparent prose-img:my-4 ${className}`}>
+  <div className={`prose dark:prose-invert max-w-none prose-headings:font-extrabold prose-pre:p-0 prose-pre:bg-transparent prose-img:my-4 ${className}`}>
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{source}</ReactMarkdown>
   </div>
 );

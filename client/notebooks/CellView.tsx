@@ -3,6 +3,7 @@ import { Cell, CellOutput } from './types';
 import { CodeEditor, CodeEditorHandle } from './CodeEditor';
 import { NotebookMarkdown } from './NotebookMarkdown';
 import { CellOutputView } from './CellOutputView';
+import { darculaClass, useCodeTheme } from './codeTheme';
 
 export type CellAction = 'up' | 'down' | 'convert' | 'delete' | 'image';
 
@@ -53,7 +54,7 @@ const ToolButton: React.FC<{ icon: string; title: string; onClick: () => void; d
     disabled={disabled}
     onMouseDown={(e) => e.preventDefault()}
     onClick={(e) => { e.stopPropagation(); onClick(); }}
-    className={`w-7 h-7 rounded-md flex items-center justify-center text-gray-500 disabled:opacity-30 ${danger ? 'hover:bg-rose-50 hover:text-rose-600' : 'hover:bg-gray-100 hover:text-gray-800'}`}
+    className={`w-7 h-7 rounded-md flex items-center justify-center text-gray-500 dark:text-gray-400 disabled:opacity-30 ${danger ? 'hover:bg-rose-50 dark:hover:bg-rose-900/30 hover:text-rose-600 dark:hover:text-rose-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-100'}`}
   >
     <span aria-hidden="true" className="material-icons text-[18px] leading-none">{icon}</span>
   </button>
@@ -68,6 +69,8 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
   }), []);
 
   const isCode = p.cell.kind === 'code';
+  const [codeTheme] = useCodeTheme();
+  const darcula = darculaClass(codeTheme);
   // The Input box: shown when the cell has input, when its code reads System.in, or when opened
   const readsInput = isCode && /\bScanner\b|System\.in\b/.test(p.cell.source);
   // Starts open when the cell has input, so deleting its last character never unmounts the box mid-typing
@@ -134,12 +137,12 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
       {gutter}
       <div className="min-w-0 flex-1 py-1 pr-2">
         {p.running && p.queuedAhead > 0 && (
-          <div className="text-xs font-semibold text-amber-700 mb-1">
+          <div className="text-xs font-semibold text-amber-700 dark:text-amber-300 mb-1">
             Waiting for a free sandbox{p.queuedAhead > 1 ? `, ${p.queuedAhead - 1} ahead` : ''}…
           </div>
         )}
         {isCode ? (
-          <div className="rounded-lg border border-gray-200 bg-gray-50 overflow-hidden focus-within:border-primary-dark focus-within:bg-white transition-colors">
+          <div className={`lp-code-box rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 overflow-hidden focus-within:border-primary-dark focus-within:bg-white dark:focus-within:bg-gray-950 transition-colors ${darcula}`}>
             <CodeEditor
               ref={editor}
               value={p.cell.source}
@@ -156,7 +159,7 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
           </div>
         ) : p.editing && p.editable ? (
           <div className="grid gap-3 lg:grid-cols-2">
-            <div className="rounded-lg border border-primary-dark bg-white overflow-hidden min-w-0">
+            <div className="rounded-lg border border-primary-dark bg-white dark:bg-gray-800 overflow-hidden min-w-0">
               <CodeEditor
                 ref={editor}
                 value={p.cell.source}
@@ -170,7 +173,7 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
                 onFiles={p.onFiles}
               />
             </div>
-            <div className="min-w-0 rounded-lg border border-dashed border-gray-200 px-4 py-2 max-h-[70vh] overflow-y-auto">
+            <div className="min-w-0 rounded-lg border border-dashed border-gray-200 dark:border-gray-700 px-4 py-2 max-h-[70vh] overflow-y-auto">
               {p.cell.source.trim() ? <NotebookMarkdown source={p.cell.source} /> : <p className="text-sm text-gray-400 italic">Preview</p>}
             </div>
           </div>
@@ -186,7 +189,7 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
           </div>
         )}
         {showInput && (
-          <div className="mt-1 rounded-lg border border-dashed border-gray-300 bg-white">
+          <div className={`lp-input-box mt-1 rounded-lg border border-dashed border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 ${darcula}`}>
             <label className="flex items-center gap-1 px-3 pt-1.5 text-[11px] font-bold uppercase tracking-wide text-gray-400">
               <span aria-hidden="true" className="material-icons text-sm leading-none">keyboard</span>
               Input
@@ -207,18 +210,18 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
               spellCheck={false}
               placeholder={'5 7\nAna'}
               aria-label="Input for this cell"
-              className="block w-full resize-y border-0 bg-transparent px-3 pb-2 pt-1 font-mono text-[13px] leading-5 text-gray-800 outline-none focus:ring-0"
+              className="block w-full resize-y border-0 bg-transparent px-3 pb-2 pt-1 font-mono text-[13px] leading-5 text-gray-800 dark:text-gray-100 outline-none focus:ring-0"
             />
           </div>
         )}
         {isCode && p.output && (
-          <div className="mt-1 rounded-lg bg-white border border-gray-100">
+          <div className={`lp-output-box mt-1 rounded-lg bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-800 ${darcula}`}>
             <CellOutputView output={p.output} flash={p.flash} onClear={p.editable ? p.onClearOutput : undefined} />
           </div>
         )}
       </div>
       {p.editable && (
-        <div className={`absolute -top-3 right-3 z-10 flex items-center gap-0.5 rounded-lg border border-gray-200 bg-white shadow-sm px-1 py-0.5 transition-opacity ${p.selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}`}>
+        <div className={`absolute -top-3 right-3 z-10 flex items-center gap-0.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm px-1 py-0.5 transition-opacity ${p.selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}`}>
           {!isCode && !p.editing && <ToolButton icon="edit" title="Edit (Enter)" onClick={p.onEdit} />}
           {!isCode && <ToolButton icon="image" title="Insert an image (or paste / drop one while editing)" onClick={() => p.onAction('image')} />}
           {p.onDragStart && (
@@ -235,7 +238,7 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
                 p.onDragStart!();
               }}
               onDragEnd={() => p.onDragEnd && p.onDragEnd()}
-              className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 hover:bg-gray-100 hover:text-gray-800 cursor-grab active:cursor-grabbing"
+              className="w-7 h-7 rounded-md flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-100 cursor-grab active:cursor-grabbing"
             >
               <span aria-hidden="true" className="material-icons text-[18px] leading-none">drag_indicator</span>
             </span>
@@ -260,14 +263,14 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
 // "+ Code / + Text" between cells, shown on hover (Colab style)
 export const AddCellBar: React.FC<{ onAdd: (kind: 'code' | 'text') => void; always?: boolean }> = ({ onAdd, always }) => (
   <div className={`group/add relative h-6 flex items-center justify-center ${always ? '' : ''}`}>
-    <div className={`absolute inset-x-12 top-1/2 h-px bg-gray-200 ${always ? 'opacity-100' : 'opacity-0 group-hover/add:opacity-100'} transition-opacity`} />
+    <div className={`absolute inset-x-12 top-1/2 h-px bg-gray-200 dark:bg-gray-700 ${always ? 'opacity-100' : 'opacity-0 group-hover/add:opacity-100'} transition-opacity`} />
     <div className={`relative flex gap-2 ${always ? 'opacity-100' : 'opacity-0 group-hover/add:opacity-100 focus-within:opacity-100'} transition-opacity`}>
       {(['code', 'text'] as const).map((kind) => (
         <button
           key={kind}
           type="button"
           onClick={() => onAdd(kind)}
-          className="flex items-center gap-1 rounded-full border border-gray-200 bg-white px-3 py-0.5 text-xs font-bold text-gray-600 shadow-sm hover:border-primary-dark hover:text-primary-dark"
+          className="flex items-center gap-1 rounded-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-0.5 text-xs font-bold text-gray-600 dark:text-gray-300 shadow-sm hover:border-primary-dark hover:text-primary-dark"
         >
           <span aria-hidden="true" className="material-icons text-sm leading-none">add</span>{kind === 'code' ? 'Code' : 'Text'}
         </button>
