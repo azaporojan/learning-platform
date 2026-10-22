@@ -12,6 +12,7 @@ import { markdown } from '@codemirror/lang-markdown';
 import { javaCompletions } from './javaCompletions';
 import { formatJava, formatJavaLines } from './javaFormat';
 import { lintJava } from './javaLint';
+import { shouldOvertype } from './brackets';
 
 export interface CodeEditorHandle {
   focus: () => void;
@@ -135,12 +136,23 @@ const duplicate = (view: EditorView): boolean => {
   return true;
 };
 
+const overtypeCloser = (close: ')' | ']') => (view: EditorView): boolean => {
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  const line = view.state.doc.lineAt(sel.head);
+  if (!shouldOvertype(line.text, sel.head - line.from, close)) return false;
+  view.dispatch({ selection: { anchor: sel.head + 1 }, scrollIntoView: true, userEvent: 'input.type' });
+  return true;
+};
+
 const intellijKeys = (isJava: boolean) => Prec.high(keymap.of([
   { key: 'Mod-d', run: duplicate, preventDefault: true },
   { key: 'Mod-y', run: deleteLine, preventDefault: true },
   { key: 'Shift-Alt-ArrowUp', run: moveLineUp },
   { key: 'Shift-Alt-ArrowDown', run: moveLineDown },
   ...(isJava ? [
+    { key: ')', run: overtypeCloser(')') },
+    { key: ']', run: overtypeCloser(']') },
     { key: 'Mod-Alt-l', run: reformat, preventDefault: true },
     { key: 'Tab', run: expandTemplate },
   ] : []),

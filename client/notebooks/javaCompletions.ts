@@ -1,4 +1,5 @@
-import { CompletionContext, CompletionResult, Completion, snippetCompletion, completeAnyWord } from '@codemirror/autocomplete';
+import { CompletionContext, CompletionResult, Completion, snippetCompletion, completeAnyWord, insertBracket, pickedCompletion } from '@codemirror/autocomplete';
+import type { EditorView } from '@codemirror/view';
 
 // A small static index of the JDK and the libraries in the sandbox (JUnit 5, AssertJ), enough to
 // suggest the names a course uses without a language server. After "Type." it offers that type's
@@ -68,8 +69,19 @@ const SNIPPETS: Completion[] = [
   snippetCompletion('assertThat(${actual}).isEqualTo(${expected});', { label: 'assertThat', detail: 'AssertJ', type: 'function' }),
 ];
 
+// A method completion inserts "name(" and lets the bracket closer add the ")", so that ")" is
+// tracked like a typed one: typing ")" afterwards steps over it instead of over the outer bracket
+// (before, "println(|)" + "method" gave "println(method(|)" and the next ")" skipped the outer one).
+const applyCall = (view: EditorView, completion: Completion, from: number, to: number) => {
+  const name = completion.label;
+  view.dispatch({ changes: { from, to, insert: name }, selection: { anchor: from + name.length }, annotations: pickedCompletion.of(completion), userEvent: 'input.complete' });
+  const tr = insertBracket(view.state, '(');
+  if (tr) view.dispatch(tr);
+  else view.dispatch(view.state.replaceSelection('('), { userEvent: 'input.complete' });
+};
+
 const toCompletion = (name: string, type: string): Completion => (name.endsWith('()')
-  ? { label: name.slice(0, -2), type: 'method', apply: name.slice(0, -1), detail: '()' }
+  ? { label: name.slice(0, -2), type: 'method', apply: applyCall, detail: '()' }
   : { label: name, type });
 
 const instanceOptions = [...new Set(INSTANCE)].map((m) => toCompletion(m, 'method'));
