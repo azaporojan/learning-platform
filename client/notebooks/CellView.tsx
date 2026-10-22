@@ -85,7 +85,7 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
     const r = e.currentTarget.getBoundingClientRect();
     return e.clientY < r.top + r.height / 2 ? 'before' : 'after';
   };
-  const errorLine = p.output && p.output.status === 'error' && p.output.error ? p.output.error.line : null;
+  const error = p.output && p.output.status === 'error' && p.output.error ? { ...p.output.error, stamp: p.output.ranAt } : null;
   const count = p.output && p.output.executionCount;
 
   const gutter = isCode ? (
@@ -148,7 +148,7 @@ export const CellView = forwardRef<CellViewHandle, CellViewProps>(function CellV
               value={p.cell.source}
               language="java"
               readOnly={!p.editable}
-              errorLine={errorLine}
+              error={error}
               placeholder={p.editable ? 'Java code. Shift+Enter runs it.' : ''}
               onChange={p.onChange}
               onFocus={p.onEdit}

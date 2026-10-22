@@ -360,11 +360,20 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
   }, []);
 
   const runningRef = useRef(false);
-  const runCell = useCallback(async (cellId: string, how: 'advance' | 'stay' | 'insert') => {
-    if (!nb) return;
+  // Runs a cell (and, outside a live session, the code cells above it). Present mode passes
+  // scratch edits as overrides with ephemeral: the edited code runs, the outputs come back to the
+  // caller and nothing is stored: neither the cells nor their outputs change in the notebook.
+  const runCell = useCallback(async (
+    cellId: string,
+    how: 'advance' | 'stay' | 'insert',
+    opts: { overrides?: Record<string, string>; ephemeral?: boolean } = {},
+  ): Promise<Record<string, CellOutput> | null> => {
+    if (!nb) return null;
     const i = indexOf(cellId);
-    if (i === -1) return;
-    const cell = cellsRef.current[i];
+    if (i === -1) return null;
+    const overrides = opts.overrides || {};
+    const withOverrides = (c: Cell) => (overrides[c.id] !== undefined ? { ...c, source: overrides[c.id] } : c);
+    const cell = withOverrides(cellsRef.current[i]);
     // Move on first, like Jupyter: the result arrives while you keep working
     if (how === 'advance') {
       const nextCell = cellsRef.current[i + 1];
@@ -372,10 +381,12 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
       else if (nb.can_edit) addCell(i + 1, 'code');
     }
     if (how === 'insert' && nb.can_edit) addCell(i + 1, 'code');
-    if (cell.kind === 'text') { if (editingId === cellId) setEditingId(null); return; }
-    if (!nb.can_run) return;
-    if (runningRef.current) { showToast({ text: 'A run is still going. Wait for it to finish.' }, 2500); return; }
+    if (cell.kind === 'text') { if (editingId === cellId) setEditingId(null); return null; }
+    if (!nb.can_run) return null;
+    if (runningRef.current) { showToast({ text: 'A run is still going. Wait for it to finish.' }, 2500); return null; }
     runningRef.current = true;
+    const ephemeral = Boolean(opts.ephemeral);
+    let fresh: Record<string, CellOutput> | null = null;
 
     const requestId = newRequestId();
     const ids = liveSession ? [cellId] : cellsRef.current.slice(0, i + 1).filter((c) => c.kind === 'code').map((c) => c.id);
@@ -393,14 +404,15 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
     if (!liveSession) poll();
     try {
       if (liveSession) {
-        const r = await api<{ output: CellOutput; sessionEnded: boolean; sessionRestarted: boolean }>(`/notebooks/${nb.id}/session/run`, { json: { cellId, source: cell.source, input: cell.input || '' } });
-        applyOutputs({ [cellId]: r.output });
+        const r = await api<{ output: CellOutput; sessionEnded: boolean; sessionRestarted: boolean }>(`/notebooks/${nb.id}/session/run`, { json: { cellId, source: cell.source, input: cell.input || '', ephemeral } });
+        fresh = { [cellId]: r.output };
         if (r.sessionEnded) showToast({ text: 'The live session ended (timeout or crash). The next run starts a fresh one.' });
         else if (r.sessionRestarted) showToast({ text: 'Started a fresh live session: earlier variables are gone.' }, 3500);
       } else {
-        const r = await api<{ outputs: Record<string, CellOutput> }>(`/notebooks/${nb.id}/run`, { json: { cells: cellsRef.current, upTo: cellId, requestId } });
-        applyOutputs(r.outputs);
+        const r = await api<{ outputs: Record<string, CellOutput> }>(`/notebooks/${nb.id}/run`, { json: { cells: cellsRef.current.map(withOverrides), upTo: cellId, requestId, ephemeral } });
+        fresh = r.outputs;
       }
+      if (!ephemeral) applyOutputs(fresh);
       setRunnerNotice(null);
     } catch (e) {
       const err = e as ApiError;
@@ -413,6 +425,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
       setRunningIds(new Set());
       setQueuedAhead(0);
     }
+    return ephemeral ? fresh : null;
   }, [nb, liveSession, editingId, addCell, applyOutputs, showToast]);
 
   const clearOutput = useCallback(async (cellId: string) => {
@@ -776,7 +789,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
       />
 
       {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-4 rounded-xl bg-gray-900 text-white px-4 py-3 shadow-lg text-sm max-w-[90vw]" role="status">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] flex items-center gap-4 rounded-xl bg-gray-900 text-white px-4 py-3 shadow-lg text-sm max-w-[90vw]" role="status">
           <span>{toast.text}</span>
           {toast.action && <button type="button" onClick={() => { toast.action!.run(); setToast(null); }} className="font-bold text-primary">{toast.action.label}</button>}
         </div>
@@ -790,7 +803,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
           runningIds={runningIds}
           canRun={nb.can_run}
           startAt={selectedId}
-          onRun={(cid) => runCell(cid, 'stay')}
+          onRun={(cid, overrides) => runCell(cid, 'stay', Object.keys(overrides).length ? { overrides, ephemeral: true } : {})}
           onClose={() => setPresenting(false)}
         />
       )}

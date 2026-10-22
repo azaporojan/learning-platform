@@ -314,7 +314,7 @@ their own notebook pointing back at the original.
 | `DELETE /api/notebooks/:id` | — | Owner or admin; copies keep working ("original removed") |
 | `POST /api/notebooks/:id/copy` | — | Your own copy (same lesson, no outputs) |
 | `GET /api/notebooks/:id/copies` | — | Admin: the students' copies of a notebook |
-| `POST /api/notebooks/:id/run` | `{cells?, upTo?, requestId?}` | Owner: run the code cells up to `upTo` (a cell id), in order, in a fresh sandbox |
+| `POST /api/notebooks/:id/run` | `{cells?, upTo?, requestId?, ephemeral?}` | Owner: run the code cells up to `upTo` (a cell id), in order, in a fresh sandbox. `ephemeral: true` returns the outputs without storing them (scratch edits while presenting) |
 | `POST /api/notebooks/:id/files` | multipart `file` (PNG, JPEG, GIF, WebP, SVG; 5 MB) | Image for a text cell → `{id, url}`; use `url` in `![alt](url)` |
 | `POST /api/notebooks/import` | multipart: `notebook` (.md) or `markdown`, `files` (images), `title?`, `lessonId?`, `published?` | Create from Markdown |
 | `PUT /api/notebooks/:id/markdown` | multipart, same fields + `baseRevision?` | Replace the cells from Markdown (outputs cleared) |

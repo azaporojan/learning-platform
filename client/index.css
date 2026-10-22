@@ -167,6 +167,21 @@
 .lp-cm .cm-editor:not(.cm-focused) .cm-activeLineGutter { color: #9ca3af; }
 .lp-cm .cm-placeholder { color: #9ca3af; font-style: italic; }
 .lp-cm .cm-error-line { background: rgba(244, 63, 94, 0.12) !important; }
+.lp-cm .cm-error-mark { text-decoration: underline wavy #e11d48; text-decoration-skip-ink: none; text-underline-offset: 3px; }
+/* Static checks (javaLint.ts): IntelliJ-style wavy underlines, a mark in the gutter, a tooltip on hover */
+.lp-cm .cm-lintRange-error { background: none; text-decoration: underline wavy #e11d48; text-decoration-skip-ink: none; text-underline-offset: 3px; }
+.lp-cm .cm-lintRange-warning { background: none; text-decoration: underline wavy #d97706; text-decoration-skip-ink: none; text-underline-offset: 3px; }
+.lp-cm .cm-gutter-lint { width: 0.9em; }
+.lp-cm .cm-gutter-lint .cm-gutterElement { padding: 0 0 0 2px; }
+.lp-cm .cm-lint-marker { width: 0.7em; height: 0.7em; }
+.lp-cm .cm-lint-marker-error { content: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" fill="%23e11d48"/><path d="M13 13l14 14M27 13L13 27" stroke="white" stroke-width="4" stroke-linecap="round"/></svg>'); }
+.lp-cm .cm-lint-marker-warning { content: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><path d="M20 4L38 36H2z" fill="%23f59e0b"/><path d="M20 15v10M20 29v3" stroke="white" stroke-width="4" stroke-linecap="round"/></svg>'); }
+.lp-cm .cm-tooltip-lint { border-radius: 8px; border: 1px solid #e5e7eb; box-shadow: 0 8px 24px rgba(0,0,0,.08); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px; max-width: 32rem; }
+.lp-cm .cm-diagnostic { padding: 4px 8px; border-left-width: 4px; }
+.lp-cm .cm-diagnostic-error { border-left-color: #e11d48; }
+.lp-cm .cm-diagnostic-warning { border-left-color: #d97706; }
+.lp-cm .cm-diagnosticText { color: #111827; }
+.lp-cm .cm-panel.cm-panel-lint { display: none; }
 .lp-cm .cm-selectionBackground, .lp-cm .cm-editor.cm-focused .cm-selectionBackground { background: rgba(101, 163, 13, 0.25) !important; }
 .lp-cm .cm-matchingBracket { background: rgba(101, 163, 13, 0.25); outline: none; }
 .lp-cm .cm-tooltip-autocomplete { border-radius: 8px; border-color: #e5e7eb; box-shadow: 0 8px 24px rgba(0,0,0,.08); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; }
@@ -237,6 +252,10 @@
 .dark .lp-cm .cm-placeholder { color: #6b7280; }
 .dark .lp-cm .cm-selectionBackground, .dark .lp-cm .cm-editor.cm-focused .cm-selectionBackground { background: rgba(88, 157, 246, 0.3) !important; }
 .dark .lp-cm .cm-tooltip-autocomplete { background: #1f2937; border-color: #374151; color: #e5e7eb; }
+.dark .lp-cm .cm-tooltip-lint { background: #1f2937; border-color: #374151; }
+.dark .lp-cm .cm-diagnosticText { color: #e5e7eb; }
+.dark .lp-cm .cm-lintRange-error, .dark .lp-cm .cm-error-mark { text-decoration-color: #fb7185; }
+.dark .lp-cm .cm-lintRange-warning { text-decoration-color: #fbbf24; }
 .dark .lp-cell-selected { background: rgba(56, 189, 248, 0.06); }
 .dark .lp-code-block { background: #111827 !important; color: #e5e7eb !important; border-color: #374151; }
 /* Darcula: code, input and output boxes, and code blocks in text cells */
@@ -251,6 +270,10 @@
 .lp-darcula .lp-cm .cm-matchingBracket { background: #3b514d; color: #ffef28; }
 .lp-darcula .lp-cm .cm-placeholder { color: #787878; }
 .lp-darcula .lp-cm .cm-error-line { background: rgba(188, 63, 60, 0.28) !important; }
+.lp-darcula .lp-cm .cm-lintRange-error, .lp-darcula .lp-cm .cm-error-mark { text-decoration-color: #ff5261; }
+.lp-darcula .lp-cm .cm-lintRange-warning { text-decoration-color: #d9a343; }
+.lp-darcula .lp-cm .cm-tooltip-lint { background: #3c3f41; border-color: #515151; }
+.lp-darcula .lp-cm .cm-diagnosticText { color: #bbbbbb; }
 .lp-darcula .lp-cm .cm-tooltip-autocomplete { background: #3c3f41; border-color: #515151; color: #bbbbbb; }
 .lp-darcula .lp-cm .cm-tooltip-autocomplete ul li[aria-selected] { background: #0d293e; color: #ffffff; }
 .lp-darcula-scope .lp-code-block { background: #2b2b2b !important; color: #a9b7c6 !important; border-color: #3c3f41; }

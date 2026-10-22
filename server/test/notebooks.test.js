@@ -251,6 +251,21 @@ test('notebooks API', { timeout: 120000 }, async (t) => {
   assert.equal(run.body.outputs.c2.value, 'x + 1');
   assert.deepEqual([run.body.outputs.c1.executionCount, run.body.outputs.c2.executionCount], [1, 2]);
 
+  // An ephemeral run (scratch edits while presenting) runs the sent code, but stores nothing:
+  // neither the cells nor the outputs, and the execution counter does not move
+  runner.calls.length = 0;
+  const scratchCells = copy.body.cells.map((c) => (c.id === 'c2' ? { ...c, source: 'x + 100' } : c));
+  const scratch = await stud(`/notebooks/${copy.body.id}/run`, { method: 'POST', json: { cells: scratchCells, upTo: 'c2', ephemeral: true } });
+  assert.equal(scratch.status, 200, JSON.stringify(scratch.body));
+  assert.deepEqual(runner.calls.find((c) => c.url === '/run').json.cells, ['int x = 1;', 'x + 100']);
+  assert.equal(scratch.body.ephemeral, true);
+  assert.equal(scratch.body.outputs.c2.value, 'x + 100');
+  assert.equal(scratch.body.outputs.c2.executionCount, null);
+  const afterScratch = await stud(`/notebooks/${copy.body.id}`);
+  assert.equal(afterScratch.body.cells.find((c) => c.id === 'c2').source, 'x + 1', 'the cell is unchanged');
+  assert.equal(afterScratch.body.outputs.c2.value, 'x + 1', 'the stored output is unchanged');
+  assert.equal(afterScratch.body.outputs.c2.executionCount, 2, 'the counter did not move');
+
   // A failing cell stops the run; later cells are marked not run; outputs are stored
   const all = await stud(`/notebooks/${copy.body.id}/run`, { method: 'POST', json: {} });
   assert.equal(all.body.status, 'error');

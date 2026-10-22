@@ -14,6 +14,9 @@ export interface CellError {
   kind: string; // compile | runtime | timeout | oom | crashed | internal
   message: string;
   line: number | null;
+  column?: number | null; // compile errors: the token javac pointed at (1-based), when known
+  endLine?: number | null;
+  endColumn?: number | null;
   exception?: string;
 }
 

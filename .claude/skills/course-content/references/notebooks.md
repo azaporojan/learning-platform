@@ -4,7 +4,9 @@ A **notebook** is a lesson students read and run in the browser: text cells (Mar
 diagrams) between Java code cells that run in a sandbox. A teacher's notebook is attached to a
 lesson and **published**; students open it read-only and press **Copy** to get their own. In
 class the teacher uses **Present** (each `#`/`##` heading starts a slide) and the **Live** switch
-(state kept between runs) instead of a PowerPoint deck.
+(state kept between runs) instead of a PowerPoint deck. While presenting, code cells stay editable:
+a **scratch edit** runs on stage (its output shows there) but is never saved to the notebook, so the
+teacher can show a variant ad hoc and reset the cell to the notebook's code afterwards.
 
 An **auto-checked task** is homework where the student writes Java files in the task itself and
 hidden JUnit tests check them. The teacher still approves (unless the task auto-approves).
@@ -87,7 +89,14 @@ Rules of the format (the server's parser, `server/notebookMarkdown.js`):
   live keyboard. Each cell has its own input, so **create the Scanner in the cell that reads**. Prompts
   print without the typed values (`Two numbers: ` then the result), as on online judges. A cell that
   reads more values than its input holds fails with "the cell's input ran out".
-- Compile errors show the line inside the cell; exceptions show the line and the stack.
+- Compile errors show the line inside the cell and underline the token javac pointed at; exceptions
+  show the line and the stack.
+- The editor checks code as you type (IntelliJ style): a missing `;`, `)` or `}`, a method that does
+  not exist on a String / array / List / Map declared in the cell, `arr.length()`, `s.length`,
+  `string`/`Int` type names, `System.out.printn` are underlined red; strings compared with `==`,
+  `if (true)`, `if (x = 1)`, `if (c);`, an unreachable statement are yellow. The last statement of a
+  cell may omit the `;` (JShell shows its value). The sandbox stays the final word: anything the
+  checks miss still fails at run time with the usual error box.
 
 ## How to write a good notebook lesson
 

@@ -254,7 +254,10 @@ public final class Kernel {
                     SourceCodeAnalysis.Completeness c = info.completeness();
                     if (c == SourceCodeAnalysis.Completeness.EMPTY) break;
                     String snippetSource;
+                    // The snippet's first code character (stack-trace lines count from here);
+                    // javac positions count from the untrimmed snippet source, i.e. from 'consumed'
                     int snippetStart = consumed + lead;
+                    int rawStart = consumed;
                     if (c.isComplete()) {
                         snippetSource = info.source();
                         consumed += remaining.length() - info.remaining().length();
@@ -273,7 +276,7 @@ public final class Kernel {
                         if (ev.causeSnippet() != null) continue;
                         Snippet s = ev.snippet();
                         if (ev.status() == Snippet.Status.REJECTED) {
-                            error = compileError(s, source, snippetStart);
+                            error = compileError(s, source, rawStart);
                             break;
                         }
                         if (ev.exception() != null) {
@@ -328,6 +331,7 @@ public final class Kernel {
             return result;
         }
 
+        /** snippetStart: offset in the cell of the snippet source as given to javac (whitespace included). */
         private Map<String, Object> compileError(Snippet s, String cell, int snippetStart) {
             List<jdk.jshell.Diag> diags = shell.diagnostics(s)
                 .filter(jdk.jshell.Diag::isError).collect(Collectors.toList());
@@ -335,7 +339,16 @@ public final class Kernel {
             jdk.jshell.Diag d = diags.get(0);
             long pos = Math.max(0, d.getStartPosition());
             String message = d.getMessage(Locale.ENGLISH);
-            return errorOf("compile", message, lineAt(cell, snippetStart + (int) Math.min(pos, Integer.MAX_VALUE - snippetStart)));
+            int start = snippetStart + (int) Math.min(pos, Integer.MAX_VALUE - snippetStart);
+            Map<String, Object> err = errorOf("compile", message, lineAt(cell, start));
+            // The token javac pointed at, so the editor can underline it (1-based columns)
+            err.put("column", columnAt(cell, start));
+            if (d.getEndPosition() > d.getStartPosition()) {
+                int end = snippetStart + (int) Math.min(d.getEndPosition(), Integer.MAX_VALUE - snippetStart);
+                err.put("endLine", lineAt(cell, end));
+                err.put("endColumn", columnAt(cell, end));
+            }
+            return err;
         }
 
         private static Map<String, Object> runtimeError(Exception e, Snippet s, int snippetLine) {
@@ -400,6 +413,13 @@ public final class Kernel {
         int i = 0;
         while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
         return i;
+    }
+
+    /** 1-based column of a character offset in the cell. */
+    static Integer columnAt(String text, int offset) {
+        int end = Math.max(0, Math.min(offset, text.length()));
+        int lineStart = text.lastIndexOf('\n', end - 1) + 1;
+        return end - lineStart + 1;
     }
 
     /** 1-based line of a character offset in the cell. */

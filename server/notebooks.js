@@ -15,10 +15,11 @@
 //   DELETE /notebooks/:id                 owner or admin
 //   POST   /notebooks/:id/copy            your own copy
 //   GET    /notebooks/:id/copies          admin (every teacher is one): the students' copies
-//   POST   /notebooks/:id/run             owner: {cells: [{id, kind, source}], upTo, requestId}
+//   POST   /notebooks/:id/run             owner: {cells: [{id, kind, source}], upTo, requestId, ephemeral?}
+//                                         ephemeral: the outputs are returned but not stored (ad-hoc edits while presenting)
 //   GET    /notebooks/queue/:requestId    {position} while a run waits for a free sandbox
 //   GET    /notebooks/session             admin: live session status (one per teacher, tied to a notebook)
-//   POST   /notebooks/:id/session/run     admin owner: {cellId, source} in the live session
+//   POST   /notebooks/:id/session/run     admin owner: {cellId, source, input?, ephemeral?} in the live session
 //   DELETE /notebooks/session             admin: end the live session
 //   POST   /notebooks/:id/clear-outputs   owner: {cellIds?} (all when omitted)
 //   POST   /notebooks/:id/files           owner: multipart "file" (image) → {id, url}
@@ -107,7 +108,7 @@ function storedOutput(r, executionCount) {
     error: r.error || null,
     truncated: Boolean(r.truncated),
     durationMs: r.durationMs || 0,
-    executionCount: r.status === 'not_run' ? null : executionCount,
+    executionCount: r.status === 'not_run' || executionCount === null ? null : executionCount,
     ranAt: new Date().toISOString(),
   };
 }
@@ -663,15 +664,18 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
           [req.user.id, r.row.id, 'run', code.length, result ? result.status : 'failed', Date.now() - started]).catch(() => {});
       }
       const ran = result.cells.filter((c) => c.status !== 'not_run').length;
-      const last = await nextCount(r.row.id, ran);
-      let n = last - ran;
+      // An ephemeral run (code edited on the fly while presenting) is shown but never stored: the
+      // notebook's cells did not change, so its saved outputs must not either
+      const ephemeral = b.ephemeral === true;
+      const last = ephemeral ? null : await nextCount(r.row.id, ran);
+      let n = ephemeral ? 0 : last - ran;
       const outputs = {};
       result.cells.forEach((c, i) => {
         if (c.status !== 'not_run') n += 1;
-        outputs[code[i].id] = storedOutput(c, n);
+        outputs[code[i].id] = storedOutput(c, ephemeral ? null : n);
       });
-      await saveOutputs(r.row.id, outputs, last);
-      res.json({ status: result.status, outputs, durationMs: result.durationMs, queuedMs: result.queuedMs, warm: result.warm, executionCount: last });
+      if (!ephemeral) await saveOutputs(r.row.id, outputs, last);
+      res.json({ status: result.status, outputs, durationMs: result.durationMs, queuedMs: result.queuedMs, warm: result.warm, executionCount: last, ephemeral });
     } catch (err) {
       fail(res, err, 'POST /notebooks/:id/run');
     } finally {
@@ -725,10 +729,11 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       db.query('INSERT INTO notebook_runs (user_id, notebook_id, mode, cell_count, status, duration_ms) VALUES (?, ?, ?, ?, ?, ?)',
         [req.user.id, r.row.id, 'session', 1, result.status, result.durationMs || 0]).catch(() => {});
       // The notebook's own counter, shared with batch runs (the session's restarts at 1)
-      const count = await nextCount(r.row.id, 1);
+      const ephemeral = (req.body || {}).ephemeral === true;
+      const count = ephemeral ? null : await nextCount(r.row.id, 1);
       const output = storedOutput(result, count);
-      await saveOutputs(r.row.id, { [cellId]: output }, count);
-      res.json({ output, sessionEnded: Boolean(result.sessionEnded), sessionRestarted: restarted || session.executionCount === 0 });
+      if (!ephemeral) await saveOutputs(r.row.id, { [cellId]: output }, count);
+      res.json({ output, sessionEnded: Boolean(result.sessionEnded), sessionRestarted: restarted || session.executionCount === 0, ephemeral });
     } catch (err) {
       fail(res, err, 'POST /notebooks/:id/session/run');
     } finally {

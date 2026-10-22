@@ -7,9 +7,11 @@ import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap, s
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { classHighlighter } from '@lezer/highlight';
 import { java } from '@codemirror/lang-java';
+import { linter, lintGutter, Diagnostic } from '@codemirror/lint';
 import { markdown } from '@codemirror/lang-markdown';
 import { javaCompletions } from './javaCompletions';
 import { formatJava, formatJavaLines } from './javaFormat';
+import { lintJava } from './javaLint';
 
 export interface CodeEditorHandle {
   focus: () => void;
@@ -27,7 +29,7 @@ interface CodeEditorProps {
   onRun?: (how: 'advance' | 'stay' | 'insert') => void; // Shift/Ctrl/Alt+Enter
   onEscape?: () => void;
   onFiles?: (files: File[]) => void; // pasted or dropped images (text cells)
-  errorLine?: number | null;
+  error?: ErrorPosition | null; // where the last run failed: the line, and the token when known
   readOnly?: boolean;
   autoFocus?: boolean;
   placeholder?: string;
@@ -36,22 +38,45 @@ interface CodeEditorProps {
 // Marks changes that came from outside (props), so they are not reported back as edits
 const external = Annotation.define<boolean>();
 
-// Red background on the line a compile or runtime error points at
-const setErrorLine = StateEffect.define<number | null>();
-const errorLineField = StateField.define<DecorationSet>({
+// stamp: anything that changes per run (ranAt), so the same line failing twice is highlighted again
+export interface ErrorPosition { line: number | null; column?: number | null; endLine?: number | null; endColumn?: number | null; stamp?: string }
+
+// Red background on the line a compile or runtime error points at, and a red underline under
+// the token when the compiler said which one (columns are 1-based, like the line)
+const setError = StateEffect.define<ErrorPosition | null>();
+const errorField = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(deco, tr) {
     for (const e of tr.effects) {
-      if (e.is(setErrorLine)) {
-        const line = e.value;
-        if (!line || line > tr.state.doc.lines) return Decoration.none;
-        return Decoration.set([Decoration.line({ class: 'cm-error-line' }).range(tr.state.doc.line(line).from)]);
+      if (e.is(setError)) {
+        const err = e.value;
+        const doc = tr.state.doc;
+        if (!err || !err.line || err.line > doc.lines) return Decoration.none;
+        const line = doc.line(err.line);
+        const marks = [Decoration.line({ class: 'cm-error-line' }).range(line.from)];
+        if (err.column) {
+          const from = Math.min(line.to, line.from + err.column - 1);
+          const endLine = err.endLine && err.endLine >= err.line && err.endLine <= doc.lines ? doc.line(err.endLine) : line;
+          let to = err.endColumn ? Math.min(endLine.to, endLine.from + err.endColumn - 1) : from + 1;
+          if (to <= from) to = Math.min(line.to, from + 1);
+          if (to > from) marks.push(Decoration.mark({ class: 'cm-error-mark' }).range(from, to));
+        }
+        return Decoration.set(marks, true);
       }
     }
     return tr.docChanged ? Decoration.none : deco.map(tr.changes);
   },
   provide: (f) => EditorView.decorations.from(f),
 });
+
+// Static checks (javaLint.ts): red for what javac would reject, yellow for what compiles and surprises
+const javaLinter = linter((view): Diagnostic[] => lintJava(view.state.doc.toString()).map((d) => ({
+  from: Math.min(d.from, view.state.doc.length),
+  to: Math.min(d.to, view.state.doc.length),
+  severity: d.severity,
+  message: d.message,
+  source: 'notebook',
+})), { delay: 400 });
 
 // ---------------------------------------------------------------------------
 // IntelliJ IDEA habits: Ctrl+Alt+L reformat, Ctrl+D duplicate, Ctrl+Y delete line, live templates
@@ -171,7 +196,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       EditorState.tabSize.of(4),
       syntaxHighlighting(classHighlighter),
       keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
-      errorLineField,
+      errorField,
       editable.current.of([EditorView.editable.of(!props.readOnly), EditorState.readOnly.of(Boolean(props.readOnly))]),
       EditorView.updateListener.of((u) => {
         if (u.docChanged && !u.transactions.some((t) => t.annotation(external))) latest.current.onChange(u.state.doc.toString());
@@ -197,7 +222,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       }),
     ];
     if (isJava) {
-      extensions.push(java(), lineNumbers(), highlightActiveLineGutter(), highlightActiveLine(), autocompletion({ override: [javaCompletions], icons: false }));
+      extensions.push(java(), lineNumbers(), highlightActiveLineGutter(), highlightActiveLine(), autocompletion({ override: [javaCompletions], icons: false }), javaLinter, lintGutter());
     } else {
       extensions.push(markdown(), EditorView.lineWrapping);
     }
@@ -217,9 +242,10 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     }
   }, [props.value]);
 
+  const err = props.error;
   useEffect(() => {
-    view.current?.dispatch({ effects: setErrorLine.of(props.errorLine || null) });
-  }, [props.errorLine]);
+    view.current?.dispatch({ effects: setError.of(err && err.line ? err : null) });
+  }, [err?.line, err?.column, err?.endLine, err?.endColumn, err?.stamp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     view.current?.dispatch({ effects: editable.current.reconfigure([EditorView.editable.of(!props.readOnly), EditorState.readOnly.of(Boolean(props.readOnly))]) });
