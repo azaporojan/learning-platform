@@ -1,18 +1,11 @@
 import React, { useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import TurndownService from 'turndown';
 import { apiUrl, getFileUrl } from '../config';
 import { PreWithTestCases } from './TestCases';
+import { toMarkdown } from './legacyHtml';
 
-// Older task descriptions were saved as HTML by the previous rich-text editor. They always start
-// with a block tag; Markdown that merely mentions a tag (`List<String>`) does not.
-export const isLegacyHtml = (value: string) => /^\s*<(p|h[1-6]|ul|ol|li|img|blockquote|pre|div|hr|br|strong|em|a)[\s>/]/i.test(value);
-
-const turndown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced', emDelimiter: '*' });
-
-// Text for the Markdown editor: legacy HTML is converted once, Markdown is kept as is.
-export const toMarkdown = (value: string) => (isLegacyHtml(value) ? turndown.turndown(value) : value);
+export { isLegacyHtml, toMarkdown } from './legacyHtml';
 
 const PROSE = 'prose dark:prose-invert max-w-none prose-th:bg-gray-100 dark:prose-th:bg-gray-800 prose-th:px-3 prose-td:px-3 prose-pre:bg-gray-900';
 
