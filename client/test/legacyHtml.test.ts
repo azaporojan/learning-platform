@@ -27,6 +27,11 @@ test('a pipe inside a cell is escaped and line breaks are joined', () => {
     '| x |\n| --- |\n| a \\| b c |');
 });
 
+test('empty cells keep their place in the row', () => {
+  assert.equal(htmlToMarkdown('<table><tr><th>Input</th><th></th></tr><tr><td>1</td><td></td></tr><tr><td>&nbsp;</td><td>2</td></tr></table>'),
+    '| Input |  |\n| --- | --- |\n| 1 |  |\n|  | 2 |');
+});
+
 test('a description that starts with a table is legacy HTML; Markdown is kept', () => {
   assert.equal(isLegacyHtml('<table><tr><td>1</td></tr></table>'), true);
   assert.equal(toMarkdown('Use `List<String>` here'), 'Use `List<String>` here');
