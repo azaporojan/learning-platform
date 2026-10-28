@@ -373,7 +373,7 @@ same JVM as the tests, so a determined student can forge a pass (SECURITY.md ite
 | `GET /api/tasks/:id/check` | — | Admin: `{enabled, tests, starter, timeout_s, auto_approve, runner_configured}`. Student: `{enabled, starter, timeout_s, auto_approve, test_files}` (never the tests) |
 | `PUT /api/tasks/:id/check` | `{tests, starter?, timeoutS?, autoApprove?, enabled?}` | Admin: set the hidden tests and the starter files students begin from |
 | `DELETE /api/tasks/:id/check` | — | Admin: the task is reviewed by hand again |
-| `POST /api/tasks/:id/check/try` | `{files, only?}` | Run the tests against `files` without saving. Students get no test stdout. `only: "BubbleSort"` runs just that class's hidden test files (`BubbleSortTest.java`, `BubbleSortTests.java` or `TestBubbleSort.java`, any package) and the result carries `only`; `400` when it has none. Submissions always run every test |
+| `POST /api/tasks/:id/check/try` | `{files, only?}` | Run the tests against `files` without saving. Students get no test stdout. `only: "BubbleSort"` runs just that class's hidden test files (`BubbleSortTest.java`, `BubbleSortTests.java` or `TestBubbleSort.java`, any package) and the result carries `only`; `400` when it has none or `only` is not a class name (`""` and `null` mean every test). Hidden files without tests of their own (helpers) always go along. Submissions always run every test |
 | `POST /api/tasks/:id/submit-code` | `{files, comment?}` | Student: submit; `201 {id, check: {status: "running"}}`, then a `submission:checked` socket event |
 | `GET /api/submissions/:id/check` | — | The newest check of a submission (its owner or an admin) |
 | `POST /api/submissions/:id/recheck` | — | Admin: check a code submission again, e.g. after fixing a test |

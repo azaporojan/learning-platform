@@ -30,6 +30,7 @@ test('a try can be limited to the hidden tests of one class', () => {
   assert.deepEqual(testsForClass(tests, 'Palindrome').map((x) => x.path), ['TestPalindrome.java', 'TestUtils.java']);
   assert.throws(() => testsForClass(tests, 'Binary'), (e) => e.status === 400 && /no hidden tests just for Binary/.test(e.message));
   assert.deepEqual(testsForClass([t('OrderTest.java', '@org.junit.jupiter.api.Test void x() {}'), t('CartTest.java')], 'Order').map((x) => x.path), ['OrderTest.java'], 'a fully qualified @Test counts');
+  assert.deepEqual(testsForClass([t('CartTest.java'), t('Fixtures.java', '/** Shared data for every @Test. */ class Fixtures {} // not a @Test')], 'Cart').map((x) => x.path), ['CartTest.java', 'Fixtures.java'], '@Test in comments does not make a test file');
   assert.throws(() => testsForClass(tests, 'Utils'), (e) => e.status === 400, 'a helper alone is not a class with tests');
   assert.throws(() => testsForClass(tests, '../x'), (e) => e.status === 400);
   assert.throws(() => testsForClass(tests, 42), (e) => e.status === 400);
