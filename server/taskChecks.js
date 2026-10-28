@@ -50,7 +50,7 @@ function normalizeFiles(list, name, { allowEmpty = false } = {}) {
 // TestBubbleSort.java, in any package. A try can run just these while the other classes are unfinished.
 // Hidden files without tests of their own (helpers, fixtures) always go along, so the scoped tests compile.
 const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-const HAS_TESTS = /@(Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate)\b/;
+const HAS_TESTS = /@(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*(Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate)\b/;
 function testsForClass(tests, className) {
   if (typeof className !== 'string' || !CLASS_NAME.test(className)) throw httpError(400, 'only must be a class name such as BubbleSort');
   const names = new Set([`${className}Test`, `${className}Tests`, `Test${className}`]);
