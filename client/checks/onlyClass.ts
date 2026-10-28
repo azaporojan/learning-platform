@@ -1,8 +1,9 @@
 // "Test BubbleSort only": the class whose hidden tests a try runs, from the open file
-// (shop/BubbleSort.java → BubbleSort). Test files and non-Java names give null.
+// (shop/BubbleSort.java → BubbleSort). Non-Java names give null; the server answers 400 for a
+// class without hidden tests of its own.
 export const classOfFile = (path: string | null | undefined): string | null => {
   const name = (path || '').split('/').pop()?.replace(/\.java$/, '') || '';
-  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) || /^Test|Tests?$/.test(name)) return null;
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return null;
   return name;
 };
 

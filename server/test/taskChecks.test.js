@@ -23,11 +23,13 @@ test('students never get the checker stdout', () => {
 });
 
 test('a try can be limited to the hidden tests of one class', () => {
-  const tests = ['BubbleSortTest.java', 'shop/CartTests.java', 'TestPalindrome.java', 'BinarySearchTest.java'].map((path) => ({ path, content: '' }));
-  assert.deepEqual(testsForClass(tests, 'BubbleSort').map((t) => t.path), ['BubbleSortTest.java']);
-  assert.deepEqual(testsForClass(tests, 'Cart').map((t) => t.path), ['shop/CartTests.java']);
-  assert.deepEqual(testsForClass(tests, 'Palindrome').map((t) => t.path), ['TestPalindrome.java']);
+  const t = (path, content = '@Test void x() {}') => ({ path, content });
+  const tests = [t('BubbleSortTest.java'), t('shop/CartTests.java'), t('TestPalindrome.java'), t('BinarySearchTest.java'), t('TestUtils.java', 'class TestUtils { static int[] of() { return null; } }')];
+  assert.deepEqual(testsForClass(tests, 'BubbleSort').map((x) => x.path), ['BubbleSortTest.java', 'TestUtils.java'], 'helpers without tests go along');
+  assert.deepEqual(testsForClass(tests, 'Cart').map((x) => x.path), ['shop/CartTests.java', 'TestUtils.java']);
+  assert.deepEqual(testsForClass(tests, 'Palindrome').map((x) => x.path), ['TestPalindrome.java', 'TestUtils.java']);
   assert.throws(() => testsForClass(tests, 'Binary'), (e) => e.status === 400 && /no hidden tests just for Binary/.test(e.message));
+  assert.throws(() => testsForClass(tests, 'Utils'), (e) => e.status === 400, 'a helper alone is not a class with tests');
   assert.throws(() => testsForClass(tests, '../x'), (e) => e.status === 400);
   assert.throws(() => testsForClass(tests, 42), (e) => e.status === 400);
 });
@@ -125,15 +127,32 @@ test('auto-checked tasks API', { timeout: 120000 }, async (t) => {
   assert.deepEqual(sent.json.tests, tests);
   assert.equal(sent.json.timeoutMs, 20000);
   assert.equal((await dbQuery('SELECT COUNT(*)::int AS n FROM task_submissions')).at(0).n, 0);
-  // Only one class: just its hidden test files go to the runner
-  const calcOnly = await stud(`/tasks/${taskId}/check/try`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: 'wrong' }], only: 'Calc' } });
-  assert.equal(calcOnly.status, 200, JSON.stringify(calcOnly.body));
-  assert.equal(calcOnly.body.only, 'Calc');
-  assert.deepEqual(runner.calls.filter((c) => c.url === '/check').at(-1).json.tests, tests);
+  // Only one class: just its hidden test files go to the runner; '' and null mean every test
+  const twoClasses = [
+    { path: 'shop/CalcTest.java', content: 'package shop; class CalcTest { @Test void adds() {} }' },
+    { path: 'shop/CartTest.java', content: 'package shop; class CartTest { @Test void x() {} }' },
+    { path: 'shop/TestUtils.java', content: 'package shop; class TestUtils { }' },
+  ];
+  assert.equal((await admin(`/tasks/${taskId}/check`, { method: 'PUT', json: { tests: twoClasses, starter, timeoutS: 20 } })).status, 200);
+  const lastSent = () => runner.calls.filter((c) => c.url === '/check').at(-1).json.tests.map((x) => x.path);
+  const cartOnly = await stud(`/tasks/${taskId}/check/try`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: 'wrong' }], only: 'Cart' } });
+  assert.equal(cartOnly.status, 200, JSON.stringify(cartOnly.body));
+  assert.equal(cartOnly.body.only, 'Cart');
+  assert.deepEqual(lastSent(), ['shop/CartTest.java', 'shop/TestUtils.java']);
+  const adminOnly = await admin(`/tasks/${taskId}/check/try`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: '// correct' }], only: 'Cart' } });
+  assert.equal(adminOnly.body.only, 'Cart');
+  assert.deepEqual(lastSent(), ['shop/CartTest.java', 'shop/TestUtils.java']);
+  for (const only of ['', null]) {
+    const all = await stud(`/tasks/${taskId}/check/try`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: 'wrong' }], only } });
+    assert.equal(all.status, 200);
+    assert.equal(all.body.only, undefined);
+    assert.deepEqual(lastSent(), twoClasses.map((x) => x.path));
+  }
   const calls = runner.calls.length;
-  const noTests = await stud(`/tasks/${taskId}/check/try`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: 'wrong' }], only: 'Cart' } });
+  const noTests = await stud(`/tasks/${taskId}/check/try`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: 'wrong' }], only: 'Order' } });
   assert.equal(noTests.status, 400);
   assert.equal(runner.calls.length, calls, 'nothing runs when the class has no hidden tests');
+  assert.equal((await admin(`/tasks/${taskId}/check`, { method: 'PUT', json: { tests, starter, timeoutS: 20 } })).status, 200);
   const adminTry = await admin(`/tasks/${taskId}/check/try`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: '// correct' }] } });
   assert.equal(adminTry.body.stdout, 'debug output');
 

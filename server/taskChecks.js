@@ -48,13 +48,16 @@ function normalizeFiles(list, name, { allowEmpty = false } = {}) {
 
 // The hidden test files for one class: BubbleSort → BubbleSortTest.java, BubbleSortTests.java or
 // TestBubbleSort.java, in any package. A try can run just these while the other classes are unfinished.
+// Hidden files without tests of their own (helpers, fixtures) always go along, so the scoped tests compile.
 const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const HAS_TESTS = /@(Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate)\b/;
 function testsForClass(tests, className) {
   if (typeof className !== 'string' || !CLASS_NAME.test(className)) throw httpError(400, 'only must be a class name such as BubbleSort');
   const names = new Set([`${className}Test`, `${className}Tests`, `Test${className}`]);
-  const scoped = tests.filter((t) => names.has(t.path.split('/').pop().replace(/\.java$/, '')));
-  if (scoped.length === 0) throw httpError(400, `There are no hidden tests just for ${className}. Check all your code instead.`, { code: 'no_tests_for_class' });
-  return scoped;
+  const hasTests = (t) => HAS_TESTS.test(t.content);
+  const isFor = (t) => hasTests(t) && names.has(t.path.split('/').pop().replace(/\.java$/, ''));
+  if (!tests.some(isFor)) throw httpError(400, `There are no hidden tests just for ${className}. Check all your code instead.`, { code: 'no_tests_for_class' });
+  return tests.filter((t) => isFor(t) || !hasTests(t));
 }
 
 // What a student may see of a check result (admins see everything)

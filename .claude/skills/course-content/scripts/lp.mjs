@@ -209,6 +209,7 @@ switch (cmd) {
   }
   case 'check-try': {
     const o = args.indexOf('--only');
+    if (o > 0 && !args[o + 1]) { console.error('--only needs a class name, e.g. --only BubbleSort'); process.exit(2); }
     const r = await call('POST', `/tasks/${args[0]}/check/try`, { files: javaFiles(args[1]), ...(o > 0 ? { only: args[o + 1] } : {}) });
     console.log(`${r.status}: ${r.summary}`);
     for (const f of (r.tests && r.tests.failed) || []) console.log(`  ✗ ${f.name}: ${f.message.split('\n')[0]}`);

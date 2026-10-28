@@ -6,8 +6,7 @@ import { classOfFile, groupFailures } from '../checks/onlyClass.ts';
 test('the class of the open file', () => {
   assert.equal(classOfFile('BubbleSort.java'), 'BubbleSort');
   assert.equal(classOfFile('shop/Cart.java'), 'Cart');
-  assert.equal(classOfFile('BubbleSortTest.java'), null);
-  assert.equal(classOfFile('TestCart.java'), null);
+  assert.equal(classOfFile('Testimonial.java'), 'Testimonial');
   assert.equal(classOfFile(null), null);
   assert.equal(classOfFile('my-file.java'), null);
 });
