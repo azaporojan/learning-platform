@@ -5,13 +5,15 @@ import { CodeFile } from './types';
 const SAFE_PATH = /^[A-Za-z0-9_$-]+(\/[A-Za-z0-9_$-]+)*\.java$/;
 
 // Several Java files as tabs over one editor. With allowStructure the user adds, renames and removes files.
+// onActivePath reports the path of the open tab.
 export const FileTabsEditor: React.FC<{
   files: CodeFile[];
   onChange?: (files: CodeFile[]) => void;
   readOnly?: boolean;
   allowStructure?: boolean;
   newFileName?: string;
-}> = ({ files, onChange, readOnly, allowStructure, newFileName = 'Main.java' }) => {
+  onActivePath?: (path: string | null) => void;
+}> = ({ files, onChange, readOnly, allowStructure, newFileName = 'Main.java', onActivePath }) => {
   const [active, setActive] = useState(0);
   const [renaming, setRenaming] = useState<number | null>(null);
   const [name, setName] = useState('');
@@ -39,6 +41,8 @@ export const FileTabsEditor: React.FC<{
   };
 
   const current = files[active];
+  const currentPath = current ? current.path : null;
+  useEffect(() => { onActivePath?.(currentPath); }, [currentPath]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden bg-white dark:bg-gray-800">
       <div className="flex items-center gap-1 overflow-x-auto bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 px-2 pt-2">

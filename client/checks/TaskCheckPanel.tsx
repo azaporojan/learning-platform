@@ -3,6 +3,7 @@ import { api } from '../notebooks/api';
 import { CodeFile, CheckResult, TaskCheckConfig } from './types';
 import { CheckResultView } from './CheckResult';
 import { FileTabsEditor } from './FileTabsEditor';
+import { classOfFile } from './onlyClass';
 
 const draftKey = (taskId: number) => `task-code-draft-${taskId}`;
 const readDraft = (taskId: number): CodeFile[] | null => {
@@ -19,6 +20,8 @@ const TaskCheckPanel: React.FC<{ taskId: number; lastFiles?: CodeFile[] | null; 
   const [busy, setBusy] = useState<'check' | 'submit' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [comment, setComment] = useState('');
+  const [openPath, setOpenPath] = useState<string | null>(null);
+  const openClass = classOfFile(openPath);
   const loaded = useRef(false);
   const resultRef = useRef<HTMLDivElement>(null);
 
@@ -44,9 +47,10 @@ const TaskCheckPanel: React.FC<{ taskId: number; lastFiles?: CodeFile[] | null; 
 
   const change = (next: CodeFile[]) => { setFiles(next); writeDraft(taskId, next); };
 
-  const check = async () => {
-    setBusy('check'); setError(null); setResult({ status: 'running', summary: 'Checking your code against the tests…', diagnostics: null, tests: null });
-    try { setResult(await api<CheckResult>(`/tasks/${taskId}/check/try`, { json: { files } })); }
+  // only: run just the hidden tests of that class, while the other classes are unfinished
+  const check = async (only?: string) => {
+    setBusy('check'); setError(null); setResult({ status: 'running', summary: only ? `Checking ${only} against its tests…` : 'Checking your code against the tests…', diagnostics: null, tests: null });
+    try { setResult(await api<CheckResult>(`/tasks/${taskId}/check/try`, { json: only ? { files, only } : { files } })); }
     catch (e) { setResult(null); setError((e as Error).message); }
     finally { setBusy(null); }
   };
@@ -77,10 +81,11 @@ const TaskCheckPanel: React.FC<{ taskId: number; lastFiles?: CodeFile[] | null; 
       </div>
       <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
         Hidden tests check your files. <strong>Check</strong> as often as you like: it only shows the result.
+        To check one class while the others are unfinished, open its file and press <strong>Check … only</strong>.
         <strong> Submit</strong> sends the code for review{config.auto_approve ? ', and it is approved automatically when every test passes' : ''}.
         Each check gets {config.timeout_s || 30} s.
       </p>
-      <FileTabsEditor files={files} onChange={change} allowStructure newFileName="Main.java" />
+      <FileTabsEditor files={files} onChange={change} allowStructure newFileName="Main.java" onActivePath={setOpenPath} />
       <textarea
         value={comment}
         onChange={(e) => setComment(e.target.value)}
@@ -90,9 +95,14 @@ const TaskCheckPanel: React.FC<{ taskId: number; lastFiles?: CodeFile[] | null; 
         className="w-full mt-3 p-3 rounded-xl border border-gray-200 dark:border-gray-700 text-sm focus:ring-2 focus:ring-primary outline-none resize-y bg-white dark:bg-gray-900 dark:text-gray-100"
       />
       <div className="flex flex-wrap items-center gap-2 mt-2">
-        <button type="button" onClick={check} disabled={busy !== null || files.length === 0} className="px-4 py-2 rounded-lg border-2 border-gray-200 dark:border-gray-700 font-bold text-gray-700 dark:text-gray-200 hover:border-primary-dark disabled:opacity-50 inline-flex items-center gap-1">
+        <button type="button" onClick={() => check()} disabled={busy !== null || files.length === 0} className="px-4 py-2 rounded-lg border-2 border-gray-200 dark:border-gray-700 font-bold text-gray-700 dark:text-gray-200 hover:border-primary-dark disabled:opacity-50 inline-flex items-center gap-1">
           <span aria-hidden="true" className={`material-icons text-[20px] ${busy === 'check' ? 'animate-spin' : ''}`}>{busy === 'check' ? 'refresh' : 'play_arrow'}</span>Check my code
         </button>
+        {openClass && files.length > 1 && (
+          <button type="button" onClick={() => check(openClass)} disabled={busy !== null} title={`Run only the hidden tests for ${openClass}`} className="px-4 py-2 rounded-lg border-2 border-gray-200 dark:border-gray-700 font-bold text-gray-700 dark:text-gray-200 hover:border-primary-dark disabled:opacity-50 inline-flex items-center gap-1">
+            <span aria-hidden="true" className="material-icons text-[20px]">filter_center_focus</span>Check <code className="font-mono">{openClass}</code> only
+          </button>
+        )}
         <button type="button" onClick={submit} disabled={busy !== null || files.length === 0} className="px-5 py-2 rounded-lg bg-primary font-bold text-gray-900 hover:bg-primary-dark hover:text-white disabled:opacity-50 inline-flex items-center gap-1 shadow">
           <span aria-hidden="true" className="material-icons text-[20px]">send</span>{busy === 'submit' ? 'Submitting…' : 'Submit code'}
         </button>

@@ -136,6 +136,8 @@ Hidden tests are JUnit 5 + AssertJ classes in the same package as the student's 
 - test behaviour the task text asks for, one rule per test; 3–10 tests per task;
 - name classes and method signatures **exactly as the task text says**, and repeat them in the task
   text: a mismatch shows as "Your code compiles, but the tests cannot use it";
+- one test class per student class, named `<Class>Test` (`BubbleSortTest` for `BubbleSort`): students
+  and the "Try with a solution" tab can then check one class on its own (`check-try … --only BubbleSort`);
 - give **starter files** with the class and method signatures and `// TODO` bodies for early weeks;
   later weeks can start from an empty file.
 

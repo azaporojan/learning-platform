@@ -1,5 +1,6 @@
 import React from 'react';
 import { CheckResult, CheckStatus } from './types';
+import { groupFailures } from './onlyClass';
 
 const tone: Record<CheckStatus, string> = {
   running: 'border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-900/30 text-sky-900 dark:text-sky-300',
@@ -29,16 +30,31 @@ export const CheckResultView: React.FC<{ result: CheckResult; compact?: boolean 
         <span className="ml-auto text-sm font-semibold tabular-nums">{result.tests.passed} / {result.tests.total}</span>
       )}
     </div>
-    {!compact && result.tests && result.tests.failed.length > 0 && (
-      <ul className="mt-2 space-y-2">
-        {result.tests.failed.map((f, i) => (
-          <li key={i} className="rounded-lg bg-white/70 dark:bg-gray-900/70 border border-rose-100 dark:border-rose-800 px-3 py-2">
-            <div className="font-mono text-xs font-bold text-rose-800 dark:text-rose-300">{f.name}</div>
-            <pre className="lp-output-text text-rose-900 dark:text-rose-300 mt-1">{f.message}</pre>
-          </li>
-        ))}
-      </ul>
+    {!compact && result.only && (
+      <p className="mt-1 text-xs font-semibold">Only the tests for <code>{result.only}</code> ran. Check all your code before you submit.</p>
     )}
+    {!compact && result.tests && result.tests.failed.length > 0 && (() => {
+      const groups = groupFailures(result.tests.failed);
+      return (
+        <div className="mt-2 space-y-3">
+          {groups.map(({ group, items }) => (
+            <div key={group || '-'}>
+              {groups.length > 1 && group && (
+                <div className="text-xs font-bold uppercase tracking-wide mb-1">{group} · {items.length} failed</div>
+              )}
+              <ul className="space-y-2">
+                {items.map((f, i) => (
+                  <li key={i} className="rounded-lg bg-white/70 dark:bg-gray-900/70 border border-rose-100 dark:border-rose-800 px-3 py-2">
+                    <div className="font-mono text-xs font-bold text-rose-800 dark:text-rose-300">{f.name}</div>
+                    <pre className="lp-output-text text-rose-900 dark:text-rose-300 mt-1">{f.message}</pre>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      );
+    })()}
     {!compact && result.diagnostics && result.diagnostics.length > 0 && (
       <ul className="mt-2 space-y-2">
         {result.diagnostics.map((d, i) => (

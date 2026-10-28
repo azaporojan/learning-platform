@@ -18,7 +18,7 @@
 //   node lp.mjs check-get <taskId>              a task's auto-check (hidden tests, starter, limits)
 //   node lp.mjs check-put <taskId> <testsDir> [--starter dir] [--timeout s] [--auto] [--off]
 //                                               set the hidden JUnit tests (.java files under package folders)
-//   node lp.mjs check-try <taskId> <solutionDir> run the hidden tests against a solution, print the result
+//   node lp.mjs check-try <taskId> <solutionDir> [--only Class]  run the hidden tests (or one class's) against a solution
 //
 // Env: LEARNING_API_KEY (required), LEARNING_API_URL (default https://learning.bsf.md/api).
 // Node's fetch passes the site's Cloudflare check; Python's urllib does not (error 1010), so use
@@ -208,8 +208,10 @@ switch (cmd) {
     break;
   }
   case 'check-try': {
-    const r = await call('POST', `/tasks/${args[0]}/check/try`, { files: javaFiles(args[1]) });
-    console.log(`${r.status}: ${r.summary}`);
+    const o = args.indexOf('--only');
+    if (o > 0 && !args[o + 1]) { console.error('--only needs a class name, e.g. --only BubbleSort'); process.exit(2); }
+    const r = await call('POST', `/tasks/${args[0]}/check/try`, { files: javaFiles(args[1]), ...(o > 0 ? { only: args[o + 1] } : {}) });
+    console.log(`${r.status}: ${r.summary}${r.only ? ` (only the ${r.only} tests ran)` : ''}`);
     for (const f of (r.tests && r.tests.failed) || []) console.log(`  ✗ ${f.name}: ${f.message.split('\n')[0]}`);
     for (const d of r.diagnostics || []) console.log(`  ${d.file || 'compiler'}${d.line ? ':' + d.line : ''}: ${d.message.split('\n')[0]}`);
     if (r.status !== 'passed') process.exitCode = 1;

@@ -4,6 +4,7 @@ import { Modal } from '../notebooks/Modal';
 import { CodeFile, CheckResult, TaskCheckConfig } from './types';
 import { CheckResultView } from './CheckResult';
 import { FileTabsEditor } from './FileTabsEditor';
+import { classOfFile } from './onlyClass';
 
 const TEST_TEMPLATE: CodeFile = {
   path: 'shop/CalculatorTest.java',
@@ -40,6 +41,8 @@ const TaskCheckSetup: React.FC<{ taskId: number }> = ({ taskId }) => {
   const [result, setResult] = useState<CheckResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [solutionPath, setSolutionPath] = useState<string | null>(null);
+  const solutionClass = classOfFile(solutionPath);
 
   const load = () => api<TaskCheckConfig>(`/tasks/${taskId}/check`).then(setConfig).catch(() => setConfig({ enabled: false, configured: false }));
   useEffect(() => { load(); }, [taskId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -63,10 +66,11 @@ const TaskCheckSetup: React.FC<{ taskId: number }> = ({ taskId }) => {
     finally { setBusy(false); }
   };
 
-  const tryTests = async () => {
+  // only: run just the hidden tests of that class (the one in the open tab)
+  const tryTests = async (only?: string) => {
     if (!(await save())) return;
-    setBusy(true); setResult({ status: 'running', summary: 'Running the tests against your solution…', diagnostics: null, tests: null });
-    try { setResult(await api<CheckResult>(`/tasks/${taskId}/check/try`, { json: { files: solution } })); }
+    setBusy(true); setResult({ status: 'running', summary: only ? `Running the ${only} tests against your solution…` : 'Running the tests against your solution…', diagnostics: null, tests: null });
+    try { setResult(await api<CheckResult>(`/tasks/${taskId}/check/try`, { json: only ? { files: solution, only } : { files: solution } })); }
     catch (e) { setResult(null); setError((e as Error).message); }
     finally { setBusy(false); }
   };
@@ -114,10 +118,17 @@ const TaskCheckSetup: React.FC<{ taskId: number }> = ({ taskId }) => {
             {tab === 'solution' && (
               <>
                 <p className="text-xs text-gray-500 dark:text-gray-400">Paste a reference solution and run the hidden tests against it. Nothing here is saved or shown to students.</p>
-                <FileTabsEditor files={solution} onChange={setSolution} allowStructure newFileName="Main.java" />
-                <button type="button" onClick={tryTests} disabled={busy} className="px-4 py-2 rounded-lg bg-gray-900 text-white font-bold hover:bg-gray-700 disabled:opacity-50 inline-flex items-center gap-1">
-                  <span aria-hidden="true" className="material-icons text-[20px]">play_arrow</span>Save and run the tests
-                </button>
+                <FileTabsEditor files={solution} onChange={setSolution} allowStructure newFileName="Main.java" onActivePath={setSolutionPath} />
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => tryTests()} disabled={busy} className="px-4 py-2 rounded-lg bg-gray-900 text-white font-bold hover:bg-gray-700 disabled:opacity-50 inline-flex items-center gap-1">
+                    <span aria-hidden="true" className="material-icons text-[20px]">play_arrow</span>Save and run the tests
+                  </button>
+                  {solutionClass && solution.length > 1 && (
+                    <button type="button" onClick={() => tryTests(solutionClass)} disabled={busy} title={`Run only the hidden tests for ${solutionClass}`} className="px-4 py-2 rounded-lg border-2 border-gray-200 dark:border-gray-700 font-bold text-gray-700 dark:text-gray-200 hover:border-primary-dark disabled:opacity-50 inline-flex items-center gap-1">
+                      <span aria-hidden="true" className="material-icons text-[20px]">filter_center_focus</span>Run <code className="font-mono">{solutionClass}</code> tests only
+                    </button>
+                  )}
+                </div>
                 {result && <CheckResultView result={result} />}
               </>
             )}
