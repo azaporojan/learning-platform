@@ -211,7 +211,7 @@ switch (cmd) {
     const o = args.indexOf('--only');
     if (o > 0 && !args[o + 1]) { console.error('--only needs a class name, e.g. --only BubbleSort'); process.exit(2); }
     const r = await call('POST', `/tasks/${args[0]}/check/try`, { files: javaFiles(args[1]), ...(o > 0 ? { only: args[o + 1] } : {}) });
-    console.log(`${r.status}: ${r.summary}`);
+    console.log(`${r.status}: ${r.summary}${r.only ? ` (only the ${r.only} tests ran)` : ''}`);
     for (const f of (r.tests && r.tests.failed) || []) console.log(`  ✗ ${f.name}: ${f.message.split('\n')[0]}`);
     for (const d of r.diagnostics || []) console.log(`  ${d.file || 'compiler'}${d.line ? ':' + d.line : ''}: ${d.message.split('\n')[0]}`);
     if (r.status !== 'passed') process.exitCode = 1;

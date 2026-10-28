@@ -49,6 +49,8 @@ function normalizeFiles(list, name, { allowEmpty = false } = {}) {
 // The hidden test files for one class: BubbleSort → BubbleSortTest.java, BubbleSortTests.java or
 // TestBubbleSort.java, in any package. A try can run just these while the other classes are unfinished.
 // Hidden files without tests of their own (helpers, fixtures) always go along, so the scoped tests compile.
+// "Has tests" is a text match on the annotations (a commented-out @Test counts too): a heuristic that
+// holds for the course's one-test-class-per-class layout. Submissions always run every hidden file.
 const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const HAS_TESTS = /@(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*(Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate)\b/;
 function testsForClass(tests, className) {

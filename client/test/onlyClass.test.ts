@@ -14,7 +14,7 @@ test('the class of the open file', () => {
 test('failures are grouped by test class in the order they came', () => {
   const groups = groupFailures([
     { name: 'BinarySearchTest: finds 1', message: '' },
-    { name: 'CountVowelsTest.java', message: '' },
+    { name: 'CountVowelsTest.countsY', message: '' }, // runner/kernel Kernel.nameOf: Class.method or Class: display name
     { name: 'BinarySearchTest: finds 9', message: '' },
     { name: 'did not finish', message: '' },
   ]);
