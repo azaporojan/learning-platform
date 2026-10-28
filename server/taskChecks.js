@@ -7,8 +7,9 @@
 //   GET    /tasks/:id/check              admin: full config; student: what they need (no tests)
 //   PUT    /tasks/:id/check              admin: {tests: [{path, content}], starter?, timeoutS?, autoApprove?, enabled?}
 //   DELETE /tasks/:id/check              admin
-//   POST   /tasks/:id/check/try          {files: [{path, content}]} → result now (not saved). Admins may
-//                                        try a disabled check (to test the tests).
+//   POST   /tasks/:id/check/try          {files: [{path, content}], only?} → result now (not saved). Admins may
+//                                        try a disabled check (to test the tests). `only: "BubbleSort"`
+//                                        runs just that class's hidden tests (BubbleSortTest.java).
 //   POST   /tasks/:id/submit-code        student: {files, comment?} → 201 {id, check: {status: "running"}}
 //   GET    /submissions/:id/check        owner or admin: the newest check of a submission
 //   POST   /submissions/:id/recheck      admin: run the hidden tests again on the same files
@@ -45,6 +46,17 @@ function normalizeFiles(list, name, { allowEmpty = false } = {}) {
   });
 }
 
+// The hidden test files for one class: BubbleSort → BubbleSortTest.java, BubbleSortTests.java or
+// TestBubbleSort.java, in any package. A try can run just these while the other classes are unfinished.
+const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+function testsForClass(tests, className) {
+  if (typeof className !== 'string' || !CLASS_NAME.test(className)) throw httpError(400, 'only must be a class name such as BubbleSort');
+  const names = new Set([`${className}Test`, `${className}Tests`, `Test${className}`]);
+  const scoped = tests.filter((t) => names.has(t.path.split('/').pop().replace(/\.java$/, '')));
+  if (scoped.length === 0) throw httpError(400, `There are no hidden tests just for ${className}. Check all your code instead.`, { code: 'no_tests_for_class' });
+  return scoped;
+}
+
 // What a student may see of a check result (admins see everything)
 function studentView(result) {
   if (!result) return null;
@@ -54,6 +66,7 @@ function studentView(result) {
     diagnostics: result.diagnostics || null,
     tests: result.tests || null,
     durationMs: result.durationMs || 0,
+    ...(result.only ? { only: result.only } : {}),
   };
 }
 
@@ -179,7 +192,8 @@ function registerTaskCheckRoutes({ api, db, io, emitToUser, authenticateToken, r
   api.post('/tasks/:id/check/try', authenticateToken, async (req, res) => {
     let admitted = false;
     try {
-      const files = normalizeFiles((req.body || {}).files, 'files');
+      const { files: rawFiles, only } = req.body || {};
+      const files = normalizeFiles(rawFiles, 'files');
       const check = await loadCheck(req.params.id);
       if (!isAdmin(req)) {
         await studentGate(req, req.params.id);
@@ -187,9 +201,11 @@ function registerTaskCheckRoutes({ api, db, io, emitToUser, authenticateToken, r
       } else if (!check || check.tests.length === 0) {
         throw httpError(400, 'Save some hidden tests first');
       }
+      const scoped = only === undefined || only === null || only === '' ? null : testsForClass(check.tests, only);
       admitTry(req.user.id);
       admitted = true;
-      const result = await runner.check(files, check.tests, check.timeout_s * 1000);
+      const result = await runner.check(files, scoped || check.tests, check.timeout_s * 1000);
+      if (scoped) result.only = only;
       res.json(isAdmin(req) ? result : studentView(result));
     } catch (err) {
       fail(res, err, 'POST /tasks/:id/check/try');
@@ -382,4 +398,4 @@ const LATEST_CHECK_JOIN = `LEFT JOIN LATERAL (
     FROM submission_checks sc WHERE sc.submission_id = s.id ORDER BY sc.id DESC LIMIT 1
 ) chk ON TRUE`;
 
-module.exports = { registerTaskCheckRoutes, normalizeFiles, studentView, LATEST_CHECK_JOIN };
+module.exports = { registerTaskCheckRoutes, normalizeFiles, studentView, testsForClass, LATEST_CHECK_JOIN };

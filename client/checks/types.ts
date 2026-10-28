@@ -9,6 +9,7 @@ export interface CheckResult {
   diagnostics: { file: string | null; line: number | null; message: string }[] | null;
   tests: { total: number; passed: number; failed: { name: string; message: string }[] } | null;
   durationMs?: number;
+  only?: string; // the class a try was limited to
   stdout?: string; // admins only
 }
 

@@ -6,7 +6,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { normalizeFiles, studentView } = require('../taskChecks');
+const { normalizeFiles, studentView, testsForClass } = require('../taskChecks');
 const { dbReachable, resetDb, dbQuery, startServer, waitForHealth, session, loginHelpers } = require('./support/server');
 
 test('files are validated', () => {
@@ -20,6 +20,20 @@ test('files are validated', () => {
 test('students never get the checker stdout', () => {
   assert.deepEqual(Object.keys(studentView({ status: 'failed', summary: 's', tests: {}, stdout: 'secret', diagnostics: null, durationMs: 3 })).sort(),
     ['diagnostics', 'durationMs', 'status', 'summary', 'tests']);
+});
+
+test('a try can be limited to the hidden tests of one class', () => {
+  const tests = ['BubbleSortTest.java', 'shop/CartTests.java', 'TestPalindrome.java', 'BinarySearchTest.java'].map((path) => ({ path, content: '' }));
+  assert.deepEqual(testsForClass(tests, 'BubbleSort').map((t) => t.path), ['BubbleSortTest.java']);
+  assert.deepEqual(testsForClass(tests, 'Cart').map((t) => t.path), ['shop/CartTests.java']);
+  assert.deepEqual(testsForClass(tests, 'Palindrome').map((t) => t.path), ['TestPalindrome.java']);
+  assert.throws(() => testsForClass(tests, 'Binary'), (e) => e.status === 400 && /no hidden tests just for Binary/.test(e.message));
+  assert.throws(() => testsForClass(tests, '../x'), (e) => e.status === 400);
+  assert.throws(() => testsForClass(tests, 42), (e) => e.status === 400);
+});
+
+test('studentView keeps which class a try was limited to', () => {
+  assert.equal(studentView({ status: 'passed', summary: 's', tests: {}, only: 'BubbleSort' }).only, 'BubbleSort');
 });
 
 // The fake runner: passes when every student file contains "// correct", fails otherwise
@@ -111,6 +125,15 @@ test('auto-checked tasks API', { timeout: 120000 }, async (t) => {
   assert.deepEqual(sent.json.tests, tests);
   assert.equal(sent.json.timeoutMs, 20000);
   assert.equal((await dbQuery('SELECT COUNT(*)::int AS n FROM task_submissions')).at(0).n, 0);
+  // Only one class: just its hidden test files go to the runner
+  const calcOnly = await stud(`/tasks/${taskId}/check/try`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: 'wrong' }], only: 'Calc' } });
+  assert.equal(calcOnly.status, 200, JSON.stringify(calcOnly.body));
+  assert.equal(calcOnly.body.only, 'Calc');
+  assert.deepEqual(runner.calls.filter((c) => c.url === '/check').at(-1).json.tests, tests);
+  const calls = runner.calls.length;
+  const noTests = await stud(`/tasks/${taskId}/check/try`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: 'wrong' }], only: 'Cart' } });
+  assert.equal(noTests.status, 400);
+  assert.equal(runner.calls.length, calls, 'nothing runs when the class has no hidden tests');
   const adminTry = await admin(`/tasks/${taskId}/check/try`, { method: 'POST', json: { files: [{ path: 'shop/Calc.java', content: '// correct' }] } });
   assert.equal(adminTry.body.stdout, 'debug output');
 
