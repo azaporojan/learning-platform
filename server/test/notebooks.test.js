@@ -308,6 +308,8 @@ test('notebooks API', { timeout: 120000 }, async (t) => {
   assert.equal(sScratch.body.output.value, 'y + 1');
   assert.equal(sScratch.body.output.executionCount, 3);
   assert.deepEqual((await admin(`/notebooks/${nb.id}`)).body.outputs, storedBefore, 'a scratch session run leaves the stored outputs alone');
+  const sAfter = await admin(`/notebooks/${nb.id}/session/run`, { method: 'POST', json: { cellId: 'c2', source: 'y' } });
+  assert.equal(sAfter.body.output.executionCount, 3, 'a scratch session run does not move the counter');
   const status = await admin('/notebooks/session');
   assert.equal(status.body.active, true);
   assert.equal(status.body.notebookId, nb.id);

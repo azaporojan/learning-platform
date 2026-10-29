@@ -125,7 +125,11 @@ export const PresentMode: React.FC<PresentModeProps> = ({ title, cells, outputs,
                   <CodeEditor
                     value={c.id in drafts ? drafts[c.id] : c.source}
                     language="java"
-                    onChange={(v) => setDrafts((d) => withDraft(d, c, v))}
+                    onChange={(v) => {
+                      setDrafts((d) => withDraft(d, c, v));
+                      // Typing the saved text back is a reset: the same scratch outputs go
+                      if (v === c.source) setScratchOutputs((o) => dropScratchFrom(o, cells, c.id));
+                    }}
                     onRun={canRun ? () => run(c.id) : undefined}
                     onEscape={() => root.current?.focus()}
                     errorLine={outputOf(c.id)?.error?.line ?? null}
