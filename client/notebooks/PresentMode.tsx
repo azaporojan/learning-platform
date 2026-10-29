@@ -25,8 +25,9 @@ interface PresentModeProps {
   runningIds: Set<string>;
   canRun: boolean;
   startAt?: string | null; // cell id to open on
-  // `scratch` is the cells with the presenter's unsaved edits applied, when there are any
-  onRun: (cellId: string, scratch?: Cell[]) => void;
+  // `scratch` is the cells with the presenter's unsaved edits applied, when there are any. Such a
+  // run is not stored anywhere: its outputs come back here instead of joining the notebook's.
+  onRun: (cellId: string, scratch?: Cell[]) => Promise<Record<string, CellOutput> | undefined>;
   onClose: () => void;
 }
 
@@ -36,17 +37,24 @@ export const PresentMode: React.FC<PresentModeProps> = ({ title, cells, outputs,
   const [index, setIndex] = useState(initial);
   const root = useRef<HTMLDivElement>(null);
   const slide = slides[Math.min(index, slides.length - 1)] || [];
-  // Code cells can be edited on the spot to expand an example. The edits live here, in memory,
-  // for as long as the presentation is open: they are run but never saved to the notebook.
+  // Code cells can be edited on the spot to expand an example. The edits, and the outputs of
+  // running them, live here in memory for as long as the presentation is open and are never
+  // saved to the notebook; closing the presentation drops them.
   const [drafts, setDrafts] = useState<Drafts>({});
+  const [scratchOutputs, setScratchOutputs] = useState<Record<string, CellOutput>>({});
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
   const edited = Object.keys(drafts).length > 0;
-  const run = (cellId: string) => {
+  const run = async (cellId: string) => {
     const d = draftsRef.current;
-    onRun(cellId, Object.keys(d).length ? applyDrafts(cells, d) : undefined);
+    if (!Object.keys(d).length) { await onRun(cellId); return; }
+    const fresh = await onRun(cellId, applyDrafts(cells, d));
+    if (fresh) setScratchOutputs((prev) => ({ ...prev, ...fresh }));
   };
-  const resetDraft = (cellId: string) => setDrafts((d) => { const next = { ...d }; delete next[cellId]; return next; });
+  const without = <T,>(map: Record<string, T>, key: string) => { const next = { ...map }; delete next[key]; return next; };
+  const resetDraft = (cellId: string) => { setDrafts((d) => without(d, cellId)); setScratchOutputs((o) => without(o, cellId)); };
+  const resetAll = () => { setDrafts({}); setScratchOutputs({}); };
+  const outputOf = (cellId: string): CellOutput | undefined => scratchOutputs[cellId] || outputs[cellId];
 
   useEffect(() => {
     const el = root.current;
@@ -79,7 +87,7 @@ export const PresentMode: React.FC<PresentModeProps> = ({ title, cells, outputs,
           {edited && (
             <span className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
               <span className="font-semibold">Edited here, not saved</span>
-              <button type="button" onClick={() => setDrafts({})} className="px-2 py-0.5 rounded-lg border border-amber-300 dark:border-amber-700 hover:bg-amber-50 dark:hover:bg-amber-900/30 font-semibold">Reset all</button>
+              <button type="button" onClick={resetAll} className="px-2 py-0.5 rounded-lg border border-amber-300 dark:border-amber-700 hover:bg-amber-50 dark:hover:bg-amber-900/30 font-semibold">Reset all</button>
             </span>
           )}
           <span className="tabular-nums">{index + 1} / {slides.length}</span>
@@ -111,7 +119,7 @@ export const PresentMode: React.FC<PresentModeProps> = ({ title, cells, outputs,
                     onChange={(v) => setDrafts((d) => withDraft(d, c, v))}
                     onRun={canRun ? () => run(c.id) : undefined}
                     onEscape={() => root.current?.focus()}
-                    errorLine={outputs[c.id]?.error?.line ?? null}
+                    errorLine={outputOf(c.id)?.error?.line ?? null}
                   />
                 </div>
               </div>
@@ -121,7 +129,7 @@ export const PresentMode: React.FC<PresentModeProps> = ({ title, cells, outputs,
                   <button type="button" onClick={() => resetDraft(c.id)} className="font-semibold underline hover:no-underline">Reset</button>
                 </div>
               )}
-              {outputs[c.id] && <div className={`lp-output-box ml-[3.25rem] rounded-xl border border-gray-100 dark:border-gray-800 text-base ${darculaClass(codeTheme)}`}><CellOutputView output={outputs[c.id]} /></div>}
+              {outputOf(c.id) && <div className={`lp-output-box ml-[3.25rem] rounded-xl border border-gray-100 dark:border-gray-800 text-base ${darculaClass(codeTheme)}`}><CellOutputView output={outputOf(c.id)!} /></div>}
             </div>
           )))}
         </div>

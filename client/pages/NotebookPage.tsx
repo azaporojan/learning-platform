@@ -360,12 +360,13 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
   }, []);
 
   const runningRef = useRef(false);
-  // `scratch` (present mode) runs an edited copy of the cells instead of the saved ones; the
-  // notebook itself is not touched, only the outputs are stored as for any run
-  const runCell = useCallback(async (cellId: string, how: 'advance' | 'stay' | 'insert', scratch?: Cell[]) => {
-    if (!nb) return;
+  // `scratch` (present mode) runs an edited copy of the cells instead of the saved ones. Nothing
+  // of such a run is stored: the server keeps neither the cells nor the outputs, and the outputs
+  // are handed back to the caller instead of being merged into the notebook's.
+  const runCell = useCallback(async (cellId: string, how: 'advance' | 'stay' | 'insert', scratch?: Cell[]): Promise<Record<string, CellOutput> | undefined> => {
+    if (!nb) return undefined;
     const i = indexOf(cellId);
-    if (i === -1) return;
+    if (i === -1) return undefined;
     const runCells = scratch || cellsRef.current;
     const cell = runCells.find((c) => c.id === cellId) || cellsRef.current[i];
     // Move on first, like Jupyter: the result arrives while you keep working
@@ -375,9 +376,9 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
       else if (nb.can_edit) addCell(i + 1, 'code');
     }
     if (how === 'insert' && nb.can_edit) addCell(i + 1, 'code');
-    if (cell.kind === 'text') { if (editingId === cellId) setEditingId(null); return; }
-    if (!nb.can_run) return;
-    if (runningRef.current) { showToast({ text: 'A run is still going. Wait for it to finish.' }, 2500); return; }
+    if (cell.kind === 'text') { if (editingId === cellId) setEditingId(null); return undefined; }
+    if (!nb.can_run) return undefined;
+    if (runningRef.current) { showToast({ text: 'A run is still going. Wait for it to finish.' }, 2500); return undefined; }
     runningRef.current = true;
 
     const requestId = newRequestId();
@@ -395,16 +396,19 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
     };
     if (!liveSession) poll();
     try {
+      let fresh: Record<string, CellOutput>;
       if (liveSession) {
-        const r = await api<{ output: CellOutput; sessionEnded: boolean; sessionRestarted: boolean }>(`/notebooks/${nb.id}/session/run`, { json: { cellId, source: cell.source, input: cell.input || '' } });
-        applyOutputs({ [cellId]: r.output });
+        const r = await api<{ output: CellOutput; sessionEnded: boolean; sessionRestarted: boolean }>(`/notebooks/${nb.id}/session/run`, { json: { cellId, source: cell.source, input: cell.input || '', scratch: Boolean(scratch) } });
+        fresh = { [cellId]: r.output };
         if (r.sessionEnded) showToast({ text: 'The live session ended (timeout or crash). The next run starts a fresh one.' });
         else if (r.sessionRestarted) showToast({ text: 'Started a fresh live session: earlier variables are gone.' }, 3500);
       } else {
-        const r = await api<{ outputs: Record<string, CellOutput> }>(`/notebooks/${nb.id}/run`, { json: { cells: runCells, upTo: cellId, requestId } });
-        applyOutputs(r.outputs);
+        const r = await api<{ outputs: Record<string, CellOutput> }>(`/notebooks/${nb.id}/run`, { json: { cells: runCells, upTo: cellId, requestId, scratch: Boolean(scratch) } });
+        fresh = r.outputs;
       }
       setRunnerNotice(null);
+      if (scratch) return fresh;
+      applyOutputs(fresh);
     } catch (e) {
       const err = e as ApiError;
       const code = err.data && err.data.code;
@@ -416,6 +420,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
       setRunningIds(new Set());
       setQueuedAhead(0);
     }
+    return undefined;
   }, [nb, liveSession, editingId, addCell, applyOutputs, showToast]);
 
   const clearOutput = useCallback(async (cellId: string) => {

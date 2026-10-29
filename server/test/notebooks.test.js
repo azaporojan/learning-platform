@@ -265,6 +265,21 @@ test('notebooks API', { timeout: 120000 }, async (t) => {
   assert.ok(cleared.body.outputs.c1);
   assert.equal(cleared.body.revision, reread.body.revision, 'clearing outputs does not bump the revision');
 
+  // A scratch run (present mode, cells edited on the spot) answers with outputs but stores nothing
+  const beforeScratch = await stud(`/notebooks/${copy.body.id}/run`, { method: 'POST', json: { upTo: 'c1' } });
+  const kBefore = beforeScratch.body.outputs.c1.executionCount;
+  const nbSaved = (await stud(`/notebooks/${copy.body.id}`)).body;
+  const scratchCells = nbSaved.cells.map((c) => (c.id === 'c1' ? { ...c, source: 'x + 100' } : c));
+  const scratch = await stud(`/notebooks/${copy.body.id}/run`, { method: 'POST', json: { cells: scratchCells, upTo: 'c2', scratch: true } });
+  assert.equal(scratch.status, 200, JSON.stringify(scratch.body));
+  assert.equal(scratch.body.outputs.c1.value, 'x + 100');
+  assert.deepEqual([scratch.body.outputs.c1.executionCount, scratch.body.outputs.c2.executionCount], [kBefore + 1, kBefore + 2], 'numbered after the nbSaved runs');
+  const afterScratch = (await stud(`/notebooks/${copy.body.id}`)).body;
+  assert.deepEqual(afterScratch.outputs, nbSaved.outputs, 'a scratch run leaves the nbSaved outputs alone');
+  assert.deepEqual(afterScratch.cells, nbSaved.cells, 'a scratch run leaves the cells alone');
+  const afterwards = await stud(`/notebooks/${copy.body.id}/run`, { method: 'POST', json: { upTo: 'c1' } });
+  assert.equal(afterwards.body.outputs.c1.executionCount, kBefore + 1, 'a scratch run does not move the counter');
+
   // The teacher sees the copy, read-only, and the original lists it
   const copies = await admin(`/notebooks/${nb.id}/copies`);
   assert.deepEqual(copies.body.map((c) => c.id), [copy.body.id]);
@@ -283,6 +298,12 @@ test('notebooks API', { timeout: 120000 }, async (t) => {
   assert.equal(s1.status, 200, JSON.stringify(s1.body));
   const s2 = await admin(`/notebooks/${nb.id}/session/run`, { method: 'POST', json: { cellId: 'c2', source: 'y' } });
   assert.equal(s2.body.output.executionCount, 2);
+  // A scratch run in the live session: answered, numbered next, but not stored
+  const storedBefore = (await admin(`/notebooks/${nb.id}`)).body.outputs;
+  const sScratch = await admin(`/notebooks/${nb.id}/session/run`, { method: 'POST', json: { cellId: 'c2', source: 'y + 1', scratch: true } });
+  assert.equal(sScratch.body.output.value, 'y + 1');
+  assert.equal(sScratch.body.output.executionCount, 3);
+  assert.deepEqual((await admin(`/notebooks/${nb.id}`)).body.outputs, storedBefore, 'a scratch session run leaves the stored outputs alone');
   const status = await admin('/notebooks/session');
   assert.equal(status.body.active, true);
   assert.equal(status.body.notebookId, nb.id);
