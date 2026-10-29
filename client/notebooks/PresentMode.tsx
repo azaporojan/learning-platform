@@ -45,17 +45,21 @@ export const PresentMode: React.FC<PresentModeProps> = ({ title, cells, outputs,
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
   const edited = Object.keys(drafts).length > 0;
+  // A reset while a scratch run is in flight makes that run's result stale: it is dropped
+  const generation = useRef(0);
   const run = async (cellId: string) => {
     const d = draftsRef.current;
     if (!Object.keys(d).length) { await onRun(cellId); return; }
+    const started = generation.current;
     const fresh = await onRun(cellId, applyDrafts(cells, d));
-    if (fresh) setScratchOutputs((prev) => ({ ...prev, ...fresh }));
+    if (fresh && generation.current === started) setScratchOutputs((prev) => ({ ...prev, ...fresh }));
   };
   const resetDraft = (cellId: string) => {
+    generation.current += 1;
     setDrafts((d) => { const next = { ...d }; delete next[cellId]; return next; });
     setScratchOutputs((o) => dropScratchFrom(o, cells, cellId));
   };
-  const resetAll = () => { setDrafts({}); setScratchOutputs({}); };
+  const resetAll = () => { generation.current += 1; setDrafts({}); setScratchOutputs({}); };
   // Scratch outputs only make sense next to the edits that produced them: once the last draft is
   // gone (reset, or typed back to the saved text) the saved outputs show again
   useEffect(() => { if (!edited) setScratchOutputs({}); }, [edited]);
