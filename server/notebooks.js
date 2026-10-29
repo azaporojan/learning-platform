@@ -630,6 +630,12 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
     );
   }
 
+  // The execution counter as it stands, for a scratch run that must not move it
+  async function currentCount(notebookId) {
+    const [rows] = await db.query("SELECT COALESCE((outputs->>'$count')::int, 0) AS count FROM notebooks WHERE id = ?", [notebookId]);
+    return rows[0] ? rows[0].count : 0;
+  }
+
   async function nextCount(notebookId, by) {
     const [rows] = await db.query(
       // '$count' is a literal JSON key; db.js only rewrites '?' placeholders
@@ -646,6 +652,9 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       const r = await load(req, res, 'run');
       if (!r) return;
       const b = req.body || {};
+      // scratch: a present-mode run of cells edited on the spot; the outputs are returned but
+      // neither stored on the notebook nor counted, so the saved cells keep their own outputs
+      const scratch = b.scratch === true;
       const cells = normalizeCells(b.cells === undefined ? r.row.cells : b.cells);
       const upTo = b.upTo === undefined || b.upTo === null ? cells.length - 1 : cells.findIndex((c) => c.id === b.upTo);
       if (upTo < 0) throw httpError(400, 'upTo must be the id of a cell in the notebook');
@@ -663,15 +672,14 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
           [req.user.id, r.row.id, 'run', code.length, result ? result.status : 'failed', Date.now() - started]).catch(() => {});
       }
       const ran = result.cells.filter((c) => c.status !== 'not_run').length;
-      const last = await nextCount(r.row.id, ran);
-      let n = last - ran;
+      let n = scratch ? await currentCount(r.row.id) : (await nextCount(r.row.id, ran)) - ran;
       const outputs = {};
       result.cells.forEach((c, i) => {
         if (c.status !== 'not_run') n += 1;
         outputs[code[i].id] = storedOutput(c, n);
       });
-      await saveOutputs(r.row.id, outputs, last);
-      res.json({ status: result.status, outputs, durationMs: result.durationMs, queuedMs: result.queuedMs, warm: result.warm, executionCount: last });
+      if (!scratch) await saveOutputs(r.row.id, outputs, n);
+      res.json({ status: result.status, outputs, durationMs: result.durationMs, queuedMs: result.queuedMs, warm: result.warm, executionCount: n });
     } catch (err) {
       fail(res, err, 'POST /notebooks/:id/run');
     } finally {
@@ -701,6 +709,9 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       const r = await load(req, res, 'run');
       if (!r) return;
       const { cellId, source } = req.body || {};
+      // As for /run: the output is answered, not stored, and the counter stays. The code still
+      // runs in the shared live session, so variables it defines are there for later cells.
+      const scratch = (req.body || {}).scratch === true;
       const input = (req.body || {}).input === undefined || (req.body || {}).input === null ? '' : req.body.input;
       if (typeof cellId !== 'string' || !CELL_ID.test(cellId)) throw httpError(400, 'cellId is required');
       if (typeof source !== 'string' || source.length > MAX_CELL_CHARS) throw httpError(400, 'source must be text');
@@ -725,9 +736,9 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       db.query('INSERT INTO notebook_runs (user_id, notebook_id, mode, cell_count, status, duration_ms) VALUES (?, ?, ?, ?, ?, ?)',
         [req.user.id, r.row.id, 'session', 1, result.status, result.durationMs || 0]).catch(() => {});
       // The notebook's own counter, shared with batch runs (the session's restarts at 1)
-      const count = await nextCount(r.row.id, 1);
+      const count = scratch ? (await currentCount(r.row.id)) + 1 : await nextCount(r.row.id, 1);
       const output = storedOutput(result, count);
-      await saveOutputs(r.row.id, { [cellId]: output }, count);
+      if (!scratch) await saveOutputs(r.row.id, { [cellId]: output }, count);
       res.json({ output, sessionEnded: Boolean(result.sessionEnded), sessionRestarted: restarted || session.executionCount === 0 });
     } catch (err) {
       fail(res, err, 'POST /notebooks/:id/session/run');
