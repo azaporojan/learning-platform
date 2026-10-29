@@ -709,7 +709,9 @@ function registerNotebookRoutes({ api, db, authenticateToken, requireAdmin, phas
       const r = await load(req, res, 'run');
       if (!r) return;
       const { cellId, source } = req.body || {};
-      const scratch = (req.body || {}).scratch === true; // as for /run: shown, not stored
+      // As for /run: the output is answered, not stored, and the counter stays. The code still
+      // runs in the shared live session, so variables it defines are there for later cells.
+      const scratch = (req.body || {}).scratch === true;
       const input = (req.body || {}).input === undefined || (req.body || {}).input === null ? '' : req.body.input;
       if (typeof cellId !== 'string' || !CELL_ID.test(cellId)) throw httpError(400, 'cellId is required');
       if (typeof source !== 'string' || source.length > MAX_CELL_CHARS) throw httpError(400, 'source must be text');

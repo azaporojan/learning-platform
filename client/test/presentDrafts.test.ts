@@ -1,7 +1,7 @@
 // Present mode scratch edits (presentDrafts.ts): kept in memory, applied only to the run
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyDrafts, withDraft, isDrafted } from '../notebooks/presentDrafts.ts';
+import { applyDrafts, withDraft, isDrafted, dropScratchFrom } from '../notebooks/presentDrafts.ts';
 
 const cells = [
   { id: 'a', kind: 'text' as const, source: '# Trap 1' },
@@ -33,4 +33,14 @@ test('typing the saved text back removes the draft', () => {
 test('a draft equal to the saved text does not count as an edit', () => {
   assert.equal(isDrafted({ c: 'scores' }, cells[2]), false);
   assert.equal(applyDrafts(cells, { c: 'scores' })[2], cells[2]);
+});
+
+const out = (value: string) => ({ status: 'ok' as const, stdout: '', stderr: '', value, error: null, truncated: false, durationMs: 1, executionCount: 1, ranAt: '' });
+
+test('resetting a cell drops its scratch output and those after it, not those before', () => {
+  const scratch = { b: out('b'), c: out('c') };
+  assert.deepEqual(Object.keys(dropScratchFrom(scratch, cells, 'c')), ['b']);
+  assert.deepEqual(Object.keys(dropScratchFrom(scratch, cells, 'b')), []);
+  assert.deepEqual(Object.keys(dropScratchFrom(scratch, cells, 'a')), []);
+  assert.equal(dropScratchFrom(scratch, cells, 'missing'), scratch);
 });

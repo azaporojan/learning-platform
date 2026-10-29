@@ -1,6 +1,6 @@
 // Present mode scratch edits: the teacher may expand an example on the spot. The edits live only
 // in memory for the duration of the presentation and are never saved to the notebook.
-import type { Cell } from './types';
+import type { Cell, CellOutput } from './types';
 
 export type Drafts = Record<string, string>; // cell id -> edited source
 
@@ -22,4 +22,16 @@ export function withDraft(drafts: Drafts, cell: Cell, source: string): Drafts {
 
 export function isDrafted(drafts: Drafts, cell: Cell): boolean {
   return cell.id in drafts && drafts[cell.id] !== cell.source;
+}
+
+// Outputs of scratch runs, kept beside the drafts. Resetting a cell makes its own scratch output
+// and those of every cell after it stale (they may have run on top of the edit), so they go;
+// the cells before it keep theirs.
+export function dropScratchFrom(outputs: Record<string, CellOutput>, cells: Cell[], cellId: string): Record<string, CellOutput> {
+  const at = cells.findIndex((c) => c.id === cellId);
+  if (at === -1) return outputs;
+  const stale = new Set(cells.slice(at).map((c) => c.id));
+  const next: Record<string, CellOutput> = {};
+  for (const [id, out] of Object.entries(outputs)) if (!stale.has(id)) next[id] = out;
+  return next;
 }

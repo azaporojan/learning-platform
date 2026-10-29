@@ -4,7 +4,7 @@ import { NotebookMarkdown } from './NotebookMarkdown';
 import { darculaClass, useCodeTheme } from './codeTheme';
 import { CodeEditor } from './CodeEditor';
 import { CellOutputView } from './CellOutputView';
-import { Drafts, applyDrafts, isDrafted, withDraft } from './presentDrafts';
+import { Drafts, applyDrafts, dropScratchFrom, isDrafted, withDraft } from './presentDrafts';
 
 // A slide starts at every text cell that opens with a "#" or "##" heading; the cells after it
 // (text and code) belong to that slide until the next heading.
@@ -51,10 +51,15 @@ export const PresentMode: React.FC<PresentModeProps> = ({ title, cells, outputs,
     const fresh = await onRun(cellId, applyDrafts(cells, d));
     if (fresh) setScratchOutputs((prev) => ({ ...prev, ...fresh }));
   };
-  const without = <T,>(map: Record<string, T>, key: string) => { const next = { ...map }; delete next[key]; return next; };
-  const resetDraft = (cellId: string) => { setDrafts((d) => without(d, cellId)); setScratchOutputs((o) => without(o, cellId)); };
+  const resetDraft = (cellId: string) => {
+    setDrafts((d) => { const next = { ...d }; delete next[cellId]; return next; });
+    setScratchOutputs((o) => dropScratchFrom(o, cells, cellId));
+  };
   const resetAll = () => { setDrafts({}); setScratchOutputs({}); };
-  const outputOf = (cellId: string): CellOutput | undefined => scratchOutputs[cellId] || outputs[cellId];
+  // Scratch outputs only make sense next to the edits that produced them: once the last draft is
+  // gone (reset, or typed back to the saved text) the saved outputs show again
+  useEffect(() => { if (!edited) setScratchOutputs({}); }, [edited]);
+  const outputOf = (cellId: string): CellOutput | undefined => (edited && scratchOutputs[cellId]) || outputs[cellId];
 
   useEffect(() => {
     const el = root.current;

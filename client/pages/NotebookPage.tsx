@@ -367,6 +367,8 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
     if (!nb) return undefined;
     const i = indexOf(cellId);
     if (i === -1) return undefined;
+    // The scratch cells are the saved ones with edited sources (applyDrafts maps them 1:1), so
+    // the index found above addresses the same cell in both lists
     const runCells = scratch || cellsRef.current;
     const cell = runCells.find((c) => c.id === cellId) || cellsRef.current[i];
     // Move on first, like Jupyter: the result arrives while you keep working
