@@ -127,8 +127,9 @@ export const PresentMode: React.FC<PresentModeProps> = ({ title, cells, outputs,
                     language="java"
                     onChange={(v) => {
                       setDrafts((d) => withDraft(d, c, v));
-                      // Typing the saved text back is a reset: the same scratch outputs go
-                      if (v === c.source) setScratchOutputs((o) => dropScratchFrom(o, cells, c.id));
+                      // Typing the saved text back is a reset: the same scratch outputs go, and a
+                      // scratch run still in flight is dropped as well
+                      if (v === c.source) { generation.current += 1; setScratchOutputs((o) => dropScratchFrom(o, cells, c.id)); }
                     }}
                     onRun={canRun ? () => run(c.id) : undefined}
                     onEscape={() => root.current?.focus()}
