@@ -360,11 +360,14 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
   }, []);
 
   const runningRef = useRef(false);
-  const runCell = useCallback(async (cellId: string, how: 'advance' | 'stay' | 'insert') => {
+  // `scratch` (present mode) runs an edited copy of the cells instead of the saved ones; the
+  // notebook itself is not touched, only the outputs are stored as for any run
+  const runCell = useCallback(async (cellId: string, how: 'advance' | 'stay' | 'insert', scratch?: Cell[]) => {
     if (!nb) return;
     const i = indexOf(cellId);
     if (i === -1) return;
-    const cell = cellsRef.current[i];
+    const runCells = scratch || cellsRef.current;
+    const cell = runCells.find((c) => c.id === cellId) || cellsRef.current[i];
     // Move on first, like Jupyter: the result arrives while you keep working
     if (how === 'advance') {
       const nextCell = cellsRef.current[i + 1];
@@ -378,7 +381,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
     runningRef.current = true;
 
     const requestId = newRequestId();
-    const ids = liveSession ? [cellId] : cellsRef.current.slice(0, i + 1).filter((c) => c.kind === 'code').map((c) => c.id);
+    const ids = liveSession ? [cellId] : runCells.slice(0, i + 1).filter((c) => c.kind === 'code').map((c) => c.id);
     setRunningIds(new Set(ids));
     setQueuedAhead(0);
     let polling = true;
@@ -398,7 +401,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
         if (r.sessionEnded) showToast({ text: 'The live session ended (timeout or crash). The next run starts a fresh one.' });
         else if (r.sessionRestarted) showToast({ text: 'Started a fresh live session: earlier variables are gone.' }, 3500);
       } else {
-        const r = await api<{ outputs: Record<string, CellOutput> }>(`/notebooks/${nb.id}/run`, { json: { cells: cellsRef.current, upTo: cellId, requestId } });
+        const r = await api<{ outputs: Record<string, CellOutput> }>(`/notebooks/${nb.id}/run`, { json: { cells: runCells, upTo: cellId, requestId } });
         applyOutputs(r.outputs);
       }
       setRunnerNotice(null);
@@ -790,7 +793,7 @@ export const NotebookPage: React.FC<{ currentUser: User }> = ({ currentUser }) =
           runningIds={runningIds}
           canRun={nb.can_run}
           startAt={selectedId}
-          onRun={(cid) => runCell(cid, 'stay')}
+          onRun={(cid, scratch) => runCell(cid, 'stay', scratch)}
           onClose={() => setPresenting(false)}
         />
       )}
