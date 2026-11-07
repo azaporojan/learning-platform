@@ -94,8 +94,9 @@ and keep a copy in a password manager: without it, no existing password can be v
   and `index.html` carries an `esm.sh` import map; bundle those locally and enable CSP.
 - The presence list (`/api/online-users`) and global events (`leaderboard:update`, `task:*`,
   `lesson:*`) are broadcast to all logged-in users by design.
-- Session cookies last 24 h. They are revoked early only by a password change (session version);
-  logging out clears the cookie on that device only.
+- Session cookies expire after 24 h without activity: a request with a cookie older than an hour
+  gets a fresh 24 h one, so an active session has no fixed end. They are revoked early only by a
+  password change (session version); logging out clears the cookie on that device only.
 - There is no self-service "forgot password" flow yet: an admin deletes the account and the user
   registers again. A reset link by email (hashed single-use token, 30 min expiry) is the next step.
 - `BOOTSTRAP_ADMIN_EMAIL` makes the first account registered with that email an admin: register

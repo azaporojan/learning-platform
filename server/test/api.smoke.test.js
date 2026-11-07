@@ -1123,6 +1123,24 @@ test('API smoke test against PostgreSQL', { timeout: 120000 }, async (t) => {
   await waitForOutput(child, /to=pwtest@example\.test subject="Your password was changed 🔐"/);
   assert.equal((await anon('/login', { method: 'POST', json: { email: 'pwtest@example.test', password: 'Blue-Kettle-Morning-7' } })).status, 401);
   await loginAs('pwtest@example.test', 'Green-Lamp-Evening-8');
+  // Sessions slide: a cookie older than an hour is renewed on use, so active users stay signed in
+  {
+    const jwt = require('jsonwebtoken');
+    const [u] = await dbQuery('SELECT id, role, session_version FROM users WHERE email = $1', ['pwtest@example.test']);
+    const secret = process.env.JWT_SECRET || 'test-only-jwt-secret-that-is-long-enough-0123456789';
+    const sign = (ageSec) => jwt.sign({ id: u.id, role: u.role, sv: u.session_version, iat: Math.floor(Date.now() / 1000) - ageSec }, secret, { algorithm: 'HS256', expiresIn: 24 * 3600 });
+    const fresh = await fetch(`${BASE}/me`, { headers: { cookie: `token=${sign(60)}` } });
+    assert.equal(fresh.status, 200);
+    assert.equal(fresh.headers.get('set-cookie'), null, 'a recent session is not reissued on every request');
+    const stale = await fetch(`${BASE}/notifications`, { headers: { cookie: `token=${sign(23 * 3600)}` } });
+    assert.equal(stale.status, 200);
+    const renewed = /token=([^;]+)/.exec(stale.headers.get('set-cookie') || '');
+    assert.ok(renewed, 'an hours-old session gets a fresh cookie');
+    assert.match(stale.headers.get('set-cookie'), /Max-Age=86400/);
+    const payload = jwt.verify(renewed[1], secret);
+    assert.ok(Date.now() / 1000 - payload.iat < 60 && payload.exp - payload.iat === 24 * 3600);
+    assert.equal((await fetch(`${BASE}/me`, { headers: { cookie: `token=${sign(25 * 3600)}` } })).status, 401, 'expired after 24h idle');
+  }
   // Two concurrent changes from the same current password: exactly one wins, the other is refused
   // (409, or 400 if it ran after the pwWinner) instead of silently overwriting it
   const pwRacers = ['Teal-Door-Summer-31', 'Plum-Road-Winter-42'];
