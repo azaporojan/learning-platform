@@ -279,15 +279,27 @@ async function sessionFromToken(token) {
   return { ...decoded, role: rows[0].role, roleFromDb: true };
 }
 
+// Sessions slide: they end after 24 hours without activity, not 24 hours after login. A request
+// with a session older than SESSION_RENEW_MS gets a fresh cookie, so an active user stays signed in.
 const SESSION_MS = 24 * 60 * 60 * 1000;
+const SESSION_RENEW_MS = 60 * 60 * 1000;
 function issueSession(res, user) {
-  const token = jwt.sign({ id: user.id, role: user.role, sv: user.session_version || 0 }, jwtSecret, { algorithm: 'HS256', expiresIn: '24h' });
+  const token = jwt.sign({ id: user.id, role: user.role, sv: user.session_version || 0 }, jwtSecret, { algorithm: 'HS256', expiresIn: SESSION_MS / 1000 });
+  // A renewal earlier in this request is superseded (e.g. a password change bumps the version)
+  const earlier = [].concat(res.getHeader('Set-Cookie') || []).filter((c) => !String(c).startsWith('token='));
+  if (earlier.length) res.setHeader('Set-Cookie', earlier); else res.removeHeader('Set-Cookie');
   res.cookie('token', token, {
     httpOnly: true,
     secure: isProduction,
     sameSite: isProduction ? 'strict' : 'lax',
     maxAge: SESSION_MS,
   });
+}
+
+// `session` comes from sessionFromToken (its sv is the current session version).
+function renewSessionIfStale(res, session) {
+  if (!session.iat || Date.now() - session.iat * 1000 < SESSION_RENEW_MS) return;
+  issueSession(res, { id: session.id, role: session.role, session_version: session.sv || 0 });
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +356,7 @@ const authenticateToken = async (req, res, next) => {
   try {
     const session = await sessionFromToken(token); // { id, role, sv }
     if (!session) return res.status(401).json({ error: 'Invalid token' });
+    renewSessionIfStale(res, session);
     req.user = session;
     next();
   } catch (err) {
@@ -636,6 +649,7 @@ api.get('/me', async (req, res) => {
   try {
     const decoded = await sessionFromToken(token);
     if (!decoded) return res.status(401).json({ error: 'Invalid token' });
+    renewSessionIfStale(res, decoded); // the app calls /me on every load
 
     const [users] = await db.query('SELECT id, name, email, role, stars, avatar_url, password_changed_at FROM users WHERE id = ?', [decoded.id]);
     if (users.length === 0) return res.status(404).json({ error: 'User not found' });
